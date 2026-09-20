@@ -248,10 +248,6 @@
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
               <span>عمولات الكوتش (33%)</span>
             </button>
-            <button onclick="handleNavButtonClick(event, () => openSuppliersHistoryModal())" title="سجل هيستوريك الموردين والفرسيمو الشهري والسنوي المفصل" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
-              <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-              <span>هيستوريك الموردين والفرسيمو</span>
-            </button>
             <button onclick="handleNavButtonClick(event, () => toggleView('products'))" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
               <span>المنتجات</span> </button>
@@ -1566,10 +1562,7 @@
                           <div class="text-sm font-black text-blue-950">سجل وهيستوريك الموردين الشهري المفصل</div>
                           <div class="text-xs text-blue-700/80">تتبع مفصل: واش شريت (السلع) + واش فارسيت (الدفعات) لكل شهر ولكل مورد</div>
                       </div> </div>
-                  <button type="button" onclick="openSuppliersHistoryModal()" class="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 shrink-0 transition-all">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                      <span>عرض السجل المفصل</span>
-                  </button> </div>
+</div>
               <!-- Suppliers Summary Cards Grid -->
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div class="bg-gradient-to-br from-blue-50 to-white border border-blue-100 p-4 rounded-2xl flex items-center justify-between">
@@ -4574,7 +4567,7 @@
             autoFillSupplierInfo('');
             showSuccessToast(`تم تحديث حساب المورد (${existing.name}) بنجاح. الكريدي المتبقي: ${existing.debt.toLocaleString()} دج`);
             renderSuppliersList();
-            renderSuppliersHistory(); return; }
+            return; }
         if (!items) { showErrorToast('يرجى كتابة تفاصيل السلع المشتراة للمورد الجديد');
             return; } const newSupObj = { id: Date.now().toString(),
             name, info: info || 'عام', items,
@@ -4593,7 +4586,7 @@
         if (sDate) sDate.value = new Date().toISOString().split('T')[0];
         showSuccessToast('تم تسجيل فاتورة / معاملة المورد بنجاح');
         renderSuppliersList();
-        renderSuppliersHistory(); }); function deleteSupplier(id) {
+        }); function deleteSupplier(id) {
         if (!id) return; showAppConfirm('هل أنت متأكد من حذف معاملة هذا المورد؟', function() {
             if (!Array.isArray(appState.suppliers)) return;
             appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
@@ -8155,178 +8148,7 @@
                     notes: s.notes || '',
                     createdAt: s.date || new Date().toISOString()
                 }); }); } return appState.supplierTransactions;
-    }; window.openSuppliersHistoryModal = function(defaultSupplier = '') {
-        const modal = document.getElementById('suppliersHistoryModal');
-        if (!modal) return; const now = new Date();
-        const monthInput = document.getElementById('supHistMonthFilter');
-        if (monthInput && !monthInput.value) {
-            monthInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        }
-        // Populate supplier filter dropdown
-        const supSelect = document.getElementById('supHistSupplierFilter');
-        if (supSelect) { const allSuppliers = [...new Set((appState.suppliers || []).map(s => (s && s.name || '').trim()).filter(Boolean))];
-            let optionsHtml = '<option value="all">كل الموردين</option>';
-            allSuppliers.forEach(name => {
-                optionsHtml += `<option value="${escapeHTML(name)}" ${defaultSupplier === name ? 'selected' : ''}>${escapeHTML(name)}</option>`;
-            }); supSelect.innerHTML = optionsHtml;
-        } renderSuppliersHistory(); modal.classList.add('active');
-    }; window.setSuppliersHistoryPeriod = function(period) {
-        const monthInput = document.getElementById('supHistMonthFilter');
-        const badge = document.getElementById('supHistPeriodBadge');
-        const now = new Date(); const curY = now.getFullYear();
-        const curM = String(now.getMonth() + 1).padStart(2, '0');
-        if (period === 'current_month') { if (monthInput) monthInput.value = `${curY}-${curM}`;
-            if (badge) badge.innerText = `عرض شهر ${curM} / ${curY}`;
-        } else if (period === 'current_year') {
-            if (monthInput) monthInput.value = `year-${curY}`;
-            if (badge) badge.innerText = `عرض كامل عام ${curY}`;
-        } else if (period === 'all') { if (monthInput) monthInput.value = 'all';
-            if (badge) badge.innerText = `كل المعاملات اكل (جميع السنوات)`;
-        } renderSuppliersHistory(); }; window.renderSuppliersHistory = function() {
-        const monthInput = document.getElementById('supHistMonthFilter');
-        const supplierSelect = document.getElementById('supHistSupplierFilter');
-        const typeSelect = document.getElementById('supHistTypeFilter');
-        const searchInput = document.getElementById('supHistSearchInput');
-        const badge = document.getElementById('supHistPeriodBadge');
-        const selectedMonth = monthInput ? monthInput.value : 'all';
-        const selectedSupplier = supplierSelect ? supplierSelect.value : 'all';
-        const selectedType = typeSelect ? typeSelect.value : 'all';
-        const searchQ = searchInput ? searchInput.value.trim().toLowerCase() : '';
-        const allTx = getAllSupplierTransactions();
-        let targetYear = -1; let targetMonth = -1;
-        let isYearMode = false; if (selectedMonth && selectedMonth !== 'all') {
-            if (selectedMonth.startsWith('year-')) {
-                isYearMode = true; targetYear = parseInt(selectedMonth.replace('year-', ''));
-                if (badge) badge.innerText = `عرض كامل عام ${targetYear}`;
-            } else if (selectedMonth.includes('-')) {
-                const parts = selectedMonth.split('-');
-                targetYear = parseInt(parts[0]);
-                targetMonth = parseInt(parts[1]) - 1;
-                if (badge) badge.innerText = `عرض شهر ${String(targetMonth + 1).padStart(2, '0')} / ${targetYear}`;
-            } } else { if (badge) badge.innerText = `كل المعاملات اكل (جميع السنوات)`;
-        } const filtered = allTx.filter(tx => {
-            if (!tx.date) return false; const d = new Date(tx.date);
-            // Month / Year Filter
-            if (isYearMode && targetYear !== -1) {
-                if (d.getFullYear() !== targetYear) return false;
-            } else if (targetMonth !== -1) { if (d.getFullYear() !== targetYear || d.getMonth() !== targetMonth) {
-                    return false; } }
-            // Supplier Filter
-            if (selectedSupplier !== 'all' && (tx.supplierName || '').trim().toLowerCase() !== selectedSupplier.trim().toLowerCase()) {
-                return false; }
-            // Type Filter
-            if (selectedType === 'purchase' && tx.type !== 'purchase') return false;
-            if (selectedType === 'payment' && tx.type !== 'payment') return false;
-            if (selectedType === 'debt' && Number(tx.remainingDebt || 0) <= 0) return false;
-            // Search Filter
-            if (searchQ) { const combined = `${tx.supplierName || ''} ${tx.supplierInfo || ''} ${tx.items || ''} ${tx.notes || ''}`.toLowerCase();
-                if (!combined.includes(searchQ)) return false;
-            } return true; });
-        // Compute monthly metrics
-        let totalPurchased = 0; let totalPaid = 0;
-        let totalDebt = 0; const suppliersSet = new Set();
-        filtered.forEach(tx => { if (tx.supplierName) suppliersSet.add(tx.supplierName.trim());
-            const paid = Number(tx.paidAmount) || 0;
-            const debt = Number(tx.remainingDebt) || 0;
-            const total = Number(tx.totalAmount) || (paid + debt);
-            if (tx.type === 'purchase') {
-                totalPurchased += total; } else {
-                totalPurchased += (paid); // Or pure payment
-            } totalPaid += paid; totalDebt += debt;
-        });
-        // Summary elements
-        const totalPurchasedElem = document.getElementById('supHistTotalPurchased');
-        const totalPaidElem = document.getElementById('supHistTotalPaid');
-        const totalDebtElem = document.getElementById('supHistTotalDebt');
-        const countBadgeElem = document.getElementById('supHistCountBadge');
-        if (totalPurchasedElem) totalPurchasedElem.innerHTML = `${totalPurchased.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (totalPaidElem) totalPaidElem.innerHTML = `${totalPaid.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (totalDebtElem) totalDebtElem.innerHTML = `${totalDebt.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (countBadgeElem) countBadgeElem.innerText = `${filtered.length} معاملة (${suppliersSet.size} مورد)`;
-        // Render List
-        const listContainer = document.getElementById('supHistListContainer');
-        if (!listContainer) return; if (filtered.length === 0) {
-            listContainer.innerHTML = `
-                <div class="text-center py-12 px-4 bg-slate-50 border border-slate-100 rounded-2xl">
-                    <div class="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-2 text-xl"></div>
-                    <div class="font-bold text-slate-700 text-sm">لا توجد معاملات مسجلة في هذا الشهر أو التحديد</div>
-                    <div class="text-xs text-slate-400 mt-1">قم بتغيير الشهر أو إضافة مشتريات / فرسيمو جديد للمورد</div>
-                </div>
-            `; return; } const sorted = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date));
-        listContainer.innerHTML = sorted.map(tx => {
-            const d = new Date(tx.date); const dateStr = isNaN(d.getTime()) ? tx.date : d.toLocaleDateString('ar-DZ', { year: 'numeric', month: 'short', day: 'numeric' });
-            const isPurchase = tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق');
-            const paid = Number(tx.paidAmount) || 0;
-            const debt = Number(tx.remainingDebt) || 0;
-            const hasDebt = debt > 0; const safeName = escapeHTML(tx.supplierName || 'مورد عام');
-            const safeInfo = escapeHTML(tx.supplierInfo || '');
-            const safeItems = escapeHTML(tx.items || (isPurchase ? 'سلع مشتراة' : 'دفعة فرسيمو مالية'));
-            const safeNotes = escapeHTML(tx.notes || '');
-            const safeId = escapeHTML(tx.id || '');
-            return `
-            <div class="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-blue-300 transition-all space-y-3">
-                <!-- Top Row -->
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-100">
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-xl ${isPurchase ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-blue-50 text-blue-700 border border-blue-100'} flex items-center justify-center text-lg shrink-0 shadow-xs">
-                            ${isPurchase ? '<svg class="w-4 h-4 text-blue-600 inline" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>' : '<svg class="w-4 h-4 text-blue-600 inline" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>'}
-                        </div>
-                        <div>
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-black text-slate-800 text-sm sm:text-base">${safeName}</span>
-                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${isPurchase ? 'bg-blue-100 text-blue-900' : 'bg-blue-100 text-blue-900'}">
-                                    ${isPurchase ? 'فاتورة مشتريات (واش شريت)' : 'فرسيمو وتسديد (واش فارسيت)'}
-                                </span>
-                                ${hasDebt ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-950 border border-blue-200">باقي كريدي</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-900">مفرسي كامل</span>'}
-                            </div>
-                            ${safeInfo ? `<div class="text-xs text-slate-400 mt-0.5 font-medium">${safeInfo}</div>` : ''}
-                        </div>
-                    </div>
-
-                    <div class="flex items-center gap-1.5 self-end sm:self-center">
-                        <button type="button" onclick="openSingleSupplierStatement('${safeName}')" class="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center gap-1 transition-colors" title="كشف الحساب الكامل">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                            <span>كشف الحساب</span>
-                        </button>
-                        <button type="button" onclick="openQuickSupplierVersementModal('${safeName}')" class="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center gap-1 transition-colors" title="تسجيل فرسيمو فوري">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                            <span>فرسيمو</span>
-                        </button>
-                        <button type="button" onclick="deleteSupplierTransaction('${safeId}')" class="w-7 h-7 rounded-xl bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-600 border border-slate-200 flex items-center justify-center transition-colors" title="حذف المعاملة">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Details / Items Body -->
-                <div class="bg-slate-50/80 border border-slate-100 rounded-xl p-3 text-xs space-y-1">
-                    <div class="font-bold text-slate-600 flex items-center gap-1.5">
-                        <span class="text-blue-600"></span>
-                        <span>${isPurchase ? 'السلع والمكملات المشتراة بالتفصيل:' : 'بيانات وسبب الفرسيمو:'}</span>
-                    </div>
-                    <div class="text-slate-800 font-medium whitespace-pre-wrap leading-relaxed pr-5">${safeItems}</div>
-                </div>
-
-                <!-- Financial Highlights -->
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-                    <div class="bg-blue-50/80 border border-blue-200/80 rounded-xl p-2.5 text-right">
-                        <span class="text-[10px] text-blue-700 font-bold block mb-0.5">المبلغ المفرسي (وش فارسيت)</span>
-                        <span class="font-black text-blue-900 text-sm sm:text-base">${paid.toLocaleString()} دج</span>
-                    </div>
-                    <div class="${hasDebt ? 'bg-blue-50 border border-blue-200' : 'bg-slate-50 border border-slate-200'} rounded-xl p-2.5 text-right">
-                        <span class="text-[10px] ${hasDebt ? 'text-blue-900' : 'text-slate-500'} font-bold block mb-0.5">الكريدي المتبقي</span>
-                        <span class="font-black ${hasDebt ? 'text-blue-950' : 'text-slate-700'} text-sm sm:text-base">${debt.toLocaleString()} دج</span>
-                    </div>
-                    <div class="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-right col-span-2 sm:col-span-1">
-                        <span class="text-[10px] text-slate-400 font-bold block mb-0.5">تاريخ المعاملة</span>
-                        <span class="font-bold text-slate-700 text-xs sm:text-sm">${dateStr}</span>
-                    </div>
-                </div>
-
-                ${safeNotes ? `<div class="text-[11px] text-slate-400 italic">ملاحظة: ${safeNotes}</div>` : ''}
-            </div>
-            `; }).join(''); };
-    // Quick Versement Modal functions
+    }; // Quick Versement Modal functions
     window.openQuickSupplierVersementModal = function(supplierName = '') {
         const modal = document.getElementById('quickSupplierVersementModal');
         if (!modal) return; const select = document.getElementById('quickVersSupplierSelect');
@@ -8372,7 +8194,7 @@
         }); saveState(); closeModal('quickSupplierVersementModal');
         showSuccessToast(`تم تسجيل فرسيمو بقيمة ${amount.toLocaleString()} دج للمورد (${supplierName}) بنجاح`);
         renderSuppliersList();
-        renderSuppliersHistory(); return false;
+        return false;
     };
     // Single Supplier Statement (كشف حساب المورد الشامل)
     window.openSingleSupplierStatement = function(supplierName) {
@@ -8418,15 +8240,7 @@
                         </div>
                     </div>
                     `; }).join(''); } } modal.classList.add('active');
-    }; window.deleteSupplierTransaction = function(txId) {
-        if (!txId) return; showAppConfirm('هل أنت متأكد من حذف هذه المعاملة من السجل؟', function() {
-            if (!Array.isArray(appState.supplierTransactions)) return;
-            appState.supplierTransactions = appState.supplierTransactions.filter(t => t && String(t.id) !== String(txId));
-            saveState(); showSuccessToast('تم حذف المعاملة من سجل الموردين بنجاح');
-            renderSuppliersHistory();
-            renderSuppliersList(); }, { title: 'حذف معاملة المورد',
-            confirmText: 'نعم، حذف' }); };
-    window.printSuppliersMonthlyReport = function() {
+    };     window.printSuppliersMonthlyReport = function() {
         window.print(); };
     setupGlobalInputSecurity(); render(); if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
@@ -8840,92 +8654,6 @@
               </div> </div> </div>
   </div>
   <!-- Detailed Monthly Suppliers & Versements History Modal -->
-  <div id="suppliersHistoryModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'suppliersHistoryModal')">
-      <div class="modal-content relative w-full max-w-4xl bg-white p-5 sm:p-7 rounded-2xl shadow-2xl border border-slate-100 space-y-5">
-          <button type="button" onclick="closeModal('suppliersHistoryModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
-          </button>
-          <!-- Modal Header -->
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div class="flex items-center gap-3">
-                  <div class="w-11 h-11 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 shadow-inner">
-                      <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                  </div> <div>
-                      <h3 class="text-xl font-black text-slate-800">هيستوريك الموردين والمشتريات والفرسيمو الشهري</h3>
-                      <p class="text-xs text-slate-500 mt-0.5">تتبع مفصل لكل ما تم شراؤه (وش شريت) وكل ما تم دفعه وتفريسه (وش فارسيت) لكل مورد شهرياً</p>
-                  </div> </div>
-              <div class="flex items-center gap-2 self-end sm:self-center">
-                  <button type="button" onclick="openQuickSupplierVersementModal()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                      <span>تسجيل فرسيمو جديد</span>
-                  </button>
-                  <button type="button" onclick="printSuppliersMonthlyReport()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors" title="طباعة كشف هذا الشهر">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
-                      <span>طباعة</span>
-                  </button> </div>
-          </div>
-          <!-- Multi-filter Bar -->
-          <div class="space-y-2.5 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/70">
-              <!-- Quick Period Selectors -->
-              <div class="flex items-center justify-between flex-wrap gap-2">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                      <span class="text-[11px] font-black text-slate-700">الفترة الزمنية:</span>
-                      <button type="button" onclick="setSuppliersHistoryPeriod('current_month')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-100 text-blue-950 hover:bg-blue-200 transition-colors border border-blue-200">هذا الشهر</button>
-                      <button type="button" onclick="setSuppliersHistoryPeriod('current_year')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-50 text-blue-900 hover:bg-blue-100 transition-colors border border-blue-200">كامل هذا العام</button>
-                      <button type="button" onclick="setSuppliersHistoryPeriod('all')" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-200 text-slate-800 hover:bg-slate-300 transition-colors">كل المعاملات</button>
-                  </div>
-                  <div id="supHistPeriodBadge" class="text-xs font-extrabold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                      عرض شهر محدد
-                  </div> </div>
-              <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-1">
-                  <div>
-                      <label class="block text-[10px] font-bold text-slate-500 mb-1">الشهر أو السنة:</label>
-                      <input type="month" id="supHistMonthFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
-                  </div> <div>
-                      <label class="block text-[10px] font-bold text-slate-500 mb-1">المورد:</label>
-                      <select id="supHistSupplierFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
-                          <option value="all">كل الموردين</option>
-                      </select> </div>
-                  <div>
-                      <label class="block text-[10px] font-bold text-slate-500 mb-1">نوع المعاملة:</label>
-                      <select id="supHistTypeFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
-                          <option value="all">جميع الحركات</option>
-                          <option value="purchase">مشتريات وسلع فقط</option>
-                          <option value="payment">فرسيمو ودفعات فقط</option>
-                          <option value="debt">معاملات بها كريدي</option>
-                      </select> </div>
-                  <div>
-                      <label class="block text-[10px] font-bold text-slate-500 mb-1">بحث سريع:</label>
-                      <input type="text" id="supHistSearchInput" oninput="renderSuppliersHistory()" placeholder="اسم، سلعة، ملاحظة..." class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white">
-                  </div> </div> </div>
-          <!-- Monthly Stats Summary Cards -->
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div class="bg-blue-50/70 border border-blue-100 p-3.5 rounded-2xl text-right">
-                  <div class="text-[10px] font-bold text-blue-700">إجمالي المشتريات (وش شريت)</div>
-                  <div class="text-base sm:text-lg font-black text-blue-950 mt-0.5" id="supHistTotalPurchased">0 دج</div>
-              </div>
-              <div class="bg-blue-50/70 border border-blue-100 p-3.5 rounded-2xl text-right">
-                  <div class="text-[10px] font-bold text-blue-700">إجمالي ما تم تفريسه (وش فارسيت)</div>
-                  <div class="text-base sm:text-lg font-black text-blue-950 mt-0.5" id="supHistTotalPaid">0 دج</div>
-              </div>
-              <div class="bg-blue-50/70 border border-blue-100 p-3.5 rounded-2xl text-right">
-                  <div class="text-[10px] font-bold text-blue-900">الديون والكريدي المتبقي</div>
-                  <div class="text-base sm:text-lg font-black text-blue-950 mt-0.5" id="supHistTotalDebt">0 دج</div>
-              </div>
-              <div class="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl text-right">
-                  <div class="text-[10px] font-bold text-slate-400">إجمالي المعاملات</div>
-                  <div class="text-xs sm:text-sm font-black text-slate-700 mt-1" id="supHistCountBadge">0 معاملة</div>
-              </div> </div>
-          <!-- List of Detailed Transactions -->
-          <div class="space-y-3">
-              <div class="flex items-center justify-between text-xs font-bold text-slate-700">
-                  <span>جدول وبطاقات الحركات المفصلة:</span>
-                  <span class="text-[11px] text-slate-400 font-normal">مرتبة تنازلياً حسب التاريخ</span>
-              </div>
-              <div id="supHistListContainer" class="space-y-3 max-h-[460px] overflow-y-auto pr-1">
-                  <!-- Dynamically populated -->
-              </div> </div> </div>
-  </div>
   <!-- Quick Supplier Versement Modal -->
   <div id="quickSupplierVersementModal" class="modal-overlay" style="z-index: 130;" onclick="handleOverlayClick(event, 'quickSupplierVersementModal')">
       <div class="modal-content relative w-full max-w-md bg-white p-5 sm:p-6 rounded-2xl shadow-2xl border border-slate-100 space-y-4">
