@@ -63,9 +63,6 @@
             <button onclick="handleNavButtonClick(event, () => openModal('packagesModal'))" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
               <span>الباقات</span> </button>
-            <button onclick="handleNavButtonClick(event, () => openStaffPayoutsIfAllowed())" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
-              <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-              <span>خلاص العمال</span> </button>
             <button onclick="handleNavButtonClick(event, () => openModal('coachAbsenceModal'))" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
               <span>الغياب</span> </button>
@@ -120,7 +117,7 @@
                 <span id="totalYearlyIncome" class="text-lg md:text-xl font-black tracking-tighter text-blue-950 mt-auto">0 دج</span>
               </div>
               <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-sm cursor-pointer hover:border-blue-300 transition-colors" onclick="openExpensesIfAllowed()">
-                <span class="text-slate-500 text-[10px] md:text-xs font-bold mb-1">إجمالي المصاريف وخلاص العمال</span>
+                <span class="text-slate-500 text-[10px] md:text-xs font-bold mb-1">إجمالي المصاريف</span>
                 <div class="flex justify-between items-center mt-auto">
                   <span id="totalExpenses" class="text-lg md:text-xl font-black tracking-tighter text-slate-800">0 دج</span>
                 </div> </div>
@@ -1219,7 +1216,7 @@
               </div>
               <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-100 transition-all mt-6">حفظ التغييرات</button>
           </form> </div> </div>
-  <!-- Staff & Coaches & Suppliers Payouts Modal (خلاص ومستحقات العمال والمدربين والموردين) -->
+  <!-- Suppliers Payouts Modal (حسابات ومستحقات الموردين) -->
   <div id="staffPayoutsModal" class="modal-overlay" onclick="handleOverlayClick(event, 'staffPayoutsModal')">
       <div class="modal-content relative w-full max-w-2xl bg-white p-5 sm:p-7 rounded-[2rem] shadow-2xl space-y-5">
           <div class="flex items-center justify-between">
@@ -1227,140 +1224,13 @@
                   <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
               </button> <div class="text-right">
                   <h2 class="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-2 justify-end">
-                      <span>خلاص العمال ومستحقات الموردين</span>
-                      <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                      <span>حسابات ومستحقات الموردين</span>
+                      <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                   </h2>
-                  <p class="text-xs text-slate-500 mt-0.5">سجل أجور العمال والمدربين، وفواتير ومستحقات الموردين والسلع</p>
-              </div> </div>
-          <!-- Professional Two-Icon Tab Switcher -->
-          <div class="p-1.5 bg-white border border-slate-200 rounded-2xl grid grid-cols-2 gap-2 shadow-sm">
-              <button type="button" id="tabStaffPayoutsBtn" onclick="switchPayoutTab('staff')" 
-                  class="group relative flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all duration-200 bg-blue-600 text-white shadow-md shadow-blue-200 border-2 border-blue-600 min-h-[48px] cursor-pointer">
-                  <span id="tabStaffIconBox" class="w-8 h-8 rounded-lg bg-white/20 border border-white/30 text-white flex items-center justify-center shrink-0 transition-transform group-hover:scale-105">
-                      <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-                  </span>
-                  <span class="whitespace-nowrap">خلاص العمال</span>
-              </button>
-              <button type="button" id="tabSuppliersBtn" onclick="switchPayoutTab('suppliers')" 
-                  class="group relative flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all duration-200 bg-slate-50 text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 min-h-[48px] cursor-pointer">
-                  <span id="tabSupplierIconBox" class="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-500 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105">
-                      <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                  </span>
-                  <span class="whitespace-nowrap">حسابات وفواتير</span>
-              </button> </div>
-          <!-- TAB 1: Staff Payouts Content -->
-          <div id="staffTabContent" class="space-y-4">
-              <!-- Summary Cards (Period Total & All-time Total) -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <!-- Period Payouts Card -->
-                  <div class="bg-gradient-to-br from-blue-50/90 to-blue-50/60 border border-blue-200/80 p-4 rounded-2xl flex items-center justify-between shadow-xs">
-                      <div>
-                          <div class="flex items-center gap-1.5 mb-1">
-                              <span class="text-xs font-bold text-blue-900 block" id="staffPayoutPeriodLabel">مجموع الفترة المحددة</span>
-                              <span id="staffPayoutCountBadge" class="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-200/70 text-blue-900">0 دفعات</span>
-                          </div>
-                          <span id="totalStaffPayoutsPeriod" class="text-xl sm:text-2xl font-black text-blue-700 tracking-tight">0 دج</span>
-                      </div>
-                      <div class="w-11 h-11 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-600 shrink-0">
-                          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                      </div> </div>
-                  <!-- All-Time Payouts Card -->
-                  <div class="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between shadow-xs">
-                      <div>
-                          <span class="text-xs font-bold text-slate-500 block mb-1">الإجمالي الكلي لجميع الفترات</span>
-                          <span id="totalStaffPayouts" class="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">0 دج</span>
-                      </div>
-                      <div class="w-11 h-11 bg-slate-200/80 rounded-2xl flex items-center justify-center text-slate-700 shrink-0">
-                          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-                      </div> </div> </div>
-              <!-- Period & Date Filter Control Bar -->
-              <div class="bg-white border border-slate-200 p-3.5 rounded-2xl space-y-2.5 shadow-xs">
-                  <div class="flex items-center justify-between flex-wrap gap-2">
-                      <div class="flex items-center gap-1.5 flex-wrap">
-                          <span class="text-xs font-black text-slate-700">تصفية التاريخ:</span>
-                          <button type="button" id="staffPeriodBtnMonth" onclick="setStaffPayoutsPeriod('month')" class="text-xs font-bold px-3 py-1.5 rounded-xl bg-blue-600 text-white shadow-xs transition-all cursor-pointer">هذا الشهر</button>
-                          <button type="button" id="staffPeriodBtnYear" onclick="setStaffPayoutsPeriod('year')" class="text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer">كامل هذا العام</button>
-                          <button type="button" id="staffPeriodBtnAll" onclick="setStaffPayoutsPeriod('all')" class="text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer">كل الفترات</button>
-                      </div>
-                      <span id="staffActivePeriodBadge" class="text-xs font-extrabold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                          هذا الشهر </span>
-                  </div>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-slate-100">
-                      <div>
-                          <label class="block text-[11px] font-bold text-slate-500 mb-1">اختر الشهر والتحكم بالتاريخ:</label>
-                          <input type="month" id="staffPayoutMonthFilter" onchange="handleStaffPayoutMonthChange(this.value)" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-slate-50 outline-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer">
-                      </div> <div>
-                          <label class="block text-[11px] font-bold text-slate-500 mb-1">تصفية حسب العامل / الكوتش:</label>
-                          <div class="flex items-center gap-1.5">
-                              <select id="staffPayoutWorkerFilter" onchange="renderStaffPayouts()" class="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-slate-50 outline-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer">
-                                  <option value="all">جميع العمال والمدربين</option>
-                              </select>
-                              <button type="button" onclick="openSelectedWorkerLedger()" title="عرض كشف المعاملات اليومية والشهرية للعامل" class="px-2.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 text-xs font-black transition-all flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs">
-                                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                  <span>كشف المعاملات</span>
-                              </button> </div>
-                      </div> </div> </div>
-              <!-- Form to add/edit Payout -->
-              <div class="bg-slate-50/90 border border-slate-200/80 p-4 sm:p-5 rounded-2xl space-y-3">
-                  <div class="flex items-center justify-between">
-                      <h3 id="staffPayoutFormTitle" class="text-sm font-bold text-slate-700 flex items-center gap-1.5">
-                          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                          <span>تسجيل خلاص / أجر جديد</span>
-                      </h3>
-                      <button type="button" id="cancelStaffEditBtn" onclick="cancelStaffPayoutEdit()" class="hidden text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg border border-red-200 transition-colors cursor-pointer">
-                          إلغاء التعديل
-                      </button> </div>
-                  <form id="addStaffPayoutForm" class="space-y-3">
-                      <input type="hidden" id="editingStaffPayoutId" value="">
-                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          <div>
-                              <label class="block text-[11px] font-bold text-slate-500 mb-1">اسم العامل / الكوتش *</label>
-                              <input type="text" id="staffName" list="staffCoachSuggestions" required placeholder="اسم العامل أو المدرب..." class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-800">
-                              <datalist id="staffCoachSuggestions"></datalist>
-                          </div> <div>
-                              <label class="block text-[11px] font-bold text-slate-500 mb-1">المبلغ المدفوع (دج) *</label>
-                              <input type="number" id="staffAmount" required min="1" step="any" placeholder="مثال: 25000" class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-black text-slate-800">
-                          </div> </div>
-                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          <div>
-                              <label class="block text-[11px] font-bold text-slate-500 mb-1">طبيعة الدفعة</label>
-                              <select id="staffPayoutType" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white outline-none focus:border-blue-500 transition-all font-medium text-slate-700">
-                                  <option value="راتب شهري">راتب شهري (Salaire)</option>
-                                  <option value="تسقيع / تسليف">تسقيع / تسليف (Avance)</option>
-                                  <option value="مكافأة / بونوس">مكافأة (Prime)</option>
-                                  <option value="نسبة مئوية">نسبة مئوية من الاشتراكات</option>
-                                  <option value="أجر يومي">أجر يومي</option>
-                              </select> </div>
-                          <div>
-                              <label class="block text-[11px] font-bold text-slate-500 mb-1">تاريخ الخلاص والدخول *</label>
-                              <input type="date" id="staffPayoutDate" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-700 bg-white outline-none focus:border-blue-500 font-bold transition-all cursor-pointer">
-                          </div> </div> <div>
-                          <input type="text" id="staffNotes" placeholder="ملاحظة إضافية أو تفاصيل (اختياري)..." class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 transition-all">
-                      </div>
-                      <button type="submit" id="staffPayoutSubmitBtn" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-colors cursor-pointer flex items-center justify-center gap-2">
-                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                          <span id="staffPayoutSubmitBtnText">تسجيل الدفعة والدخول</span>
-                      </button> </form> </div>
-              <!-- History of Staff Payouts -->
-              <div>
-                  <div class="flex items-center justify-between mb-2">
-                      <h3 class="text-sm font-bold text-slate-700 flex items-center gap-1.5">
-                          <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                          <span>سجل خلاص العمال والمدربين</span>
-                      </h3>
-                      <span id="staffListFilterLabel" class="text-[11px] font-bold text-slate-500"></span>
-                  </div>
-                  <!-- Quick Workers Roster & Transaction Breakdown Bar -->
-                  <div class="mb-3">
-                      <div class="flex items-center justify-between mb-1.5">
-                          <span class="text-[11px] font-bold text-slate-500">قائمة العمال (اضغط على العامل لعرض كل المعاملات اليومية والشهرية):</span>
-                      </div>
-                      <div id="staffWorkersRoster" class="flex gap-2 overflow-x-auto pb-1.5 hide-scrollbar"></div>
-                  </div>
-                  <div id="staffPayoutsList" class="space-y-3 max-h-64 overflow-y-auto pr-1 hide-scrollbar"></div>
+                  <p class="text-xs text-slate-500 mt-0.5">سجل فواتير ومستحقات الموردين والسلع والمشتريات</p>
               </div> </div>
           <!-- TAB 2: Suppliers Content (قسم الموردين) -->
-          <div id="suppliersTabContent" class="space-y-4 hidden">
+          <div id="suppliersTabContent" class="space-y-4">
               <!-- Shortcut banner for monthly history -->
               <div class="bg-gradient-to-r from-blue-50 via-blue-50/60 to-white border border-blue-200/80 p-3.5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
                   <div class="flex items-center gap-3 text-right">
@@ -5558,7 +5428,8 @@
         `; printWindow.document.open();
         printWindow.document.write(docHtml);
         printWindow.document.close(); };
-    function renderStaffPayouts() { if (!appState.staffPayouts) appState.staffPayouts = [];
+    function renderStaffPayouts() { return; } window.renderStaffPayouts = renderStaffPayouts;
+    function _disabled_renderStaffPayouts() { if (!appState.staffPayouts) appState.staffPayouts = [];
         // 1. Datalist suggestions & Filter dropdown
         const suggestionsDatalist = document.getElementById('staffCoachSuggestions');
         const workerSelect = document.getElementById('staffPayoutWorkerFilter');
@@ -5889,8 +5760,8 @@
         } else { openModal('expensesModal'); } };
     window.openStaffPayoutsIfAllowed = function() {
         if (appState.hideFinances) {
-            promptWithPassword({ title: 'مستحقات العمال',
-                prompt: 'أدخل كلمة المرور لفتح نافذة مستحقات العمال',
+            promptWithPassword({ title: 'حسابات ومستحقات الموردين',
+                prompt: 'أدخل كلمة المرور لفتح نافذة حسابات الموردين',
                 buttonText: 'دخول' }, () => {
                 openModal('staffPayoutsModal');
             }); } else { openModal('staffPayoutsModal');
