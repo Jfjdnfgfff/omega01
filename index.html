@@ -1,5 +1,5 @@
 <!doctype html>
-<html dir="rtl" class="scroll-smooth" translate="no">
+<html lang="ar" dir="rtl" class="scroll-smooth" translate="no">
 <head>
   <title>OMEGA GYM - نظام إدارة المبيعات والمخزون</title>
   <meta charset="UTF-8" />
@@ -15,65 +15,105 @@
   <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js">
   <script>/* Start downloading the database right away (parallel to page parsing); the app reuses this single download. */window.__rtdbPre=(function(){try{return fetch('https://saas-faae1-default-rtdb.firebaseio.com/.json').then(function(r){return r.ok?r.json():null}).catch(function(){return null})}catch(e){return null}})();</script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- TW-DELIVERY-START -->
   <script>
-/* Tailwind CSS cache — the compiled CSS is stored in localStorage, so Tailwind is not downloaded/compiled on every visit.
-   1st visit: Tailwind loads as before, then its CSS is saved.  Next visits: cached CSS is injected instantly, Tailwind is skipped.
-   If a class is used that the cache does not contain, Tailwind is loaded once in the background and the cache is refreshed.
+/* Tailwind CSS delivery.
+   This block is replaced by <link rel="stylesheet" href="/tailwind.css"> during the Vercel build (see build.mjs), so Tailwind's in-browser compiler is not used at all.
+   When the file is used without that build, Tailwind runs in the browser, but the compiled CSS is cached in localStorage:
+      1st visit: Tailwind loads as before, its CSS is saved.  Next visits: cached CSS is injected instantly, Tailwind is skipped.
+      If a class is used that the cache lacks, Tailwind is loaded once in the background and the cache is refreshed.
    Add ?twnocache to the URL to bypass the cache. */
-(function () { var KEY = 'twcache:v1', TW_URL = 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4', cache = null;
-  var UTIL = { flex: 1, grid: 1, block: 1, hidden: 1, inline: 1, relative: 1, absolute: 1, fixed: 1, sticky: 1, static: 1, truncate: 1, italic: 1, underline: 1, uppercase: 1, lowercase: 1, capitalize: 1, border: 1, rounded: 1, shadow: 1, transition: 1, transform: 1, blur: 1, filter: 1, container: 1, contents: 1, visible: 1, invisible: 1, collapse: 1, grow: 1, shrink: 1, resize: 1, ring: 1, outline: 1, isolate: 1, table: 1, underline: 1, antialiased: 1, ordinal: 1, lowercase: 1 };
-  try { if (location.search.indexOf('twnocache') < 0) cache = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { cache = null; }
-  var warm = !!(cache && typeof cache.css === 'string' && cache.css.length > 2000 && Array.isArray(cache.ignored));
-  if (warm) { var st = document.createElement('style'); st.id = 'tw-cache'; st.textContent = cache.css; document.head.appendChild(st);
-  } else { cache = null; document.write('<script src="' + TW_URL + '"><\/script>');
-  } function unesc(s) { return s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, function (m, h, c) { return h ? String.fromCodePoint(parseInt(h, 16)) : c; }); }
-  function classesOfCss(css) { var set = Object.create(null), re = /\.((?:\\[0-9a-fA-F]{1,6} ?|\\.|[A-Za-z0-9_-])+)/g, m;
+(function () {
+  var KEY = 'twcache:v1', TW_URL = 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4', cache = null, started = false;
+  var UTIL = { flex: 1, grid: 1, block: 1, hidden: 1, inline: 1, relative: 1, absolute: 1, fixed: 1, sticky: 1, static: 1, truncate: 1, italic: 1, underline: 1, uppercase: 1, lowercase: 1, capitalize: 1, border: 1, rounded: 1, shadow: 1, transition: 1, transform: 1, blur: 1, filter: 1, container: 1, contents: 1, visible: 1, invisible: 1, collapse: 1, grow: 1, shrink: 1, resize: 1, ring: 1, outline: 1, isolate: 1, table: 1, antialiased: 1, ordinal: 1 };
+  function unesc(s) { return s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, function (m, h, c) { return h ? String.fromCodePoint(parseInt(h, 16)) : c; }); }
+  function classesOfCss(css) {
+    var set = Object.create(null), re = /\.((?:\\[0-9a-fA-F]{1,6} ?|\\.|[A-Za-z0-9_-])+)/g, m;
     while ((m = re.exec(css))) set[unesc(m[1])] = 1;
-    return set; } function isTwStyle(el) {
+    return set;
+  }
+  function isTwStyle(el) {
     if (el.id === 'tw-cache') return false;
     var t = el.textContent; return t.length > 1500 && (t.indexOf('tailwindcss v') > -1 || (t.indexOf('--tw-') > -1 && t.indexOf('@layer') > -1));
-  } function twCss() { var out = [], ss = document.getElementsByTagName('style'); for (var i = 0; i < ss.length; i++) if (isTwStyle(ss[i])) out.push(ss[i].textContent); return out.join('\n'); }
+  }
+  function twCss() { var out = [], ss = document.getElementsByTagName('style'); for (var i = 0; i < ss.length; i++) if (isTwStyle(ss[i])) out.push(ss[i].textContent); return out.join('\n'); }
   function authoredCss() { var out = [], ss = document.getElementsByTagName('style'); for (var i = 0; i < ss.length; i++) if (ss[i].id !== 'tw-cache' && !isTwStyle(ss[i])) out.push(ss[i].textContent); return out.join('\n'); }
-  function domTokens() { var out = Object.create(null), els = document.querySelectorAll('[class]:not(#tw-safelist)');
+  function domTokens() {
+    var out = Object.create(null), els = document.querySelectorAll('[class]:not(#tw-safelist)');
     for (var i = 0; i < els.length; i++) { var c = els[i].getAttribute('class'); if (!c) continue; var p = c.split(/\s+/); for (var j = 0; j < p.length; j++) if (p[j]) out[p[j]] = 1; }
-    return out; } var safeTokens = null;
-  function scriptTokens() { if (safeTokens) return safeTokens;
+    return out;
+  }
+  var safeTokens = null;
+  function scriptTokens() {
+    if (safeTokens) return safeTokens;
     var txt = '', sc = document.scripts, i;
     for (i = 0; i < sc.length; i++) if (!sc[i].src) txt += ' ' + sc[i].textContent;
     var seen = Object.create(null), out = [], parts = txt.split(/[\s"'`<>{}|;]+/);
     for (i = 0; i < parts.length; i++) { var p = parts[i]; if (p.length > 1 && p.length <= 60 && !seen[p] && (/[-:\/\[]/.test(p) || UTIL[p])) { seen[p] = 1; out.push(p); } }
-    return (safeTokens = out); }
-  function addSafelist() { var d = document.createElement('div'); d.id = 'tw-safelist'; d.hidden = true; d.setAttribute('class', scriptTokens().join(' ')); document.body.appendChild(d);
-  } function removeSafelist() { var d = document.getElementById('tw-safelist'); if (d) d.remove(); }
-  function settle(cb) { var last = -1, same = 0, n = 0, iv = setInterval(function () {
-      var l = twCss().length; n++; if (l > 1500 && l === last) same++; else same = 0;
-      last = l; if (same >= 3 || n > 40) { clearInterval(iv); cb(l > 1500); }
-    }, 350); } function save() { var css = twCss(); if (css.length < 2000) return false;
+    return (safeTokens = out);
+  }
+  function addSafelist() { var d = document.createElement('div'); d.id = 'tw-safelist'; d.hidden = true; d.setAttribute('class', scriptTokens().join(' ')); document.body.appendChild(d); }
+  function removeSafelist() { var d = document.getElementById('tw-safelist'); if (d) d.remove(); }
+  function settle(cb) {
+    var last = -1, same = 0, n = 0, iv = setInterval(function () {
+      var l = twCss().length; n++;
+      if (l > 1500 && l === last) same++; else same = 0;
+      last = l;
+      if (same >= 3 || n > 30) { clearInterval(iv); cb(l > 1500); }
+    }, 500);
+  }
+  function save() {
+    var css = twCss(); if (css.length < 2000) return false;
     var known = classesOfCss(css + '\n' + authoredCss()), ign = Object.create(null), k, i;
     if (cache) for (i = 0; i < cache.ignored.length; i++) ign[cache.ignored[i]] = 1;
     var dom = domTokens(); for (k in dom) if (!known[k]) ign[k] = 1;
-    var st = scriptTokens(); for (i = 0; i < st.length; i++) if (!known[st[i]]) ign[st[i]] = 1;
+    if (document.getElementById('tw-safelist')) { var st = scriptTokens(); for (i = 0; i < st.length; i++) if (!known[st[i]]) ign[st[i]] = 1; }
     var data = { css: css, ignored: Object.keys(ign), t: Date.now() };
     try { localStorage.setItem(KEY, JSON.stringify(data)); cache = data; return true; } catch (e) { return false; }
-  } function learn(done) { addSafelist(); settle(function (ok) { if (ok) save(); removeSafelist(); if (done) done(ok); }); }
-  function ready(fn) { if (document.readyState === 'complete') setTimeout(fn, 800); else addEventListener('load', function () { setTimeout(fn, 800); }); }
-  if (!warm) { ready(function () { learn(); }); return; }
-  // Warm start: watch for classes missing from the cache (rare) and refresh the cache in the background.
-  var known = null, ign = null, seen = Object.create(null), busy = false, timer = 0;
-  function check() { timer = 0; if (busy) return;
-    if (!known) { known = classesOfCss(cache.css + '\n' + authoredCss()); ign = Object.create(null); for (var i = 0; i < cache.ignored.length; i++) ign[cache.ignored[i]] = 1; }
-    var dom = domTokens(), missing = 0, k;
-    for (k in dom) { if (seen[k]) continue; seen[k] = 1; if (!known[k] && !ign[k]) missing++; }
-    if (missing) upgrade(); } function upgrade() {
-    busy = true; var s = document.createElement('script'); s.src = TW_URL;
-    s.onload = function () { learn(function () { if (mo) mo.disconnect(); }); };
-    s.onerror = function () { busy = false; };
-    document.head.appendChild(s); } var mo = null;
-  ready(function () { check(); if (window.MutationObserver && !busy) {
-      mo = new MutationObserver(function () { if (!timer && !busy) timer = setTimeout(check, 1500); });
-      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    } }); })();
+  }
+  // quick save = only the classes currently on the page (cheap); full save = every class found in the app's scripts (done much later, when idle)
+  function learnQuick(done) { settle(function (ok) { if (ok) save(); if (done) done(ok); }); }
+  function learnFull() { addSafelist(); settle(function (ok) { if (ok) save(); removeSafelist(); }); }
+  function later(fn, ms) { setTimeout(function () { if (window.requestIdleCallback) requestIdleCallback(fn, { timeout: 5000 }); else fn(); }, ms); }
+  function ready(fn, ms) { if (document.readyState === 'complete') setTimeout(fn, ms); else addEventListener('load', function () { setTimeout(fn, ms); }); }
+  function loadTailwind(onload, onerror) { var s = document.createElement('script'); s.src = TW_URL; s.onload = onload; s.onerror = onerror; document.head.appendChild(s); }
+
+  function startFallback() {
+    if (started) return; started = true;
+    try { if (location.search.indexOf('twnocache') < 0) cache = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { cache = null; }
+    var warm = !!(cache && typeof cache.css === 'string' && cache.css.length > 2000 && Array.isArray(cache.ignored));
+    if (!warm) {
+      cache = null;
+      document.write('<script src="' + TW_URL + '"><\/script>');   // blocking, exactly like a normal <script src>
+      ready(function () { learnQuick(function () { later(learnFull, 15000); }); }, 800);
+      return;
+    }
+    var st = document.createElement('style'); st.id = 'tw-cache'; st.textContent = cache.css; document.head.appendChild(st);
+    // Warm start: watch for classes missing from the cache (rare) and refresh the cache in the background.
+    var known = null, ign = null, seen = Object.create(null), busy = false, timer = 0, mo = null;
+    function check() {
+      timer = 0; if (busy) return;
+      if (!known) { known = classesOfCss(cache.css + '\n' + authoredCss()); ign = Object.create(null); for (var i = 0; i < cache.ignored.length; i++) ign[cache.ignored[i]] = 1; }
+      var dom = domTokens(), missing = 0, k;
+      for (k in dom) { if (seen[k]) continue; seen[k] = 1; if (!known[k] && !ign[k]) missing++; }
+      if (missing) upgrade();
+    }
+    function upgrade() {
+      busy = true;
+      loadTailwind(function () { if (mo) mo.disconnect(); learnQuick(function () { later(learnFull, 15000); }); }, function () { busy = false; });
+    }
+    ready(function () {
+      check();
+      if (window.MutationObserver && !busy) {
+        mo = new MutationObserver(function () { if (!timer && !busy) timer = setTimeout(check, 1500); });
+        mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+      }
+    }, 800);
+  }
+  startFallback();
+})();
   </script>
+  <!-- TW-DELIVERY-END -->
   <script>window.loadLib=function(u){var L=window.__libs=window.__libs||{};return L[u]||(L[u]=new Promise(function(ok,no){var t=document.createElement('script');t.src=u;t.onload=ok;t.onerror=function(){delete L[u];no(new Error('Failed to load '+u))};document.head.appendChild(t)}))};</script>
   <!-- @zxing/library exposes window.ZXing (BarcodeFormat / DecodeHintType enums) which we use
        to build decode hints (TRY_HARDER + restrict to retail 1D formats). Loaded before
@@ -81,7 +121,8 @@
   <!-- lazy-loaded on demand (barcode camera): https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js -->
   <!-- lazy-loaded on demand (barcode camera): https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js -->
   <!-- lazy-loaded on demand (print report): https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js -->
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet"></noscript>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     html { overflow-x: hidden; overflow-y: auto; -webkit-text-size-adjust: 100%; }
