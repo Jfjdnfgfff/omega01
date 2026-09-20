@@ -5568,13 +5568,20 @@
         } appState.staffPayouts.forEach(p => {
             const n = (p.name || p.staffName || '').trim();
             if (n) namesSet.add(n); }); if (suggestionsDatalist) {
-            suggestionsDatalist.innerHTML = Array.from(namesSet).map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
+            const newSuggestionsHtml = Array.from(namesSet).map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
+            if (suggestionsDatalist.innerHTML !== newSuggestionsHtml) {
+                suggestionsDatalist.innerHTML = newSuggestionsHtml;
+            }
         } if (workerSelect) { const currentSelectedWorker = workerSelect.value || 'all';
             let workerOptions = '<option value="all">جميع العمال والمدربين</option>';
             Array.from(namesSet).sort().forEach(n => {
                 const isSel = n === currentSelectedWorker ? 'selected' : '';
                 workerOptions += `<option value="${escapeHTML(n)}" ${isSel}>${escapeHTML(n)}</option>`;
-            }); workerSelect.innerHTML = workerOptions;
+            });
+            if (workerSelect.innerHTML !== workerOptions) {
+                workerSelect.innerHTML = workerOptions;
+                workerSelect.value = currentSelectedWorker;
+            }
         }
         // 3. Current filter settings
         window.staffPayoutsFilter = window.staffPayoutsFilter || { period: 'month', monthVal: '', worker: 'all' };
@@ -5666,9 +5673,10 @@
         // Render Quick Workers Roster Bar
         const rosterContainer = document.getElementById('staffWorkersRoster');
         if (rosterContainer) { const workersList = Object.values(workerStatsMap);
+            let newRosterHtml = '';
             if (workersList.length === 0) {
-                rosterContainer.innerHTML = '<span class="text-xs text-slate-400">لا يوجد عمال مسجلين بعد</span>';
-            } else { rosterContainer.innerHTML = workersList.map(w => {
+                newRosterHtml = '<span class="text-xs text-slate-400">لا يوجد عمال مسجلين بعد</span>';
+            } else { newRosterHtml = workersList.map(w => {
                     const isSelected = selectedWorker.toLowerCase() === w.name.toLowerCase();
                     const borderCls = isSelected ? 'border-blue-500 bg-blue-50/80 shadow-xs ring-2 ring-blue-500/20' : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30';
                     return `
@@ -5686,65 +5694,79 @@
                                 </div>
                             </div>
                         </button>
-                    `; }).join(''); } }
+                    `; }).join(''); }
+            if (rosterContainer.innerHTML !== newRosterHtml) {
+                rosterContainer.innerHTML = newRosterHtml;
+            }
+        }
         // 5. Render list
         const listContainer = document.getElementById('staffPayoutsList');
-        if (!listContainer) return; if (filteredItems.length === 0) {
-            listContainer.innerHTML = `
+        if (!listContainer) return;
+        let newListHtml = '';
+        if (filteredItems.length === 0) {
+            newListHtml = `
                 <div class="text-xs text-slate-400 text-center py-8 font-medium bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
                     <p class="font-bold text-slate-600 mb-1">لا يوجد خلاص مسجل لهذه الفترة المحددة</p>
                     <p class="text-[11px] text-slate-400">يمكنك تسجيل خلاص جديد في النموذج أعلاه أو تغيير التصفية لرؤية فترات سابقة</p>
                 </div>
-            `; return; }
-        // Sort descending by date
-        filteredItems.sort((a, b) => { const timeA = new Date(a.date || a.createdAt || 0).getTime() || 0;
-            const timeB = new Date(b.date || b.createdAt || 0).getTime() || 0;
-            return timeB - timeA; }); const typeColorMap = {
-            'راتب شهري': 'bg-emerald-50 text-emerald-700 border-emerald-200',
-            'تسقيع / تسليف': 'bg-amber-50 text-amber-700 border-amber-200',
-            'مكافأة / بونوس': 'bg-purple-50 text-purple-700 border-purple-200',
-            'نسبة مئوية': 'bg-indigo-50 text-indigo-700 border-indigo-200',
-            'أجر يومي': 'bg-sky-50 text-sky-700 border-sky-200'
-        }; listContainer.innerHTML = filteredItems.map(item => {
-            const dateFormatted = item.dateInfo.fullDate || item.date || '';
-            const safeName = escapeHTML(item.name || item.staffName || 'عامل');
-            const safeType = escapeHTML(item.type || 'أجر');
-            const safeNotes = escapeHTML(item.notes || '');
-            const safeId = escapeHTML(item.id || '');
-            const colorClass = typeColorMap[item.type] || 'bg-blue-50 text-blue-700 border-blue-200/80';
-            return `
-                <div class="bg-white border border-slate-200/90 p-3.5 rounded-2xl shadow-xs hover:border-blue-300 transition-all flex items-center justify-between gap-3">
-                    <div class="text-right flex-1 min-w-0">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <button type="button" onclick="openWorkerTransactionsModal('${safeName}')" class="font-black text-slate-800 hover:text-blue-700 text-sm sm:text-base flex items-center gap-1.5 transition-colors cursor-pointer group text-right" title="اضغط لعرض كل المعاملات اليومية والشهرية لهذا العامل">
-                                <span>${safeName}</span>
-                                <span class="text-[10px] font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded-md transition-all flex items-center gap-0.5">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                    <span>كشف المعاملات</span>
-                                </span>
-                            </button>
-                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border ${colorClass}">${safeType}</span>
+            `;
+        } else {
+            // Sort descending by date
+            filteredItems.sort((a, b) => { const timeA = new Date(a.date || a.createdAt || 0).getTime() || 0;
+                const timeB = new Date(b.date || b.createdAt || 0).getTime() || 0;
+                return timeB - timeA; }); const typeColorMap = {
+                'راتب شهري': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                'تسقيع / تسليف': 'bg-amber-50 text-amber-700 border-amber-200',
+                'مكافأة / بونوس': 'bg-purple-50 text-purple-700 border-purple-200',
+                'نسبة مئوية': 'bg-indigo-50 text-indigo-700 border-indigo-200',
+                'أجر يومي': 'bg-sky-50 text-sky-700 border-sky-200'
+            };
+            newListHtml = filteredItems.map(item => {
+                const dateFormatted = item.dateInfo.fullDate || item.date || '';
+                const safeName = escapeHTML(item.name || item.staffName || 'عامل');
+                const safeType = escapeHTML(item.type || 'أجر');
+                const safeNotes = escapeHTML(item.notes || '');
+                const safeId = escapeHTML(item.id || '');
+                const colorClass = typeColorMap[item.type] || 'bg-blue-50 text-blue-700 border-blue-200/80';
+                return `
+                    <div class="bg-white border border-slate-200/90 p-3.5 rounded-2xl shadow-xs hover:border-blue-300 transition-all flex items-center justify-between gap-3">
+                        <div class="text-right flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button type="button" onclick="openWorkerTransactionsModal('${safeName}')" class="font-black text-slate-800 hover:text-blue-700 text-sm sm:text-base flex items-center gap-1.5 transition-colors cursor-pointer group text-right" title="اضغط لعرض كل المعاملات اليومية والشهرية لهذا العامل">
+                                    <span>${safeName}</span>
+                                    <span class="text-[10px] font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded-md transition-all flex items-center gap-0.5">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                        <span>كشف المعاملات</span>
+                                    </span>
+                                </button>
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border ${colorClass}">${safeType}</span>
+                            </div>
+                            <div class="flex items-center gap-1 mt-1 text-xs text-slate-400 font-medium flex-wrap">
+                                <svg class="w-3.5 h-3.5 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                <span class="font-bold text-slate-600">${dateFormatted}</span>
+                                ${safeNotes ? `<span class="text-slate-300 mx-1">|</span><span class="text-slate-500 italic truncate max-w-[160px]">${safeNotes}</span>` : ''}
+                            </div>
                         </div>
-                        <div class="flex items-center gap-1 mt-1 text-xs text-slate-400 font-medium flex-wrap">
-                            <svg class="w-3.5 h-3.5 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                            <span class="font-bold text-slate-600">${dateFormatted}</span>
-                            ${safeNotes ? `<span class="text-slate-300 mx-1">|</span><span class="text-slate-500 italic truncate max-w-[160px]">${safeNotes}</span>` : ''}
-                        </div>
-                    </div>
 
-                    <div class="flex items-center gap-2 shrink-0">
-                        <div class="bg-blue-50/70 border border-blue-200/80 px-2.5 py-1 rounded-xl text-left">
-                            <span class="font-black text-blue-900 text-sm sm:text-base">${Number(item.numericAmount).toLocaleString()} دج</span>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <div class="bg-blue-50/70 border border-blue-200/80 px-2.5 py-1 rounded-xl text-left">
+                                <span class="font-black text-blue-900 text-sm sm:text-base">${Number(item.numericAmount).toLocaleString()} دج</span>
+                            </div>
+                            <button type="button" onclick="editStaffPayout('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-amber-100 text-slate-600 hover:text-amber-700 border border-slate-200 hover:border-amber-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="تعديل التاريخ أو المبلغ">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                            </button>
+                            <button type="button" onclick="deleteStaffPayout('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-red-100 text-slate-600 hover:text-red-700 border border-slate-200 hover:border-red-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>
                         </div>
-                        <button type="button" onclick="editStaffPayout('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-amber-100 text-slate-600 hover:text-amber-700 border border-slate-200 hover:border-amber-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="تعديل التاريخ أو المبلغ">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                        </button>
-                        <button type="button" onclick="deleteStaffPayout('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-red-100 text-slate-600 hover:text-red-700 border border-slate-200 hover:border-red-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
                     </div>
-                </div>
-            `; }).join(''); } window.renderStaffPayouts = renderStaffPayouts;
+                `;
+            }).join('');
+        }
+        if (listContainer.innerHTML !== newListHtml) {
+            listContainer.innerHTML = newListHtml;
+        }
+    } window.renderStaffPayouts = renderStaffPayouts;
     document.getElementById('coachAbsenceForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const numDays = parseInt(document.getElementById('absenceDays').value);
         if (isNaN(numDays) || numDays <= 0) return;
@@ -7013,8 +7035,14 @@
 
         if (isModalOpen('expensesModal') && typeof renderExpensesListModal === 'function') renderExpensesListModal();
         if (isVisible('expensesView') && typeof renderExpensesListView === 'function') renderExpensesListView();
-        if (isModalOpen('staffPayoutsModal') && typeof renderStaffPayouts === 'function') renderStaffPayouts();
-        if (isModalOpen('suppliersModal') && typeof renderSuppliersList === 'function') renderSuppliersList();
+        if (isModalOpen('staffPayoutsModal')) {
+            const suppliersTabContent = document.getElementById('suppliersTabContent');
+            if (suppliersTabContent && !suppliersTabContent.classList.contains('hidden')) {
+                if (typeof renderSuppliersList === 'function') renderSuppliersList();
+            } else {
+                if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+            }
+        }
         if (isVisible('productsView') || isVisible('dashboardView')) renderProductsList();
         if (isVisible('dashboardView') || isVisible('productsView')) renderSalesList();
         if (isVisible('customersView') || isVisible('dashboardView')) renderCustomers();
