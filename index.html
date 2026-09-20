@@ -10,7 +10,69 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script>
+/* Tailwind CSS cache — the compiled CSS is stored in localStorage, so Tailwind is not downloaded/compiled on every visit.
+   1st visit: Tailwind loads as before, then its CSS is saved.  Next visits: cached CSS is injected instantly, Tailwind is skipped.
+   If a class is used that the cache does not contain, Tailwind is loaded once in the background and the cache is refreshed.
+   Add ?twnocache to the URL to bypass the cache. */
+(function () { var KEY = 'twcache:v1', TW_URL = 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4', cache = null;
+  var UTIL = { flex: 1, grid: 1, block: 1, hidden: 1, inline: 1, relative: 1, absolute: 1, fixed: 1, sticky: 1, static: 1, truncate: 1, italic: 1, underline: 1, uppercase: 1, lowercase: 1, capitalize: 1, border: 1, rounded: 1, shadow: 1, transition: 1, transform: 1, blur: 1, filter: 1, container: 1, contents: 1, visible: 1, invisible: 1, collapse: 1, grow: 1, shrink: 1, resize: 1, ring: 1, outline: 1, isolate: 1, table: 1, underline: 1, antialiased: 1, ordinal: 1, lowercase: 1 };
+  try { if (location.search.indexOf('twnocache') < 0) cache = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { cache = null; }
+  var warm = !!(cache && typeof cache.css === 'string' && cache.css.length > 2000 && Array.isArray(cache.ignored));
+  if (warm) { var st = document.createElement('style'); st.id = 'tw-cache'; st.textContent = cache.css; document.head.appendChild(st);
+  } else { cache = null; document.write('<script src="' + TW_URL + '"><\/script>');
+  } function unesc(s) { return s.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, function (m, h, c) { return h ? String.fromCodePoint(parseInt(h, 16)) : c; }); }
+  function classesOfCss(css) { var set = Object.create(null), re = /\.((?:\\[0-9a-fA-F]{1,6} ?|\\.|[A-Za-z0-9_-])+)/g, m;
+    while ((m = re.exec(css))) set[unesc(m[1])] = 1;
+    return set; } function isTwStyle(el) {
+    if (el.id === 'tw-cache') return false;
+    var t = el.textContent; return t.length > 1500 && (t.indexOf('tailwindcss v') > -1 || (t.indexOf('--tw-') > -1 && t.indexOf('@layer') > -1));
+  } function twCss() { var out = [], ss = document.getElementsByTagName('style'); for (var i = 0; i < ss.length; i++) if (isTwStyle(ss[i])) out.push(ss[i].textContent); return out.join('\n'); }
+  function authoredCss() { var out = [], ss = document.getElementsByTagName('style'); for (var i = 0; i < ss.length; i++) if (ss[i].id !== 'tw-cache' && !isTwStyle(ss[i])) out.push(ss[i].textContent); return out.join('\n'); }
+  function domTokens() { var out = Object.create(null), els = document.querySelectorAll('[class]:not(#tw-safelist)');
+    for (var i = 0; i < els.length; i++) { var c = els[i].getAttribute('class'); if (!c) continue; var p = c.split(/\s+/); for (var j = 0; j < p.length; j++) if (p[j]) out[p[j]] = 1; }
+    return out; } var safeTokens = null;
+  function scriptTokens() { if (safeTokens) return safeTokens;
+    var txt = '', sc = document.scripts, i;
+    for (i = 0; i < sc.length; i++) if (!sc[i].src) txt += ' ' + sc[i].textContent;
+    var seen = Object.create(null), out = [], parts = txt.split(/[\s"'`<>{}|;]+/);
+    for (i = 0; i < parts.length; i++) { var p = parts[i]; if (p.length > 1 && p.length <= 60 && !seen[p] && (/[-:\/\[]/.test(p) || UTIL[p])) { seen[p] = 1; out.push(p); } }
+    return (safeTokens = out); }
+  function addSafelist() { var d = document.createElement('div'); d.id = 'tw-safelist'; d.hidden = true; d.setAttribute('class', scriptTokens().join(' ')); document.body.appendChild(d);
+  } function removeSafelist() { var d = document.getElementById('tw-safelist'); if (d) d.remove(); }
+  function settle(cb) { var last = -1, same = 0, n = 0, iv = setInterval(function () {
+      var l = twCss().length; n++;
+      if (l > 1500 && l === last) same++; else same = 0;
+      last = l; if (same >= 3 || n > 40) { clearInterval(iv); cb(l > 1500); }
+    }, 350); } function save() {
+    var css = twCss(); if (css.length < 2000) return false;
+    var known = classesOfCss(css + '\n' + authoredCss()), ign = Object.create(null), k, i;
+    if (cache) for (i = 0; i < cache.ignored.length; i++) ign[cache.ignored[i]] = 1;
+    var dom = domTokens(); for (k in dom) if (!known[k]) ign[k] = 1;
+    var st = scriptTokens(); for (i = 0; i < st.length; i++) if (!known[st[i]]) ign[st[i]] = 1;
+    var data = { css: css, ignored: Object.keys(ign), t: Date.now() };
+    try { localStorage.setItem(KEY, JSON.stringify(data)); cache = data; return true; } catch (e) { return false; }
+  } function learn(done) { addSafelist(); settle(function (ok) { if (ok) save(); removeSafelist(); if (done) done(ok); }); }
+  function ready(fn) { if (document.readyState === 'complete') setTimeout(fn, 800); else addEventListener('load', function () { setTimeout(fn, 800); }); }
+  if (!warm) { ready(function () { learn(); }); return; }
+  // Warm start: watch for classes missing from the cache (rare) and refresh the cache in the background.
+  var known = null, ign = null, seen = Object.create(null), busy = false, timer = 0;
+  function check() { timer = 0; if (busy) return;
+    if (!known) { known = classesOfCss(cache.css + '\n' + authoredCss()); ign = Object.create(null); for (var i = 0; i < cache.ignored.length; i++) ign[cache.ignored[i]] = 1; }
+    var dom = domTokens(), missing = 0, k;
+    for (k in dom) { if (seen[k]) continue; seen[k] = 1; if (!known[k] && !ign[k]) missing++; }
+    if (missing) upgrade(); }
+  function upgrade() { busy = true;
+    var s = document.createElement('script'); s.src = TW_URL;
+    s.onload = function () { learn(function () { if (mo) mo.disconnect(); }); };
+    s.onerror = function () { busy = false; };
+    document.head.appendChild(s); }
+  var mo = null; ready(function () {
+    check(); if (window.MutationObserver && !busy) {
+      mo = new MutationObserver(function () { if (!timer && !busy) timer = setTimeout(check, 1500); });
+      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    } }); })();
+  </script>
   <script>window.loadLib=function(u){var L=window.__libs=window.__libs||{};return L[u]||(L[u]=new Promise(function(ok,no){var t=document.createElement('script');t.src=u;t.onload=ok;t.onerror=function(){delete L[u];no(new Error('Failed to load '+u))};document.head.appendChild(t)}))};</script>
   <!-- @zxing/library exposes window.ZXing (BarcodeFormat / DecodeHintType enums) which we use
        to build decode hints (TRY_HARDER + restrict to retail 1D formats). Loaded before
@@ -2391,7 +2453,8 @@
       } } catch (error) { console.warn('Notice initializing Firebase:', error?.message || error);
       updateFirebaseUIBadge('error', 'Firebase: خطأ في الاتصال', error?.message || String(error));
     } } initFirebase();
-</script> <script>
+</script>
+<script>
     // ==========================================
     // SECURITY, VALIDATION & SANITIZATION ENGINE
     // ==========================================
@@ -8358,7 +8421,8 @@
         window.print(); };
     setupGlobalInputSecurity(); render(); if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
-  </script> <!-- Add Credit Modal -->
+  </script>
+<!-- Add Credit Modal -->
   <div id="addCreditModal" class="modal-overlay" onclick="handleOverlayClick(event, 'addCreditModal')">
       <div class="modal-content relative pt-12">
           <button type="button" onclick="closeModal('addCreditModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 transition-colors">
@@ -8449,8 +8513,7 @@
                   </div> <div>
                       <label class="block text-xs font-bold text-slate-900 mb-1.5">عدد الحصص*</label>
                       <input type="number" id="quickSessCount" value="1" min="1" required placeholder="عدد الحصص" class="w-full border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-black text-slate-900 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none bg-white text-center transition-all">
-                  </div>
-              </div>
+                  </div> </div>
               <!-- Clients List Details -->
               <div>
                   <label class="block text-xs font-bold text-slate-900 mb-2 flex items-center justify-between">
@@ -8459,8 +8522,7 @@
                   </label>
                   <div id="quickSessClientsListContainer" class="space-y-2.5 max-h-56 overflow-y-auto pr-1 hide-scrollbar">
                       <!-- Rendered dynamically -->
-                  </div>
-              </div>
+                  </div> </div>
               <!-- Price Amount (Total) -->
               <div class="bg-white border border-slate-300 p-3.5 rounded-xl">
                   <div class="flex items-center justify-between mb-1.5">
@@ -8472,10 +8534,8 @@
               <button type="submit" class="w-full py-3.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-200 transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2"></path><path d="M13 17v2"></path><path d="M13 11v2"></path></svg>
                   <span>تأكيد وتسجيل الاشتراك</span>
-              </button>
-          </form>
-      </div>
-  </div>
+              </button> </form>
+      </div> </div>
   <!-- Add Customer Modal -->
   <div id="addCustomerModal" class="modal-overlay" onclick="handleOverlayClick(event, 'addCustomerModal')">
       <div class="modal-content relative">
@@ -8499,25 +8559,20 @@
                               <span id="fileNameDisplay">اختيار صورة المشترك</span>
                           </button>
                           <button type="button" id="removeAddImageBtn" onclick="removeAddImage()" class="text-[11px] text-slate-500 hover:text-slate-800 font-bold hidden">حذف الصورة</button>
-                      </div>
-                  </div>
-              </div>
-              <div>
+                      </div> </div>
+              </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">اسم المشترك</label>
                   <input type="text" id="custNameView" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all" placeholder="الاسم الكامل">
-              </div>
-              <div>
+              </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">الجنس</label>
                   <select id="custGenderView" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all">
                       <option value="male">ذكر</option>
                       <option value="female">أنثى</option>
-                  </select>
-              </div>
+                  </select> </div>
               <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ الميلاد</label>
                   <input type="date" id="custDobView" required class="w-full max-w-[210px] border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
-              </div>
-              <div>
+              </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">رقم الهاتف</label>
                   <input type="tel" id="custPhoneView" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all" placeholder="0550 00 00 00" dir="ltr" style="text-align: right;">
               </div>
@@ -8525,13 +8580,11 @@
                   <div class="flex-1">
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5">الوزن (كغ)</label>
                       <input type="number" step="0.1" id="custWeightView" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all" placeholder="مثال: 75">
-                  </div>
-              </div>
+                  </div> </div>
               <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">الباقة</label>
                   <select id="packageIdView" required onchange="updateAddCustomerEndDate()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all"></select>
-              </div>
-              <div>
+              </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">سعر الاشتراك (دج)*</label>
                   <input type="number" id="custPriceView" min="0" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white font-bold text-blue-700 transition-all" placeholder="أدخل السعر بالدينار (مثال: 3000)">
               </div>
@@ -8541,27 +8594,22 @@
                   <div>
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ البداية</label>
                       <input type="date" id="addCustStartDate" required class="w-full border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all" onchange="updateAddCustomerEndDate()">
-                  </div>
-                  <div>
+                  </div> <div>
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ الانتهاء</label>
                       <input type="date" id="addCustEndDate" required class="w-full border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
-                  </div>
-              </div>
+                  </div> </div>
               <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">حالة الدفع</label>
                   <select id="paymentStatusView" onchange="toggleDebtFieldView()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all">
                       <option value="paid">تم الدفع بالكامل</option>
                       <option value="credit">كريدي (لم يدفع بعد)</option>
-                  </select>
-              </div>
+                  </select> </div>
               <div id="debtAmountContainerView" style="display: none;">
                   <label class="block text-xs font-semibold text-slate-700 mb-1.5">المبلغ المتبقي (كريدي) بالدينار</label>
                   <input type="number" id="debtAmountView" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-slate-800 transition-all" placeholder="مثال: 1000" dir="ltr" style="text-align: right;">
               </div>
               <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-100 transition-all mt-6">إضافة المشترك</button>
-          </form>
-      </div>
-  </div>
+          </form> </div> </div>
   <!-- Bulk Import Modal -->
   <div id="bulkImportModal" class="modal-overlay" style="z-index: 110;" onclick="handleOverlayClick(event, 'bulkImportModal')">
       <div class="modal-content relative w-full max-w-lg bg-white p-5 rounded-2xl">
@@ -8580,11 +8628,9 @@
               <div class="text-sm text-slate-600 mb-1 flex justify-between"><span id="bulkStatusText">جاري البحث...</span> <span id="bulkProgressCount">0/0</span></div>
               <div class="w-full bg-slate-200 rounded-full h-2.5">
                   <div id="bulkProgressBar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
-              </div>
-          </div>
+              </div> </div>
           <button type="button" id="startBulkBtn" onclick="startBulkImport()" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors">بدء الاستيراد</button>
-      </div>
-  </div>
+      </div> </div>
   <!-- Full Report Modal -->
   <div id="fullReportModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'fullReportModal')">
       <div class="modal-content relative w-full max-w-4xl bg-white p-5 sm:p-7 rounded-2xl shadow-2xl my-6 border border-slate-100">
@@ -8604,14 +8650,11 @@
                   </button>
                   <button type="button" onclick="closeModal('fullReportModal')" class="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
                       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"></path></svg>
-                  </button>
-              </div>
+                  </button> </div>
           </div>
           <div id="fullReportContent" class="space-y-6 text-slate-800">
               <!-- Dynamically populated report content -->
-          </div>
-      </div>
-  </div>
+          </div> </div> </div>
   <!-- Global App Confirm Modal -->
   <div id="appConfirmModal" class="modal-overlay" style="z-index: 200;" onclick="handleOverlayClick(event, 'appConfirmModal')">
       <div class="modal-content relative w-full max-w-sm bg-white p-6 rounded-2xl shadow-2xl text-center border border-slate-100">
@@ -8623,9 +8666,7 @@
           <div class="flex items-center gap-3">
               <button type="button" id="appConfirmOkBtn" class="flex-1 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl text-sm font-bold shadow-md shadow-slate-300 transition-all">تأكيد الحذف</button>
               <button type="button" onclick="closeModal('appConfirmModal')" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-all">إلغاء</button>
-          </div>
-      </div>
-  </div>
+          </div> </div> </div>
   <!-- Google Drive Auto-Sync Modal -->
   <div id="googleDriveModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'googleDriveModal')">
       <div class="modal-content relative w-full max-w-lg bg-white p-5 sm:p-6 rounded-2xl shadow-2xl border border-slate-100 space-y-4">
@@ -8635,12 +8676,10 @@
           <div class="flex items-center gap-3 border-b border-slate-100 pb-3">
               <div class="w-11 h-11 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 shadow-inner">
                   <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M7.71 3.5L1.15 15l3.43 6l6.55-11.5M9.73 15L6.3 21h13.12l3.43-6M22.85 15l-6.56-11.5H9.72l6.57 11.5"/></svg>
-              </div>
-              <div>
+              </div> <div>
                   <h3 class="text-lg sm:text-xl font-black text-slate-800">حفظ مباشر في Google Drive</h3>
                   <p class="text-xs text-slate-500">حفظ النسخ الاحتياطية مباشرة داخل حسابك في تطبيق درايف</p>
-              </div>
-          </div>
+              </div> </div>
           <div class="space-y-3">
               <!-- Account Connection Status Card -->
               <div id="gdriveConnectBox" class="bg-gradient-to-br from-blue-50 to-indigo-50/50 border border-blue-200/80 p-3.5 rounded-xl space-y-2.5">
@@ -8655,8 +8694,7 @@
                   <button type="button" onclick="connectGoogleDriveAccount()" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all">
                       <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M7.71 3.5L1.15 15l3.43 6l6.55-11.5M9.73 15L6.3 21h13.12l3.43-6M22.85 15l-6.56-11.5H9.72l6.57 11.5"/></svg>
                       <span>ربط حساب Google الآن</span>
-                  </button>
-              </div>
+                  </button> </div>
               <div id="gdriveConnectedBox" class="hidden bg-emerald-50/70 border border-emerald-200/80 p-3.5 rounded-xl space-y-2">
                   <div class="flex items-center justify-between">
                       <div class="flex items-center gap-2">
@@ -8687,15 +8725,13 @@
                   <label class="relative inline-flex items-center cursor-pointer shrink-0">
                       <input type="checkbox" id="gdriveAutoSyncToggle" class="sr-only peer" checked onchange="saveGoogleDriveSettings()">
                       <div class="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-              </div>
+                  </label> </div>
               <!-- Main Direct Action Button -->
               <div id="gdriveActionButtons" class="pt-1">
                   <button type="button" id="gdriveDirectBackupBtn" onclick="backupToGoogleDriveNow()" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all">
                       <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M7.71 3.5L1.15 15l3.43 6l6.55-11.5M9.73 15L6.3 21h13.12l3.43-6M22.85 15l-6.56-11.5H9.72l6.57 11.5"/></svg>
                       <span>حفظ مباشر داخل Google Drive</span>
-                  </button>
-              </div>
+                  </button> </div>
               <!-- Backups In Drive Section -->
               <div class="border border-slate-200/80 rounded-xl p-3 bg-white space-y-2">
                   <div class="flex items-center justify-between border-b border-slate-100 pb-1.5">
@@ -8711,8 +8747,7 @@
                   <div id="gdriveBackupsList" class="max-h-40 overflow-y-auto text-xs">
                       <div class="p-2.5 text-center text-slate-400 text-xs">
                           قم بربط حساب Google لعرض النسخ واسترجاعها مباشرة بنقرة واحدة.
-                      </div>
-                  </div>
+                      </div> </div>
               </div>
               <!-- Local Backup File Option -->
               <div class="pt-1 flex items-center justify-between text-xs text-slate-500">
@@ -8720,11 +8755,8 @@
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                       <span>استرجاع من ملف احتياطي من الجهاز</span>
                       <input type="file" accept=".json" class="hidden" onchange="restoreFromGoogleDriveFile(this)">
-                  </label>
-              </div>
-          </div>
-      </div>
-  </div>
+                  </label> </div>
+          </div> </div> </div>
   <!-- Category Profits & Income Modal -->
   <div id="categoryProfitsModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'categoryProfitsModal')">
       <div class="modal-content relative w-full max-w-2xl bg-white p-5 sm:p-7 rounded-2xl shadow-2xl border border-slate-100 space-y-6">
@@ -8741,8 +8773,7 @@
               <div class="flex items-center gap-2">
                   <label class="text-xs font-bold text-slate-600">الشهر:</label>
                   <input type="month" id="catProfitFilterMonth" onchange="renderCategoryProfitsModal()" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold">
-              </div>
-          </div>
+              </div> </div>
           <!-- Overall Summary Top Bar -->
           <div class="grid grid-cols-3 gap-3">
               <div class="bg-slate-50 border border-slate-200/70 p-3.5 rounded-xl text-center">
@@ -8756,14 +8787,11 @@
               <div class="bg-blue-50 border border-blue-200/70 p-3.5 rounded-xl text-center">
                   <div class="text-[11px] font-bold text-blue-700">الكمية المباعة</div>
                   <div class="text-base sm:text-lg font-black text-blue-800 mt-0.5" id="catProfitTotalUnits">0 قطعة</div>
-              </div>
-          </div>
+              </div> </div>
           <!-- Categories List Container -->
           <div id="catProfitCardsContainer" class="space-y-3">
               <!-- Dynamically populated -->
-          </div>
-      </div>
-  </div>
+          </div> </div> </div>
   <!-- Coach Commissions & Monthly Profit Modal -->
   <div id="coachCommissionsModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'coachCommissionsModal')">
       <div class="modal-content relative w-full max-w-3xl bg-white p-5 sm:p-7 rounded-2xl shadow-2xl border border-slate-100 space-y-6">
@@ -8780,8 +8808,7 @@
               <div class="flex items-center gap-2">
                   <label class="text-xs font-bold text-slate-600">الشهر:</label>
                   <input type="month" id="coachCommissionsFilterMonth" onchange="renderCoachCommissionsModal()" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold">
-              </div>
-          </div>
+              </div> </div>
           <!-- Summary Metric Cards -->
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div class="bg-slate-50 border border-slate-200/70 p-3 rounded-xl text-center">
@@ -8799,8 +8826,7 @@
               <div class="bg-blue-50 border border-blue-200/70 p-3 rounded-xl text-center">
                   <div class="text-[10px] font-bold text-blue-700">صافي فائدة القاعة (67%)</div>
                   <div class="text-sm sm:text-base font-black text-blue-800 mt-0.5" id="coachModalTotalGymProfit">0 دج</div>
-              </div>
-          </div>
+              </div> </div>
           <!-- Coaches List -->
           <div class="space-y-3">
               <div class="text-xs font-bold text-slate-600 flex items-center justify-between">
@@ -8809,9 +8835,7 @@
               </div>
               <div id="coachCommissionsListContainer" class="space-y-3 max-h-[400px] overflow-y-auto pr-1">
                   <!-- Dynamically populated -->
-              </div>
-          </div>
-      </div>
+              </div> </div> </div>
   </div>
   <!-- Detailed Monthly Suppliers & Versements History Modal -->
   <div id="suppliersHistoryModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'suppliersHistoryModal')">
@@ -8824,12 +8848,10 @@
               <div class="flex items-center gap-3">
                   <div class="w-11 h-11 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 shadow-inner">
                       <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                  </div>
-                  <div>
+                  </div> <div>
                       <h3 class="text-xl font-black text-slate-800">هيستوريك الموردين والمشتريات والفرسيمو الشهري</h3>
                       <p class="text-xs text-slate-500 mt-0.5">تتبع مفصل لكل ما تم شراؤه (وش شريت) وكل ما تم دفعه وتفريسه (وش فارسيت) لكل مورد شهرياً</p>
-                  </div>
-              </div>
+                  </div> </div>
               <div class="flex items-center gap-2 self-end sm:self-center">
                   <button type="button" onclick="openQuickSupplierVersementModal()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
@@ -8838,8 +8860,7 @@
                   <button type="button" onclick="printSuppliersMonthlyReport()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors" title="طباعة كشف هذا الشهر">
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                       <span>طباعة</span>
-                  </button>
-              </div>
+                  </button> </div>
           </div>
           <!-- Multi-filter Bar -->
           <div class="space-y-2.5 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/70">
@@ -8853,20 +8874,17 @@
                   </div>
                   <div id="supHistPeriodBadge" class="text-xs font-extrabold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
                       عرض شهر محدد
-                  </div>
-              </div>
+                  </div> </div>
               <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-1">
                   <div>
                       <label class="block text-[10px] font-bold text-slate-500 mb-1">الشهر أو السنة:</label>
                       <input type="month" id="supHistMonthFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
-                  </div>
-                  <div>
+                  </div> <div>
                       <label class="block text-[10px] font-bold text-slate-500 mb-1">المورد:</label>
                       <select id="supHistSupplierFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
                           <option value="all">كل الموردين</option>
                       </select>
-                  </div>
-                  <div>
+                  </div> <div>
                       <label class="block text-[10px] font-bold text-slate-500 mb-1">نوع المعاملة:</label>
                       <select id="supHistTypeFilter" onchange="renderSuppliersHistory()" class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white font-bold text-slate-700">
                           <option value="all">جميع الحركات</option>
@@ -8874,12 +8892,10 @@
                           <option value="payment">فرسيمو ودفعات فقط</option>
                           <option value="debt">معاملات بها كريدي</option>
                       </select>
-                  </div>
-                  <div>
+                  </div> <div>
                       <label class="block text-[10px] font-bold text-slate-500 mb-1">بحث سريع:</label>
                       <input type="text" id="supHistSearchInput" oninput="renderSuppliersHistory()" placeholder="اسم، سلعة، ملاحظة..." class="w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-white">
-                  </div>
-              </div>
+                  </div> </div>
           </div>
           <!-- Monthly Stats Summary Cards -->
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -8898,8 +8914,7 @@
               <div class="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl text-right">
                   <div class="text-[10px] font-bold text-slate-400">إجمالي المعاملات</div>
                   <div class="text-xs sm:text-sm font-black text-slate-700 mt-1" id="supHistCountBadge">0 معاملة</div>
-              </div>
-          </div>
+              </div> </div>
           <!-- List of Detailed Transactions -->
           <div class="space-y-3">
               <div class="flex items-center justify-between text-xs font-bold text-slate-700">
@@ -8908,9 +8923,7 @@
               </div>
               <div id="supHistListContainer" class="space-y-3 max-h-[460px] overflow-y-auto pr-1">
                   <!-- Dynamically populated -->
-              </div>
-          </div>
-      </div>
+              </div> </div> </div>
   </div>
   <!-- Quick Supplier Versement Modal -->
   <div id="quickSupplierVersementModal" class="modal-overlay" style="z-index: 130;" onclick="handleOverlayClick(event, 'quickSupplierVersementModal')">
@@ -8921,38 +8934,31 @@
           <div class="flex items-center gap-3 border-b border-slate-100 pb-3">
               <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
                   <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-              </div>
-              <div>
+              </div> <div>
                   <h3 class="text-lg font-black text-slate-800">تسجيل فرسيمو ودفع لمورد</h3>
                   <p class="text-xs text-slate-500">تسديد دفعة مالية وتخفيض الكريدي تلقائياً</p>
-              </div>
-          </div>
+              </div> </div>
           <form id="quickSupplierVersementForm" onsubmit="return handleQuickSupplierVersementSubmit(event)" class="space-y-3">
               <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">المورد المستفيد*</label>
                   <select id="quickVersSupplierSelect" required class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs sm:text-sm outline-none focus:border-blue-600 bg-slate-50 font-bold text-slate-800">
                       <!-- Populated dynamically -->
-                  </select>
-              </div>
+                  </select> </div>
               <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">المبلغ المفرسي (دج)*</label>
                   <input type="number" id="quickVersAmount" required min="1" placeholder="مثال: 50000" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-600 bg-slate-50 font-black text-blue-700">
-              </div>
-              <div>
+              </div> <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ الدفعة والفرسيمو*</label>
                   <input type="date" id="quickVersDate" required class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold text-slate-700">
-              </div>
-              <div>
+              </div> <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">ملاحظات / رقم الإيصال (اختياري)</label>
                   <input type="text" id="quickVersNotes" placeholder="مثال: تحويل CCP، شيك رقم... أو نقداً" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-600 bg-slate-50">
               </div>
               <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all mt-2">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                   <span>تأكيد وتسجيل الفرسيمو</span>
-              </button>
-          </form>
-      </div>
-  </div>
+              </button> </form>
+      </div> </div>
   <!-- Single Supplier Statement Modal -->
   <div id="singleSupplierStatementModal" class="modal-overlay" style="z-index: 130;" onclick="handleOverlayClick(event, 'singleSupplierStatementModal')">
       <div class="modal-content relative w-full max-w-2xl bg-white p-5 sm:p-6 rounded-2xl shadow-2xl border border-slate-100 space-y-4">
@@ -8979,22 +8985,16 @@
               <div class="bg-blue-50 border border-blue-200/70 p-3 rounded-xl">
                   <div class="text-[10px] font-bold text-blue-900">الكريدي المتبقي</div>
                   <div class="text-sm sm:text-base font-black text-blue-950 mt-0.5" id="stmtCurrentDebt">0 دج</div>
-              </div>
-          </div>
+              </div> </div>
           <!-- Chronological List -->
           <div class="space-y-2">
               <div class="text-xs font-bold text-slate-700">تاريخ الحركات (المشتريات والفرسيمو):</div>
               <div id="stmtTransactionsList" class="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                   <!-- Dynamically populated -->
-              </div>
-          </div>
+              </div> </div>
           <div class="pt-2">
               <button type="button" onclick="window.print()" class="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                   <span>طباعة كشف هذا المورد</span>
-              </button>
-          </div>
-      </div>
-  </div>
-</body>
-</html>
+              </button> </div>
+      </div> </div> </body> </html>
