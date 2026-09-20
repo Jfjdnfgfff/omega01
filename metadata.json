@@ -1,0 +1,8 @@
+{
+  "name": "OMEGA GYM - نظام إدارة المبيعات والمخزون",
+  "description": "نظام إدارة المبيعات والمخزون ونادي أوميغا جيم (OMEGA GYM)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
