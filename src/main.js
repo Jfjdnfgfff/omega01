@@ -1935,8 +1935,12 @@
                     appConfirmCallback = null;
                     cb(); } }; } openModal('appConfirmModal');
     } window.showAppConfirm = showAppConfirm;
-    function toggleDebtField() { const status = document.getElementById('paymentStatus').value;
-       document.getElementById('debtAmountContainer').style.display = status === 'credit' ? 'block' : 'none';
+    function toggleDebtField() { 
+        const status = document.getElementById('paymentStatus');
+        const container = document.getElementById('debtAmountContainer');
+        if (container && status) {
+            container.style.display = status.value === 'credit' ? 'block' : 'none';
+        }
     } function generateSafeFileName(prefix = 'img') {
         const cleanPrefix = (prefix || 'img').replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 16);
         const randomId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -2400,19 +2404,24 @@
             const remInput = document.getElementById('editRemainingSessions');
             if (totalInput) totalInput.value = pkg.sessionsCount || 10;
             if (remInput) remInput.value = pkg.sessionsCount || 10;
-        } }; function openEditModal(customerId) {
-        const customer = appState.customers.find(c => c.id === customerId);
-        if(!customer) return; document.getElementById('editCustId').value = customer.id;
-        document.getElementById('editCustName').value = customer.name;
-        document.getElementById('editCustPhone').value = getDisplayPhone(customer.phone);
-        document.getElementById('editCustDob').value = customer.dob || '';
-        document.getElementById('editCustGender').value = customer.gender || 'male';
-        document.getElementById('editCustWeight').value = customer.weight || '';
-        document.getElementById('editPackageId').innerHTML = appState.packages.map(p => {
-            const isSess = p.type === 'session';
-            const label = isSess ? `[بالحصة] ${p.name} (${p.sessionsCount || 10} حصص) - ${p.price} دج` : `[زمني] ${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
-            return `<option value="${p.id}">${label}</option>`;
-        }).join(''); document.getElementById('editPackageId').value = customer.packageId;
+        } };    function openEditModal(customerId) {
+        const customer = appState.customers.find(c => String(c && c.id) === String(customerId));
+        if(!customer) return;
+        if (document.getElementById('editCustId')) document.getElementById('editCustId').value = customer.id;
+        if (document.getElementById('editCustName')) document.getElementById('editCustName').value = customer.name || '';
+        if (document.getElementById('editCustPhone')) document.getElementById('editCustPhone').value = getDisplayPhone(customer.phone);
+        if (document.getElementById('editCustDob')) document.getElementById('editCustDob').value = customer.dob || '';
+        if (document.getElementById('editCustGender')) document.getElementById('editCustGender').value = customer.gender || 'male';
+        if (document.getElementById('editCustWeight')) document.getElementById('editCustWeight').value = customer.weight || '';
+        const pkgSelect = document.getElementById('editPackageId');
+        if (pkgSelect) {
+            pkgSelect.innerHTML = appState.packages.map(p => {
+                const isSess = p.type === 'session';
+                const label = isSess ? `[بالحصة] ${p.name} (${p.sessionsCount || 10} حصص) - ${p.price} دج` : `[زمني] ${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
+                return `<option value="${p.id}">${label}</option>`;
+            }).join(''); 
+            pkgSelect.value = customer.packageId || '';
+        }
         const pkg = appState.packages.find(p => p.id === customer.packageId);
         const editPriceInput = document.getElementById('editCustPrice');
         if (editPriceInput) { editPriceInput.value = customer.price !== undefined && customer.price !== null ? customer.price : (pkg ? (pkg.price || 0) : 0);
@@ -2426,11 +2435,14 @@
         const remInput = document.getElementById('editRemainingSessions');
         if (totalInput) totalInput.value = customer.totalSessions || customer.remainingSessions || 10;
         if (remInput) remInput.value = customer.remainingSessions !== undefined ? customer.remainingSessions : 10;
-        document.getElementById('editExtraDays').value = 0;
-        document.getElementById('editPaymentStatus').value = customer.paymentStatus;
-        document.getElementById('editDebtAmount').value = customer.debtAmount || '';
-        if (customer.startDate) { document.getElementById('editStartDate').value = new Date(customer.startDate).toISOString().split('T')[0];
-        } if (customer.endDate) { document.getElementById('editEndDate').value = new Date(customer.endDate).toISOString().split('T')[0];
+        if (document.getElementById('editExtraDays')) document.getElementById('editExtraDays').value = 0;
+        if (document.getElementById('editPaymentStatus')) document.getElementById('editPaymentStatus').value = customer.paymentStatus || 'paid';
+        if (document.getElementById('editDebtAmount')) document.getElementById('editDebtAmount').value = customer.debtAmount || '';
+        if (customer.startDate && document.getElementById('editStartDate')) { 
+            document.getElementById('editStartDate').value = new Date(customer.startDate).toISOString().split('T')[0];
+        } 
+        if (customer.endDate && document.getElementById('editEndDate')) { 
+            document.getElementById('editEndDate').value = new Date(customer.endDate).toISOString().split('T')[0];
         }
         // Image setup for edit modal
         const imgPreview = document.getElementById('editCustImagePreview');
@@ -2452,8 +2464,14 @@
             } if (letterSpan) letterSpan.classList.remove('hidden');
             if (removeBtn) removeBtn.classList.add('hidden');
         } toggleEditDebtField(); openModal('editCustomerModal');
-    } function toggleEditDebtField() { document.getElementById('editDebtAmountContainer').style.display = document.getElementById('editPaymentStatus').value === 'credit' ? 'block' : 'none';
-    } document.getElementById('editCustomerForm')?.addEventListener('submit', function(e) {
+    } function toggleEditDebtField() { 
+        const container = document.getElementById('editDebtAmountContainer');
+        const status = document.getElementById('editPaymentStatus');
+        if (container && status) {
+            container.style.display = status.value === 'credit' ? 'block' : 'none';
+        }
+    }
+    document.getElementById('editCustomerForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const customer = appState.customers.find(c => c.id === document.getElementById('editCustId').value);
         if(!customer) return; let custName = document.getElementById('editCustName').value.trim();
         if (!custName) { showErrorToast('يرجى إدخال اسم المشترك');
@@ -5320,28 +5338,81 @@
             if (contentArea) contentArea.value = txt;
         } } window.setMsgTemplate = setMsgTemplate;
     function openMessageModal(customerId) {
-        const c = appState.customers.find(cust => cust.id === customerId);
-        if (c) { const dispPhone = getDisplayPhone(c.phone);
-            document.getElementById('msgCustomerName').textContent = 'إلى: ' + c.name + (dispPhone ? ' (' + dispPhone + ')' : '');
-            document.getElementById('msgPhone').value = dispPhone;
-            document.getElementById('msgCustId').value = c.id;
+        if (!Array.isArray(appState.customers)) appState.customers = [];
+        const c = appState.customers.find(cust => String(cust && cust.id) === String(customerId));
+        if (c) {
+            const rawPhone = c.phone || '';
+            const dispPhone = getDisplayPhone(rawPhone);
+            const nameElem = document.getElementById('msgCustomerName');
+            if (nameElem) nameElem.textContent = 'إلى: ' + (c.name || 'مشترك') + (dispPhone ? ' (' + dispPhone + ')' : '');
+            
+            const phoneElem = document.getElementById('msgPhone');
+            if (phoneElem) phoneElem.value = rawPhone;
+            
+            const custIdElem = document.getElementById('msgCustId');
+            if (custIdElem) custIdElem.value = c.id;
+
             const remDays = typeof getRemainingDays === 'function' ? getRemainingDays(c) : 30;
-            let defaultType = 'general'; if (c.paymentStatus === 'credit' && Number(c.debtAmount) > 0) {
-                defaultType = 'credit'; } else if (c.status === 'expired' || remDays <= 0) {
-                defaultType = 'expired'; } else if (c.status === 'near_expiry' || remDays <= 5) {
-                defaultType = 'near_expiry'; } else {
-                defaultType = 'welcome'; }
-            setMsgTemplate(defaultType); }
-        openModal('messageModal'); } function sendMessage(method) {
-        const phone = document.getElementById('msgPhone')?.value;
-        const content = encodeURIComponent(document.getElementById('msgContent')?.value || '');
-        if (phone) { if (method === 'whatsapp') {
-                let cleanPhone = phone.replace(/[^0-9]/g, '');
-                if (cleanPhone.startsWith('0')) cleanPhone = '213' + cleanPhone.substring(1);
-                window.open(`https://wa.me/${cleanPhone}?text=${content}`, '_blank');
-            } else if (method === 'sms') {
-                window.open(`sms:${phone}?body=${content}`, '_blank');
-            } } closeModal('messageModal'); }
+            let defaultType = 'general';
+            if (c.paymentStatus === 'credit' && Number(c.debtAmount) > 0) {
+                defaultType = 'credit';
+            } else if (c.status === 'expired' || remDays <= 0) {
+                defaultType = 'expired';
+            } else if (c.status === 'near_expiry' || remDays <= 5) {
+                defaultType = 'near_expiry';
+            } else {
+                defaultType = 'welcome';
+            }
+            setMsgTemplate(defaultType);
+        }
+        openModal('messageModal');
+    }
+    window.openMessageModal = openMessageModal;
+
+    function sendMessage(method) {
+        const rawPhone = document.getElementById('msgPhone')?.value || '';
+        const rawContent = document.getElementById('msgContent')?.value || '';
+
+        if (!rawPhone) {
+            if (typeof showErrorToast === 'function') showErrorToast('يرجى التأكد من وجود رقم هاتف للمشترك');
+            return;
+        }
+
+        let cleanPhone = rawPhone.toString().trim().replace(/[^0-9]/g, '');
+        if (cleanPhone.startsWith('00213')) {
+            cleanPhone = '213' + cleanPhone.substring(5);
+        } else if (cleanPhone.startsWith('0')) {
+            cleanPhone = '213' + cleanPhone.substring(1);
+        } else if (cleanPhone.length === 9 && (cleanPhone.startsWith('5') || cleanPhone.startsWith('6') || cleanPhone.startsWith('7'))) {
+            cleanPhone = '213' + cleanPhone;
+        }
+
+        const encodedText = encodeURIComponent(rawContent);
+
+        if (method === 'whatsapp') {
+            const waUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
+            const link = document.createElement('a');
+            link.href = waUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } else if (method === 'sms') {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            const smsUrl = isIOS 
+                ? `sms:${rawPhone.replace(/[^0-9+]/g, '')}&body=${encodedText}` 
+                : `sms:${rawPhone.replace(/[^0-9+]/g, '')}?body=${encodedText}`;
+            
+            const link = document.createElement('a');
+            link.href = smsUrl;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        closeModal('messageModal');
+    }
+    window.sendMessage = sendMessage;
     function formatMoney(amount) { return appState.hideFinances ? '**** دج' : Number(amount).toLocaleString() + ' دج'; }
     // Global password action callback handler
     
