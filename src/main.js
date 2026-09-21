@@ -681,21 +681,18 @@
     }
   };
 
-  // Dedicated Section Push Utility: strictly uses PUSH (SDK) and POST (REST)
+  // Dedicated Section Push Utility: strictly uses PUSH (SDK) with REST POST fallback ONLY on SDK failure
   window.pushToFirebaseSection = async function(sectionPath, itemData) {
-    let sdkOk = false;
-    let restOk = false;
-    let newKey = null;
     const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
     if (window.firebaseDB && window.firebasePush && window.firebaseRef) {
       try {
         const pushRef = await window.firebasePush(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`), itemData);
-        sdkOk = true;
-        newKey = pushRef?.key || null;
+        return { success: true, key: pushRef?.key || null };
       } catch (err) {
         console.warn(`SDK push error for v2/${v2Sec}:`, err);
       }
     }
+    // Fallback to REST POST ONLY if SDK failed or is unavailable
     try {
       const baseUrl = getRTDBUrl();
       const res = await fetch(`${baseUrl}/v2/${v2Sec}.json`, {
@@ -705,13 +702,12 @@
       });
       if (res.ok) {
         const json = await res.json();
-        restOk = true;
-        if (!newKey) newKey = json?.name || null;
+        return { success: true, key: json?.name || null };
       }
     } catch (e) {
       console.warn(`REST POST error for v2/${v2Sec}:`, e);
     }
-    return { success: sdkOk || restOk, key: newKey };
+    return { success: false, key: null };
   };
 
   // Helper normalization utilities for V2 flat architecture
@@ -4754,9 +4750,9 @@
 
             saveState();
 
-            if (window.updateFirebaseSection) {
-                window.updateFirebaseSection('customers', appState.customers);
-                window.updateFirebaseSection('credits', appState.credits);
+            if (window.saveFirebaseSectionItem) {
+                newCustomers.forEach(c => window.saveFirebaseSectionItem('customers', c));
+                newCredits.forEach(cr => window.saveFirebaseSectionItem('credits', cr));
             }
 
             updateMockDataUIState();
@@ -4905,10 +4901,6 @@
                 }
             }
             saveState();
-            if (window.updateFirebaseSection) {
-                window.updateFirebaseSection('customers', appState.customers);
-                window.updateFirebaseSection('credits', appState.credits);
-            }
             updateMockDataUIState();
             showSuccessToast('تم حذف كافة البيانات التجريبية بنجاح.');
             if (typeof render === 'function') render();
