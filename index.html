@@ -197,14 +197,6 @@
                 <p class="text-xs text-slate-500 mt-0.5 font-medium">متابعة المشتركين، حالة الاشتراكات، والعمليات السريعة</p>
               </div>
               <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-                <button type="button" onclick="generateMockTestData(200, 100)" class="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl text-xs md:text-sm font-bold shadow-2xs transition-all flex items-center justify-center gap-1.5" title="إضافة 200 مشترك و 100 كريدي لاختبار سرعة وأداء النظام">
-                  <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                  <span>بيانات تجريبية (200 مشترك + 100 كريدي)</span>
-                </button>
-                <button type="button" id="clearMockBtn" onclick="clearMockTestData()" class="hidden bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1" title="حذف البيانات التجريبية فقط">
-                  <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                  <span>مسح التجريبي</span>
-                </button>
                 <button onclick="openQuickSessionModal()" class="bg-white hover:bg-blue-50 text-blue-700 border border-slate-200 hover:border-blue-300 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl text-xs md:text-sm font-bold shadow-2xs transition-all flex items-center justify-center gap-1.5">
                   <svg class="w-4 h-4 sm:w-4.5 sm:h-4.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2"></path><path d="M13 17v2"></path><path d="M13 11v2"></path></svg>
                   <span>اشتراك بالحصة</span>
@@ -235,10 +227,6 @@
                   <p class="text-sm text-slate-500 mt-1 font-medium">تسجيل وتتبع الديون الخارجية والتعاملات الآجلة بأمان ودقة.</p>
               </div>
               <div class="flex gap-2.5 w-full sm:w-auto flex-wrap sm:flex-nowrap">
-                  <button type="button" onclick="generateMockTestData(200, 100)" class="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 px-4 py-3 rounded-2xl text-sm font-bold shadow-xs transition-colors flex items-center justify-center gap-2 shrink-0" title="توليد 100 سجل كريدي تجريبي لاختبار سرعة النظام">
-                      <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                      <span>توليد 100 كريدي تجريبي</span>
-                  </button>
                   <button onclick="deleteAllCredits()" class="bg-white border border-red-200 hover:bg-red-50 text-red-600 px-4 py-3 rounded-2xl text-sm font-bold shadow-xs transition-colors flex items-center justify-center gap-2 shrink-0">
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                       حذف كل الكريدي </button>
@@ -801,7 +789,7 @@
                                   <svg class="w-3.5 h-3.5 text-blue-600 inline date-icon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                   <span>تاريخ البيع</span>
                               </label>
-                              <input type="date" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                              <input type="date" id="sellDate" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                           </div>
                           <button type="submit" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors shadow-md shadow-blue-200 mt-2">تأكيد البيع وخصم المخزون</button>
                       </form> </div> <div>

@@ -2853,17 +2853,19 @@
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         render(); }); function deleteExpense(id) {
-        if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذا المصروف؟', function() {
-            if (!Array.isArray(appState.expenses)) return;
-            window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('expenses', id);
-            }
-            saveState(); showSuccessToast('تم حذف المصروف بنجاح');
-            if (window.renderExpensesListView) window.renderExpensesListView();
-            if (window.renderExpensesListModal) window.renderExpensesListModal();
-            render(); }, { title: 'حذف المصروف',
-            confirmText: 'نعم، حذف' }); }
+        if (!id) return;
+        promptWithPassword({ title: 'حذف مصروف', prompt: 'أدخل كلمة المرور لتأكيد حذف المصروف', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذا المصروف؟', function() {
+                if (!Array.isArray(appState.expenses)) return;
+                window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('expenses', id);
+                }
+                saveState(); showSuccessToast('تم حذف المصروف بنجاح');
+                if (window.renderExpensesListView) window.renderExpensesListView();
+                if (window.renderExpensesListModal) window.renderExpensesListModal();
+                render(); }, { title: 'حذف المصروف', confirmText: 'نعم، حذف' });
+        }); }
     function setPackageTypeForm(type) {
         // Only time packages supported
         const pkgTypeInput = document.getElementById('pkgType');
@@ -2888,15 +2890,17 @@
         saveState(); this.reset();
         showSuccessToast('تم إضافة الباقة بنجاح');
         render(); }); function deletePackage(id) {
-        if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذه الباقة؟', function() {
-            if (!Array.isArray(appState.packages)) return;
-            window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('packages', id);
-            }
-            saveState(); showSuccessToast('تم حذف الباقة بنجاح');
-            render(); }, { title: 'حذف الباقة',
-            confirmText: 'نعم، حذف' }); }
+        if (!id) return;
+        promptWithPassword({ title: 'حذف باقة', prompt: 'أدخل كلمة المرور لتأكيد حذف الباقة', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذه الباقة؟', function() {
+                if (!Array.isArray(appState.packages)) return;
+                window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('packages', id);
+                }
+                saveState(); showSuccessToast('تم حذف الباقة بنجاح');
+                render(); }, { title: 'حذف الباقة', confirmText: 'نعم، حذف' });
+        }); }
     function handleProdStockLocationChange() {
         const locSelect = document.getElementById('prodStockLocation');
         const loc = locSelect ? locSelect.value : 'both';
@@ -3453,7 +3457,7 @@
         let saleLabel = product.name; product.stock = Number(product.stock || 0) - finalQty;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
-        const dateVal = document.getElementById('sellDate').value;
+        const dateVal = document.getElementById('sellDate')?.value || '';
         let dateStr; if (dateVal) { const now = new Date();
             const parts = dateVal.split('-'); if (parts.length === 3) {
                 const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), now.getHours(), now.getMinutes(), now.getSeconds());
@@ -3485,23 +3489,25 @@
         updateStockInfoDisplay();
         showSuccessToast(`تم البيع بنجاح وخصم (${finalQty}) مباشرة من ${stockLocName}`);
         render(); }); function deleteCustomer(id) {
-        if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذا المشترك نهائياً؟', function() {
-            if (!Array.isArray(appState.customers)) return;
-            window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('customers', id);
-            }
-            // Clean up auto-generated credits for this customer
-            if (Array.isArray(appState.credits)) {
-                const autoId = 'cr_auto_' + id;
-                window.appState.credits = appState.credits.filter(c => c.id !== autoId);
+        if (!id) return;
+        promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذا المشترك نهائياً؟', function() {
+                if (!Array.isArray(appState.customers)) return;
+                window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
                 if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('credits', autoId);
+                    window.deleteFirebaseSectionItem('customers', id);
                 }
-            } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
-            if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
-            render(); }, { title: 'حذف المشترك',
-            confirmText: 'نعم، حذف' }); }
+                // Clean up auto-generated credits for this customer
+                if (Array.isArray(appState.credits)) {
+                    const autoId = 'cr_auto_' + id;
+                    window.appState.credits = appState.credits.filter(c => c.id !== autoId);
+                    if (window.deleteFirebaseSectionItem) {
+                        window.deleteFirebaseSectionItem('credits', autoId);
+                    }
+                } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
+                if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+                render(); }, { title: 'حذف المشترك', confirmText: 'نعم، حذف' });
+        }); }
     function calculateStatus(customer, cachedNowMs) {
       if (!customer) return 'active';
       if (customer.status === 'frozen') return 'frozen';
@@ -3668,14 +3674,16 @@
         } saveState(); renderStaffPayouts();
         render(); // Update totals
     }); function deleteStaffPayout(id) { if (!id) return;
-        showAppConfirm('هل أنت متأكد من حذف هذه الدفعة؟', function() {
-            if (!Array.isArray(appState.staffPayouts)) return;
-            window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
-            saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
-            renderStaffPayouts(); render(); }, {
-            title: 'حذف دفعة العامل',
-            confirmText: 'نعم، حذف' }); } window.deleteStaffPayout = deleteStaffPayout;
+        promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذه الدفعة؟', function() {
+                if (!Array.isArray(appState.staffPayouts)) return;
+                window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
+                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
+                saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
+                renderStaffPayouts(); render(); }, {
+                title: 'حذف دفعة العامل',
+                confirmText: 'نعم، حذف' });
+        }); } window.deleteStaffPayout = deleteStaffPayout;
     function switchPayoutTab(tab) { const staffBtn = document.getElementById('tabStaffPayoutsBtn');
         const supBtn = document.getElementById('tabSuppliersBtn');
         const staffIconBox = document.getElementById('tabStaffIconBox');
@@ -3815,14 +3823,16 @@
         showSuccessToast('تم تسجيل فاتورة / معاملة المورد بنجاح');
         renderSuppliersList();
         }); function deleteSupplier(id) {
-        if (!id) return; showAppConfirm('هل أنت متأكد من حذف معاملة هذا المورد؟', function() {
-            if (!Array.isArray(appState.suppliers)) return;
-            appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
-            window.appState.suppliers = appState.suppliers;
-            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
-            saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
-            renderSuppliersList(); }, { title: 'حذف معاملة المورد',
-            confirmText: 'نعم، حذف' }); } window.deleteSupplier = deleteSupplier;
+        if (!id) return;
+        promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف معاملة هذا المورد؟', function() {
+                if (!Array.isArray(appState.suppliers)) return;
+                appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
+                window.appState.suppliers = appState.suppliers;
+                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
+                saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
+                renderSuppliersList(); }, { title: 'حذف معاملة المورد', confirmText: 'نعم، حذف' });
+        }); } window.deleteSupplier = deleteSupplier;
     function openEditSupplierModal(id) { if (!appState.suppliers) return;
         const sup = appState.suppliers.find(s => String(s.id) === String(id));
         if (!sup) return; document.getElementById('editSupplierId').value = sup.id;
@@ -4452,13 +4462,15 @@
             `; }).join(''); } window.updateFullReportSalesSection = updateFullReportSalesSection;
     function deleteAllCredits() { const count = Array.isArray(appState.credits) ? appState.credits.length : 0;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
-        if (!confirm('سيتم حذف كل سجلات الكريدي (' + count + ' سجل) نهائيا من الجهاز ومن قاعدة البيانات.\nهل أنت متأكد؟')) return;
-        if (!confirm('تأكيد أخير: لا يمكن التراجع عن هذا الحذف.')) return;
-        appState.credits = []; window.appState.credits = [];
-        const searchInput = document.getElementById('creditSearchInput');
-        if (searchInput) searchInput.value = '';
-        saveState(); renderCreditsList();
-        showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
+        promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('سيتم حذف كل سجلات الكريدي (' + count + ' سجل) نهائيا.\nهل أنت متأكد؟', function() {
+                appState.credits = []; window.appState.credits = [];
+                const searchInput = document.getElementById('creditSearchInput');
+                if (searchInput) searchInput.value = '';
+                saveState(); renderCreditsList();
+                showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
+            }, { title: 'حذف كل الكريدي', confirmText: 'نعم، حذف الكل' });
+        });
     } window.deleteAllCredits = deleteAllCredits;
     function renderCreditsList() { const container = document.getElementById('creditsList');
         if (!container) return; if (!Array.isArray(appState.credits)) appState.credits = [];
@@ -4679,18 +4691,19 @@
         renderCreditsList(); render(); // Update dashboard totals
         return false; } function deleteCredit(id) {
         if (!id) return; const targetId = String(id).trim();
-        showAppConfirm('هل أنت متأكد من حذف هذا الكريدي نهائياً؟', function() {
-            if (!Array.isArray(appState.credits)) appState.credits = [];
-            // Delete matching credit
-            appState.credits = appState.credits.filter(c => {
-                if (!c) return false; return String(c.id).trim() !== targetId;
-            }); window.appState.credits = appState.credits;
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('credits', targetId);
-            }
-            saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
-            renderCreditsList(); render(); // Update dashboard totals
-        }, { title: 'حذف الكريدي', confirmText: 'نعم، حذف'
+        promptWithPassword({ title: 'حذف الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا الكريدي', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذا الكريدي نهائياً؟', function() {
+                if (!Array.isArray(appState.credits)) appState.credits = [];
+                // Delete matching credit
+                appState.credits = appState.credits.filter(c => {
+                    if (!c) return false; return String(c.id).trim() !== targetId;
+                }); window.appState.credits = appState.credits;
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('credits', targetId);
+                }
+                saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
+                renderCreditsList(); render(); // Update dashboard totals
+            }, { title: 'حذف الكريدي', confirmText: 'نعم، حذف' });
         }); } function deleteCreditFromModal() {
         const idElem = document.getElementById('editCreditId');
         const id = idElem ? idElem.value : null;
@@ -6071,25 +6084,27 @@
                 } }); } return Array.from(set);
     } window.getUniqueCoaches = getUniqueCoaches;
     function deleteSale(saleId) { if (!saleId) return;
-        showAppConfirm('هل أنت متأكد من إلغاء/حذف عملية البيع هذه واسترجاع الكمية للمخزون؟', function() {
-            if (!appState.sales) return; const idx = appState.sales.findIndex(s => String(s && s.id) === String(saleId));
-            if (idx === -1) return; const sale = appState.sales[idx];
-            if (sale.prodId && appState.products) {
-                const prod = appState.products.find(p => p.id === sale.prodId);
-                if (prod) {
-                    prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
-                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
+        promptWithPassword({ title: 'إلغاء عملية البيع', prompt: 'أدخل كلمة المرور لتأكيد إلغاء عملية البيع واسترجاع الكمية للمخزون', buttonText: 'تأكيد الإلغاء' }, () => {
+            showAppConfirm('هل أنت متأكد من إلغاء/حذف عملية البيع هذه واسترجاع الكمية للمخزون؟', function() {
+                if (!appState.sales) return; const idx = appState.sales.findIndex(s => String(s && s.id) === String(saleId));
+                if (idx === -1) return; const sale = appState.sales[idx];
+                if (sale.prodId && appState.products) {
+                    const prod = appState.products.find(p => p.id === sale.prodId);
+                    if (prod) {
+                        prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
+                        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
+                    }
                 }
-            }
-            appState.sales.splice(idx, 1);
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('sales', saleId);
-            }
-            saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
-            render(); if (typeof updateFullReportSalesSection === 'function') {
-                updateFullReportSalesSection();
-            } }, { title: 'إلغاء عملية البيع',
-            confirmText: 'نعم، إلغاء البيع' });
+                appState.sales.splice(idx, 1);
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('sales', saleId);
+                }
+                saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
+                render(); if (typeof updateFullReportSalesSection === 'function') {
+                    updateFullReportSalesSection();
+                } }, { title: 'إلغاء عملية البيع',
+                confirmText: 'نعم، إلغاء البيع' });
+        });
     } window.deleteSale = deleteSale; function getLocalDateString(dateInput) {
         if (!dateInput) return ''; const d = new Date(dateInput);
         if (isNaN(d.getTime())) return ''; const year = d.getFullYear();
@@ -6910,17 +6925,20 @@
         saveState(); renderCaisseView();
         render(); } window.handleCaisseClotureSubmit = handleCaisseClotureSubmit;
     function deleteCaisseLog(logId) { if (!logId) return;
-        showAppConfirm('هل أنت متأكد من حذف سجل جرد الصندوق هذا؟', function() {
-            if (!Array.isArray(appState.caisseLogs)) return;
-            const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
-            if (idx === -1) return; appState.caisseLogs.splice(idx, 1);
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('caisseLogs', logId);
-            }
-            saveState(); showSuccessToast('تم حذف سجل جرد الصندوق');
-            renderCaisseView(); render(); }, {
-            title: 'حذف سجل جرد الصندوق',
-            confirmText: 'نعم، حذف' }); } window.deleteCaisseLog = deleteCaisseLog;
+        promptWithPassword({ title: 'حذف سجل جرد الصندوق', prompt: 'أدخل كلمة المرور لتأكيد حذف سجل جرد الصندوق', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف سجل جرد الصندوق هذا؟', function() {
+                if (!Array.isArray(appState.caisseLogs)) return;
+                const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
+                if (idx === -1) return; appState.caisseLogs.splice(idx, 1);
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('caisseLogs', logId);
+                }
+                saveState(); showSuccessToast('تم حذف سجل جرد الصندوق');
+                renderCaisseView(); render(); }, {
+                title: 'حذف سجل جرد الصندوق',
+                confirmText: 'نعم، حذف' });
+        });
+    } window.deleteCaisseLog = deleteCaisseLog;
     function scrollToCaisseClotureForm(dateStr) {
         if (dateStr) { appState.selectedCaisseDate = dateStr;
             const dateInput = document.getElementById('caisseInspectionDate');
@@ -8187,19 +8205,22 @@
 
     window.deleteSupplierTransaction = function(id) {
         if (!id) return;
-        showAppConfirm('هل أنت متأكد من حذف معاملة المورد هذه؟', function() {
-            if (!Array.isArray(appState.supplierTransactions)) return;
-            const idx = appState.supplierTransactions.findIndex(tx => String(tx.id) === String(id));
-            if (idx !== -1) {
-                appState.supplierTransactions.splice(idx, 1);
-                saveState();
-                showSuccessToast('تم حذف معاملة المورد بنجاح');
-                renderSuppliersList();
-                render();
-            }
-        }, {
-            title: 'حذف معاملة مورد',
-            confirmText: 'نعم، حذف'
+        promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف معاملة المورد هذه؟', function() {
+                if (!Array.isArray(appState.supplierTransactions)) return;
+                const idx = appState.supplierTransactions.findIndex(tx => String(tx.id) === String(id));
+                if (idx !== -1) {
+                    appState.supplierTransactions.splice(idx, 1);
+                    if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('supplierTransactions', id);
+                    saveState();
+                    showSuccessToast('تم حذف معاملة المورد بنجاح');
+                    renderSuppliersList();
+                    render();
+                }
+            }, {
+                title: 'حذف معاملة مورد',
+                confirmText: 'نعم، حذف'
+            });
         });
     };
 
