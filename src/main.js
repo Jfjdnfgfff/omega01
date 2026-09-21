@@ -3662,10 +3662,15 @@
             return false; } if (isNaN(amount) || amount <= 0 || amount > 100000000) {
             showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0');
             return false; } if (!Array.isArray(appState.credits)) appState.credits = [];
-        appState.credits.push({ id: Date.now().toString(),
+        const newCredit = { id: Date.now().toString(),
             name, nickname, phone: cleanPhone(phone),
             desc, amount, date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString()
-        }); saveState(); document.getElementById('addCreditForm').reset();
+        };
+        appState.credits.push(newCredit);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('credits', newCredit);
+        }
+        saveState(); document.getElementById('addCreditForm').reset();
         closeModal('addCreditModal');
         showSuccessToast('تم تسجيل الكريدي بنجاح');
         renderCreditsList(); render(); // Update dashboard totals
@@ -3702,11 +3707,17 @@
             showErrorToast('يرجى إدخال وصف للدين');
             return false; } if (isNaN(amount) || amount <= 0 || amount > 100000000) {
             showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0');
-            return false; } appState.credits[index] = {
+            return false; }
+        const updatedCredit = {
             ...appState.credits[index], name,
             nickname, phone: cleanPhone(phone),
             desc, amount, date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString()
-        }; saveState(); closeModal('editCreditModal');
+        };
+        appState.credits[index] = updatedCredit;
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('credits', updatedCredit);
+        }
+        saveState(); closeModal('editCreditModal');
         showSuccessToast('تم تعديل الكريدي بنجاح');
         renderCreditsList(); render(); // Update dashboard totals
         return false; } function deleteCredit(id) {
@@ -3717,6 +3728,9 @@
             appState.credits = appState.credits.filter(c => {
                 if (!c) return false; return String(c.id).trim() !== targetId;
             }); window.appState.credits = appState.credits;
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('credits', targetId);
+            }
             saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
             renderCreditsList(); render(); // Update dashboard totals
         }, { title: 'حذف الكريدي', confirmText: 'نعم، حذف'
@@ -3730,6 +3744,197 @@
     window.handleEditCreditSubmit = handleEditCreditSubmit;
     window.deleteCredit = deleteCredit; window.deleteCreditFromModal = deleteCreditFromModal;
     window.renderCreditsList = renderCreditsList;
+
+    // ==========================================
+    // MOCK / TEST DATA ENGINE (PERFORMANCE TESTING: 200 CUSTOMERS + 100 CREDITS)
+    // ==========================================
+    function updateMockDataUIState() {
+        const hasMock = (Array.isArray(appState.customers) && appState.customers.some(c => c && (c.isMock || String(c.id).startsWith('mock_cust_')))) ||
+                        (Array.isArray(appState.credits) && appState.credits.some(c => c && (c.isMock || String(c.id).startsWith('mock_cred_'))));
+        const clearBtn = document.getElementById('clearMockBtn');
+        if (clearBtn) {
+            if (hasMock) {
+                clearBtn.classList.remove('hidden');
+                clearBtn.classList.add('flex');
+            } else {
+                clearBtn.classList.add('hidden');
+                clearBtn.classList.remove('flex');
+            }
+        }
+    }
+    window.updateMockDataUIState = updateMockDataUIState;
+
+    window.generateMockTestData = function(customersCount = 200, creditsCount = 100, silent = false) {
+        if (!Array.isArray(appState.packages) || appState.packages.length === 0) {
+            appState.packages = [
+                { id: 'pkg_1', name: 'اشتراك كمال أجسام شهري', price: 3000, type: 'time', durationDays: 30 },
+                { id: 'pkg_2', name: 'اشتراك 3 أشهر', price: 8000, type: 'time', durationDays: 90 },
+                { id: 'pkg_3', name: 'اشتراك سنوي VIP', price: 28000, type: 'time', durationDays: 365 }
+            ];
+        }
+        const defaultPkg = appState.packages[0] || { id: 'pkg_1', name: 'اشتراك شهري', price: 3000, durationDays: 30 };
+        const pkg2 = appState.packages[1] || defaultPkg;
+
+        const firstNames = [
+            'محمد', 'أحمد', 'يوسف', 'أيمن', 'بلال', 'رياض', 'كريم', 'حمزة', 'إسلام', 'فاروق',
+            'عبد القادر', 'طارق', 'أسامة', 'وليد', 'ياسين', 'أمين', 'هشام', 'سمير', 'سفيان', 'حسام',
+            'نذير', 'صلاح', 'عادل', 'جمال', 'مراد', 'عمر', 'علي', 'إلياس', 'صابر', 'رضوان',
+            'سليم', 'شكيب', 'مهدي', 'بشير', 'عبد الرحمن', 'زكرياء', 'منير', 'عصام', 'نبيل', 'خالد'
+        ];
+        const lastNames = [
+            'بن علي', 'بوعلام', 'قادري', 'مرابط', 'حميدي', 'زرقي', 'منصوري', 'مسعودي', 'سلطاني', 'بوزيد',
+            'براهيمي', 'بن عمار', 'لعربي', 'بلحاج', 'شريف', 'عثماني', 'رحماني', 'سعيدي', 'طاهري', 'عماري',
+            'داودي', 'علالي', 'مزيان', 'بلقاسم', 'حداد', 'دراجي', 'قاسمي', 'مقداد', 'زايدي', 'بوشامة'
+        ];
+        const creditDescriptions = [
+            'دين مكمل بروتين واي (Gold Standard)',
+            'باقي اشتراك شهر كمال أجسام',
+            'دين كرياتين مونوهيدرات 300غ',
+            'دين مشروبات طاقة ومياه معدنية',
+            'دين حزام كمال أجسام وقفازات تمرين',
+            'باقي اشتراك 3 أشهر',
+            'دين مكمل أحماض أمينية BCAA',
+            'دين بروتين بار وسناكس طاقة',
+            'مستحقات تدريب خاص وتغذية',
+            'دين ملابس وتيشيرت رياضي نادي أوميغا'
+        ];
+        const creditNicknames = ['مشترك', 'زبون قاعة', 'صديق', 'مشتري مكملات', 'رياضي', 'لاعب'];
+
+        if (!Array.isArray(appState.customers)) appState.customers = [];
+        if (!Array.isArray(appState.credits)) appState.credits = [];
+
+        // Remove previous mock items if any to avoid stacking duplicates
+        appState.customers = appState.customers.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cust_'));
+        appState.credits = appState.credits.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cred_'));
+
+        const now = Date.now();
+        const newMockCustomers = [];
+
+        for (let i = 0; i < customersCount; i++) {
+            const fn = firstNames[i % firstNames.length];
+            const ln = lastNames[(i * 3 + Math.floor(i / 7)) % lastNames.length];
+            const fullName = `${fn} ${ln} #${i + 1}`;
+            const phone = `05${String(50000000 + ((i * 12347) % 49000000)).padStart(8, '0')}`;
+            const isExpired = (i % 5 === 0);
+            const daysAgo = (i % 28) + 1;
+            const startDate = new Date(now - (isExpired ? (daysAgo + 35) : daysAgo) * 86400000);
+            const pkg = (i % 4 === 0) ? pkg2 : defaultPkg;
+            const duration = parseInt(pkg.durationDays || 30);
+            const endDate = new Date(startDate);
+            endDate.setDate(startDate.getDate() + duration);
+            const isCreditPayment = (i % 7 === 0);
+            const debtAmount = isCreditPayment ? ((i % 4 + 1) * 500) : 0;
+            const weight = 60 + (i % 38);
+            const birthYear = 1988 + (i % 18);
+            const dob = `${birthYear}-0${(i % 9) + 1}-15`;
+
+            newMockCustomers.push({
+                id: `mock_cust_${i + 1}`,
+                name: fullName,
+                phone: phone,
+                gender: (i % 10 === 9) ? 'female' : 'male',
+                dob: dob,
+                age: new Date().getFullYear() - birthYear,
+                weight: weight,
+                packageId: pkg.id,
+                price: pkg.price || 3000,
+                subscriptionType: 'time',
+                totalSessions: null,
+                remainingSessions: null,
+                attendedSessions: (i % 15),
+                sessionHistory: [],
+                paymentStatus: isCreditPayment ? 'credit' : 'paid',
+                debtAmount: debtAmount,
+                status: isExpired ? 'expired' : 'active',
+                startDate: startDate.toISOString(),
+                endDate: endDate.toISOString(),
+                isMock: true
+            });
+        }
+
+        const newMockCredits = [];
+        const creditAmounts = [500, 800, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4500, 6000, 7500, 9000];
+
+        for (let i = 0; i < creditsCount; i++) {
+            const fn = firstNames[(i * 2 + 5) % firstNames.length];
+            const ln = lastNames[(i * 4 + 7) % lastNames.length];
+            const fullName = `${fn} ${ln} [كريدي ${i + 1}]`;
+            const phone = `06${String(60000000 + ((i * 98765) % 39000000)).padStart(8, '0')}`;
+            const nickname = creditNicknames[i % creditNicknames.length];
+            const desc = creditDescriptions[i % creditDescriptions.length];
+            const amount = creditAmounts[i % creditAmounts.length];
+            const daysAgo = (i % 45) + 1;
+            const date = new Date(now - daysAgo * 86400000);
+
+            newMockCredits.push({
+                id: `mock_cred_${i + 1}`,
+                name: fullName,
+                nickname: nickname,
+                phone: phone,
+                desc: desc,
+                amount: amount,
+                date: date.toISOString(),
+                isMock: true
+            });
+        }
+
+        appState.customers.unshift(...newMockCustomers);
+        appState.credits.unshift(...newMockCredits);
+
+        saveState();
+
+        if (window.updateFirebaseSection) {
+            window.updateFirebaseSection('customers', appState.customers);
+            window.updateFirebaseSection('credits', appState.credits);
+        }
+
+        updateMockDataUIState();
+
+        if (!silent && typeof showSuccessToast === 'function') {
+            showSuccessToast(`تمت إضافة ${customersCount} مشترك و ${creditsCount} كريدي تجريبي بنجاح! يمكنك الآن تجربة سرعة النظام.`);
+        }
+        if (typeof render === 'function') render();
+        if (typeof renderCreditsList === 'function') renderCreditsList();
+    };
+
+    window.clearMockTestData = function() {
+        showAppConfirm('هل أنت متأكد من حذف البيانات التجريبية فقط؟ ستبقى كافة بياناتك الحقيقية كما هي.', function() {
+            if (Array.isArray(appState.customers)) {
+                const removedCustIds = appState.customers.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cust_'))).map(c => c.id);
+                appState.customers = appState.customers.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cust_'));
+                if (window.deleteFirebaseSectionItem) {
+                    removedCustIds.forEach(id => window.deleteFirebaseSectionItem('customers', id));
+                }
+            }
+            if (Array.isArray(appState.credits)) {
+                const removedCredIds = appState.credits.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cred_'))).map(c => c.id);
+                appState.credits = appState.credits.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cred_'));
+                if (window.deleteFirebaseSectionItem) {
+                    removedCredIds.forEach(id => window.deleteFirebaseSectionItem('credits', id));
+                }
+            }
+            saveState();
+            if (window.updateFirebaseSection) {
+                window.updateFirebaseSection('customers', appState.customers);
+                window.updateFirebaseSection('credits', appState.credits);
+            }
+            updateMockDataUIState();
+            showSuccessToast('تم حذف كافة البيانات التجريبية بنجاح.');
+            if (typeof render === 'function') render();
+            if (typeof renderCreditsList === 'function') renderCreditsList();
+        }, { title: 'حذف البيانات التجريبية', confirmText: 'نعم، حذف التجريبي' });
+    };
+
+    // Auto-seed mock test data immediately for testing system performance
+    if (!localStorage.getItem('sm_mock_seeded_200_100_v1')) {
+        localStorage.setItem('sm_mock_seeded_200_100_v1', 'true');
+        setTimeout(() => {
+            if (typeof window.generateMockTestData === 'function') {
+                window.generateMockTestData(200, 100, true);
+            }
+        }, 80);
+    }
+
     // ==========================================
     // WORKER TRANSACTIONS & LEDGER (DAILY / MONTHLY / YEARLY)
     // ==========================================
@@ -5358,6 +5563,7 @@
         if (isVisible('dashboardView') || isVisible('productsView')) renderSalesList();
         if (isVisible('customersView') || isVisible('dashboardView')) renderCustomers();
         if (isVisible('caisseView') || isModalOpen('caisseModal')) renderCaisseView();
+        if (typeof updateMockDataUIState === 'function') updateMockDataUIState();
     }
     let renderScheduled = false;
     function render() {
