@@ -306,7 +306,7 @@
           <span id="caisseSelectedDateLabel" class="text-[11px] text-slate-500 font-bold block">اليوم</span>
         </div> </div>
       <div class="flex items-center gap-2 w-full sm:w-auto">
-        <input type="date" id="caisseInspectionDate" onchange="handleCaisseDateChange(this.value)" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs sm:text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50">
+        <input type="date" id="caisseInspectionDate" onchange="handleCaisseDateChange(this.value)" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-1.5 text-xs sm:text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50">
         <button type="button" onclick="setCaisseDateToToday()" class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition-colors">اليوم</button>
       </div> </div>
     <!-- Key Caisse Metrics Grid -->
@@ -355,7 +355,7 @@
         <form id="caisseClotureForm" onsubmit="handleCaisseClotureSubmit(event)" class="space-y-4">
           <div>
             <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ الجرد:</label>
-            <input type="date" id="clotureFormDate" required onchange="handleClotureFormDateChange(this.value)" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50">
+            <input type="date" id="clotureFormDate" required onchange="handleClotureFormDateChange(this.value)" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50">
           </div>
           <!-- Expected Income Display Card in Form -->
           <div class="bg-blue-50/80 border border-blue-200/90 rounded-2xl p-3.5 text-xs text-blue-900 font-bold flex items-center justify-between shadow-2xs">
@@ -679,7 +679,7 @@
                                   <span>تاريخ انتهاء الصلاحية</span>
                                   <span class="text-[9px] text-slate-400 font-normal">اختياري</span>
                               </label>
-                              <input type="date" id="prodExpiryDate" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm outline-none focus:border-blue-500 bg-slate-50 text-slate-700 text-center">
+                              <input type="date" id="prodExpiryDate" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm outline-none focus:border-blue-500 bg-slate-50 text-slate-700 text-center">
                           </div> </div>
                       <!-- Dual Stock Quantity Section (Stock 1 & Stock 2 simultaneously) -->
                       <div id="bothStockContainer" class="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
@@ -801,7 +801,7 @@
                                   <svg class="w-3.5 h-3.5 text-blue-600 inline date-icon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                   <span>تاريخ البيع</span>
                               </label>
-                              <input type="date" id="sellDate" class="w-full border border-blue-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 bg-white shadow-sm font-semibold text-slate-700">
+                              <input type="date" id="sellDate" class="max-w-[160px] w-full border border-blue-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 bg-white shadow-sm font-semibold text-slate-700">
                           </div>
                           <button type="submit" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors shadow-md shadow-blue-200 mt-2">تأكيد البيع وخصم المخزون</button>
                       </form> </div> <div>
@@ -850,7 +850,7 @@
                                       <span class="text-slate-300">|</span>
                                       <button type="button" onclick="clearPosFilterDate()" class="text-slate-500 hover:text-slate-800 font-bold">الكل</button>
                                   </div> </div>
-                              <input type="date" id="posFilterDate" onchange="renderSalesList()" class="w-full border border-slate-200 rounded-xl px-2 py-0.5 text-[10px] bg-white text-slate-700 font-semibold outline-none focus:border-blue-500 shadow-2xs h-7">
+                              <input type="date" id="posFilterDate" onchange="renderSalesList()" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-2 py-0.5 text-[10px] bg-white text-slate-700 font-semibold outline-none focus:border-blue-500 shadow-2xs h-7">
                           </div> </div>
                       <div class="space-y-2 h-[calc(100vh-520px)] min-h-[220px] overflow-y-auto pr-2 hide-scrollbar">
                           <div id="salesList"></div>
@@ -1093,7 +1093,7 @@
                                   <button type="button" onclick="setExpenseDatePreset('yesterday', 'view')" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors">أمس</button>
                               </div>
                           </div>
-                          <input type="date" id="expenseDateView" required onclick="try { this.showPicker(); } catch(e) {}" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-800 cursor-pointer">
+                          <input type="date" id="expenseDateView" required onclick="try { this.showPicker(); } catch(e) {}" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-800 cursor-pointer">
                       </div>
                       <button type="submit" class="w-full py-3 bg-slate-900 hover:bg-black active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2">
                           <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
@@ -1186,7 +1186,7 @@
                       <option value="female">أنثى</option>
                   </select> </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ الميلاد</label>
-                  <input type="date" id="editCustDob" required class="w-full max-w-[210px] border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
+                  <input type="date" id="editCustDob" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
               </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">رقم الهاتف</label>
                   <input type="tel" id="editCustPhone" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all" dir="ltr" style="text-align: right;">
@@ -1237,7 +1237,7 @@
                       <input type="date" id="editStartDate" required class="w-full border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
                   </div> <div>
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ الانتهاء</label>
-                      <input type="date" id="editEndDate" required class="w-full border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
+                      <input type="date" id="editEndDate" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
                   </div> </div>
               <div id="editExtraDaysContainer">
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">إضافة أيام إضافية (اختياري)</label>
@@ -1503,7 +1503,7 @@
                   <div id="workerDateInputContainer">
                       <label id="workerDateInputLabel" class="block text-[11px] font-bold text-slate-500 mb-1">اختر الشهر:</label>
                       <input type="month" id="workerCustomMonthInput" onchange="handleWorkerLedgerMonthChange(this.value)" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-white outline-none focus:border-blue-500 transition-all cursor-pointer">
-                      <input type="date" id="workerCustomDayInput" onchange="handleWorkerLedgerDayChange(this.value)" class="hidden w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-white outline-none focus:border-blue-500 transition-all cursor-pointer">
+                      <input type="date" id="workerCustomDayInput" onchange="handleWorkerLedgerDayChange(this.value)" class="hidden max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-white outline-none focus:border-blue-500 transition-all cursor-pointer">
                   </div> <div>
                       <label class="block text-[11px] font-bold text-slate-500 mb-1">نوع المعاملة:</label>
                       <select id="workerTransactionTypeFilter" onchange="renderWorkerTransactionsList()" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 bg-white outline-none focus:border-blue-500 transition-all cursor-pointer">
@@ -1592,7 +1592,7 @@
               <div class="flex flex-wrap items-end gap-3">
                   <div>
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5 text-right">تاريخ الغياب</label>
-                      <input type="date" id="absenceDate" required class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-slate-50 focus:bg-white transition-all text-slate-800">
+                      <input type="date" id="absenceDate" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-slate-50 focus:bg-white transition-all text-slate-800">
                   </div>
                   <div class="flex-1 min-w-[100px]">
                       <label class="block text-xs font-semibold text-slate-500 mb-1.5 text-right">عدد الأيام</label>
@@ -1693,7 +1693,7 @@
                           </div>
                       </div>
                       <div class="relative flex items-center">
-                          <input type="date" id="expenseDateModal" required onclick="try { this.showPicker(); } catch(e) {}" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-800 cursor-pointer">
+                          <input type="date" id="expenseDateModal" required onclick="try { this.showPicker(); } catch(e) {}" class="max-w-[160px] w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-800 cursor-pointer">
                       </div>
                   </div>
                   <button type="submit" class="w-full py-3 bg-slate-900 hover:bg-black active:scale-[0.99] text-white rounded-xl text-sm font-bold shadow-md shadow-slate-200 transition-all flex items-center justify-center gap-2">
@@ -2007,7 +2007,7 @@
                   <input type="number" id="editCreditAmount" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 bg-slate-50 shadow-sm" placeholder="0">
               </div> <div>
                   <label class="block text-xs font-bold text-slate-500 mb-1">تاريخ الكريدي*</label>
-                  <input type="date" id="editCreditDate" required class="w-full max-w-[210px] border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 bg-slate-50 text-center shadow-sm">
+                  <input type="date" id="editCreditDate" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 bg-slate-50 text-center shadow-sm">
               </div>
               <div class="flex items-center gap-2.5 mt-2">
                   <button type="submit" class="flex-1 py-3 bg-[#2563eb] hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-500/20 transition-all transform hover:-translate-y-0.5">حفظ التعديلات</button>
@@ -2093,7 +2093,7 @@
                       <option value="female">أنثى</option>
                   </select> </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">تاريخ الميلاد</label>
-                  <input type="date" id="custDobView" required class="w-full max-w-[210px] border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
+                  <input type="date" id="custDobView" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-center transition-all">
               </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">رقم الهاتف</label>
                   <input type="tel" id="custPhoneView" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all" placeholder="0550 00 00 00" dir="ltr" style="text-align: right;">
@@ -2380,7 +2380,7 @@
                   <input type="number" id="quickVersAmount" required min="1" placeholder="مثال: 50000" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-600 bg-slate-50 font-black text-blue-700">
               </div> <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">تاريخ الدفعة والفرسيمو*</label>
-                  <input type="date" id="quickVersDate" required class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold text-slate-700">
+                  <input type="date" id="quickVersDate" required class="max-w-[160px] w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold text-slate-700">
               </div> <div>
                   <label class="block text-xs font-bold text-slate-700 mb-1">ملاحظات / رقم الإيصال (اختياري)</label>
                   <input type="text" id="quickVersNotes" placeholder="مثال: تحويل CCP، شيك رقم... أو نقداً" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-600 bg-slate-50">
