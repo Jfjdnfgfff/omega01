@@ -689,50 +689,7 @@ window.setElemRequired = setElemRequired;
   }
   window.deleteV2Record = deleteV2Record;
 
-  // Dedicated Section Update Utility: maps items to v2/ record-level updates
-  window.updateFirebaseSection = async function(sectionPath, sectionData) {
-    if (!sectionData) return false;
-    const items = Array.isArray(sectionData) ? sectionData : (typeof sectionData === 'object' ? Object.values(sectionData) : []);
-    const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
-    const v2Updates = {};
-    items.forEach(item => {
-      if (!item || typeof item !== 'object') return;
-      const rawId = item.id || item.barcode;
-      if (rawId) {
-        const cleanId = cleanKey(rawId);
-        v2Updates[`v2/${v2Sec}/${cleanId}`] = item;
-      }
-    });
-    if (Object.keys(v2Updates).length === 0) return true;
-
-    let sdkOk = false;
-    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
-      try {
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
-        sdkOk = true;
-      } catch (e) {
-        console.warn(`SDK updateFirebaseSection error on v2/${v2Sec}:`, e);
-      }
-    }
-    if (!sdkOk) {
-      try {
-        const baseUrl = getRTDBUrl();
-        const v2RelUpdates = {};
-        Object.keys(v2Updates).forEach(k => {
-          v2RelUpdates[k.replace(/^v2\//, '')] = v2Updates[k];
-        });
-        const res = await fetch(`${baseUrl}/v2.json`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(v2RelUpdates)
-        });
-        return res.ok;
-      } catch (e) {
-        return false;
-      }
-    }
-    return true;
-  };
+  // Note: Legacy updateFirebaseSection migrated to src/migration-utils.js
 
   // Dedicated Section Push Utility: strictly uses PUSH (SDK) with REST POST fallback ONLY on SDK failure
   window.pushToFirebaseSection = async function(sectionPath, itemData) {
@@ -793,6 +750,134 @@ window.setElemRequired = setElemRequired;
   }
   window.getDateKey = getDateKey;
 
+  // --- Dedicated Stats Layer Helpers ---
+  function calculateStatsDelta(oldVal, newVal) {
+    return Number(newVal || 0) - Number(oldVal || 0);
+  }
+  window.calculateStatsDelta = calculateStatsDelta;
+
+  function revertSaleStats(sale) {
+    if (!sale || typeof sale !== 'object') return {};
+    const dateKey = getDateKey(sale.date);
+    const monthKey = dateKey.substring(0, 7);
+    const yearKey = dateKey.substring(0, 4);
+    const total = Number(sale.total || 0);
+    const profit = Number(sale.profit || 0);
+    const qty = Number(sale.qty || 1);
+
+    window.appState = window.appState || {};
+    window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+    const v2s = window.appState.v2Stats;
+    const targetUpdates = {};
+
+    ['daily', 'monthly', 'yearly'].forEach(period => {
+      const key = period === 'daily' ? dateKey : (period === 'monthly' ? monthKey : yearKey);
+      if (!v2s[period]) v2s[period] = {};
+      const s = v2s[period][key] = v2s[period][key] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+      s.sales = Math.max(0, s.sales - total);
+      s.salesCount = Math.max(0, s.salesCount - 1);
+      s.profit = Math.max(0, s.profit - profit);
+      s.productsSold = Math.max(0, s.productsSold - qty);
+      s.cashIn = Math.max(0, s.cashIn - total);
+      targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
+    });
+
+    return targetUpdates;
+  }
+  window.revertSaleStats = revertSaleStats;
+
+  function applySaleStats(sale, oldSale) {
+    if (!sale || typeof sale !== 'object') return {};
+    const targetUpdates = {};
+
+    if (oldSale) {
+      const rev = revertSaleStats(oldSale);
+      Object.assign(targetUpdates, rev);
+    }
+
+    const dateKey = getDateKey(sale.date);
+    const monthKey = dateKey.substring(0, 7);
+    const yearKey = dateKey.substring(0, 4);
+    const total = Number(sale.total || 0);
+    const profit = Number(sale.profit || 0);
+    const qty = Number(sale.qty || 1);
+
+    window.appState = window.appState || {};
+    window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+    const v2s = window.appState.v2Stats;
+
+    ['daily', 'monthly', 'yearly'].forEach(period => {
+      const key = period === 'daily' ? dateKey : (period === 'monthly' ? monthKey : yearKey);
+      if (!v2s[period]) v2s[period] = {};
+      const s = v2s[period][key] = v2s[period][key] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+      s.sales += total;
+      s.salesCount += 1;
+      s.profit += profit;
+      s.productsSold += qty;
+      s.cashIn += total;
+      targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
+    });
+
+    return targetUpdates;
+  }
+  window.applySaleStats = applySaleStats;
+
+  function revertExpenseStats(expense) {
+    if (!expense || typeof expense !== 'object') return {};
+    const dateKey = getDateKey(expense.date);
+    const monthKey = dateKey.substring(0, 7);
+    const yearKey = dateKey.substring(0, 4);
+    const amt = parseFloat(String(expense.amount || 0).replace(/,/g, '')) || 0;
+
+    window.appState = window.appState || {};
+    window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+    const v2s = window.appState.v2Stats;
+    const targetUpdates = {};
+
+    ['daily', 'monthly', 'yearly'].forEach(period => {
+      const key = period === 'daily' ? dateKey : (period === 'monthly' ? monthKey : yearKey);
+      if (!v2s[period]) v2s[period] = {};
+      const s = v2s[period][key] = v2s[period][key] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+      s.expenses = Math.max(0, s.expenses - amt);
+      s.cashOut = Math.max(0, s.cashOut - amt);
+      targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
+    });
+
+    return targetUpdates;
+  }
+  window.revertExpenseStats = revertExpenseStats;
+
+  function applyExpenseStats(expense, oldExpense) {
+    if (!expense || typeof expense !== 'object') return {};
+    const targetUpdates = {};
+
+    if (oldExpense) {
+      const rev = revertExpenseStats(oldExpense);
+      Object.assign(targetUpdates, rev);
+    }
+
+    const dateKey = getDateKey(expense.date);
+    const monthKey = dateKey.substring(0, 7);
+    const yearKey = dateKey.substring(0, 4);
+    const amt = parseFloat(String(expense.amount || 0).replace(/,/g, '')) || 0;
+
+    window.appState = window.appState || {};
+    window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+    const v2s = window.appState.v2Stats;
+
+    ['daily', 'monthly', 'yearly'].forEach(period => {
+      const key = period === 'daily' ? dateKey : (period === 'monthly' ? monthKey : yearKey);
+      if (!v2s[period]) v2s[period] = {};
+      const s = v2s[period][key] = v2s[period][key] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+      s.expenses += amt;
+      s.cashOut += amt;
+      targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
+    });
+
+    return targetUpdates;
+  }
+  window.applyExpenseStats = applyExpenseStats;
+
   // Dedicated Item-Level Save: writes strictly to V2 structure with atomic index maintenance and pendingWrites protection
   window.saveFirebaseSectionItem = async function(sectionPath, itemData) {
     if (!itemData || typeof itemData !== 'object') return false;
@@ -830,48 +915,73 @@ window.setElemRequired = setElemRequired;
           }
         } else if (sectionPath === 'sales') {
           const dateKey = getDateKey(itemData.date);
-          const monthKey = dateKey.substring(0, 7);
-          const yearKey = dateKey.substring(0, 4);
           const total = Number(itemData.total || 0);
           const profit = Number(itemData.profit || 0);
-          const qty = Number(itemData.qty || 1);
 
           v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit };
           v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
 
-          window.appState = window.appState || {};
-          window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
-          const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ds.sales += total; ds.salesCount += 1; ds.profit += profit; ds.productsSold += qty; ds.cashIn += total;
-          const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ms.sales += total; ms.salesCount += 1; ms.profit += profit; ms.productsSold += qty; ms.cashIn += total;
-          const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ys.sales += total; ys.salesCount += 1; ys.profit += profit; ys.productsSold += qty; ys.cashIn += total;
+          window._processedStats = window._processedStats || new Map();
+          const statKey = `sale:${cleanId}`;
+          const oldProcessed = window._processedStats.get(statKey);
 
-          v2Updates[`v2/stats/daily/${dateKey}`] = ds;
-          v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
-          v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
+          let oldSale = null;
+          let shouldApply = true;
+
+          if (oldProcessed) {
+            if (oldProcessed.total === total && oldProcessed.profit === profit && oldProcessed.qty === Number(itemData.qty || 1) && oldProcessed.date === itemData.date) {
+              shouldApply = false;
+            } else {
+              oldSale = oldProcessed;
+            }
+          } else {
+            const existing = (window.appState?.sales || []).filter(s => String(s.id) === String(cleanId));
+            if (existing.length > 1) {
+              oldSale = existing[1];
+            } else if (existing.length === 1 && existing[0] !== itemData) {
+              oldSale = existing[0];
+            }
+          }
+
+          if (shouldApply) {
+            const statsUpdates = applySaleStats(itemData, oldSale);
+            Object.assign(v2Updates, statsUpdates);
+            window._processedStats.set(statKey, { total, profit, qty: Number(itemData.qty || 1), date: itemData.date });
+          }
         } else if (sectionPath === 'expenses') {
           const dateKey = getDateKey(itemData.date);
-          const monthKey = dateKey.substring(0, 7);
-          const yearKey = dateKey.substring(0, 4);
           const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
 
           v2Updates[`v2/expenses/${cleanId}`] = { ...itemData, id: cleanId, dateKey, amount: amt };
           v2Updates[`v2/expensesByDate/${dateKey}/${cleanId}`] = true;
 
-          window.appState = window.appState || {};
-          window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
-          const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ds.expenses += amt; ds.cashOut += amt;
-          const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ms.expenses += amt; ms.cashOut += amt;
-          const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-          ys.expenses += amt; ys.cashOut += amt;
+          window._processedStats = window._processedStats || new Map();
+          const statKey = `expense:${cleanId}`;
+          const oldProcessed = window._processedStats.get(statKey);
 
-          v2Updates[`v2/stats/daily/${dateKey}`] = ds;
-          v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
-          v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
+          let oldExpense = null;
+          let shouldApply = true;
+
+          if (oldProcessed) {
+            if (oldProcessed.amount === amt && oldProcessed.date === itemData.date) {
+              shouldApply = false;
+            } else {
+              oldExpense = oldProcessed;
+            }
+          } else {
+            const existing = (window.appState?.expenses || []).filter(e => String(e.id) === String(cleanId));
+            if (existing.length > 1) {
+              oldExpense = existing[1];
+            } else if (existing.length === 1 && existing[0] !== itemData) {
+              oldExpense = existing[0];
+            }
+          }
+
+          if (shouldApply) {
+            const statsUpdates = applyExpenseStats(itemData, oldExpense);
+            Object.assign(v2Updates, statsUpdates);
+            window._processedStats.set(statKey, { amount: amt, date: itemData.date });
+          }
         } else if (sectionPath === 'credits') {
           v2Updates[`v2/credits/${cleanId}`] = itemData;
           if (itemData.customerId && itemData.status !== 'settled') {
@@ -951,6 +1061,34 @@ window.setElemRequired = setElemRequired;
           const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId));
           if (item && item.customerId) {
             v2Deletes[`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${cleanId}`] = null;
+          }
+        } else if (sectionPath === 'sales') {
+          window._processedStats = window._processedStats || new Map();
+          const statKey = `sale:${cleanId}`;
+          const recorded = window._processedStats.get(statKey);
+          const saleInState = (window.appState?.sales || []).find(s => String(s.id) === String(itemId));
+          const saleToDelete = recorded || saleInState;
+
+          if (saleToDelete) {
+            const dateKey = getDateKey(saleToDelete.date);
+            v2Deletes[`v2/salesByDate/${dateKey}/${cleanId}`] = null;
+            const statsUpdates = revertSaleStats(saleToDelete);
+            Object.assign(v2Deletes, statsUpdates);
+            window._processedStats.delete(statKey);
+          }
+        } else if (sectionPath === 'expenses') {
+          window._processedStats = window._processedStats || new Map();
+          const statKey = `expense:${cleanId}`;
+          const recorded = window._processedStats.get(statKey);
+          const expInState = (window.appState?.expenses || []).find(e => String(e.id) === String(itemId));
+          const expToDelete = recorded || expInState;
+
+          if (expToDelete) {
+            const dateKey = getDateKey(expToDelete.date);
+            v2Deletes[`v2/expensesByDate/${dateKey}/${cleanId}`] = null;
+            const statsUpdates = revertExpenseStats(expToDelete);
+            Object.assign(v2Deletes, statsUpdates);
+            window._processedStats.delete(statKey);
           }
         }
 
@@ -1077,85 +1215,7 @@ window.setElemRequired = setElemRequired;
     return null;
   };
 
-  // Push Full State to Firebase Realtime Database across v2/ record paths using multi-location UPDATE & PATCH
-  window.pushFullStateToFirebase = async function(customState) {
-    const payload = getCleanSyncPayload(customState);
-    let rtdbSuccess = false; let restSuccess = false;
-    let lastErrMsg = '';
-
-    const v2Updates = {};
-    const mapSectionToV2 = (arr, secName) => {
-      const v2Sec = secName === 'caisseLogs' ? 'caisse' : secName;
-      if (Array.isArray(arr)) {
-        arr.forEach(item => {
-          if (!item) return;
-          const rawId = item.id || item.barcode;
-          if (rawId) {
-            v2Updates[`v2/${v2Sec}/${cleanKey(rawId)}`] = item;
-          }
-        });
-      }
-    };
-
-    mapSectionToV2(payload.customers, 'customers');
-    mapSectionToV2(payload.products, 'products');
-    mapSectionToV2(payload.packages, 'packages');
-    mapSectionToV2(payload.sales, 'sales');
-    mapSectionToV2(payload.expenses, 'expenses');
-    mapSectionToV2(payload.caisseLogs, 'caisse');
-    mapSectionToV2(payload.coachAbsences, 'coachAbsences');
-    mapSectionToV2(payload.staffPayouts, 'staffPayouts');
-    mapSectionToV2(payload.credits, 'credits');
-    mapSectionToV2(payload.suppliers, 'suppliers');
-    mapSectionToV2(payload.supplierTransactions, 'supplierTransactions');
-    mapSectionToV2(payload.quickSessions, 'quickSessions');
-    mapSectionToV2(payload.activityLogs, 'activityLogs');
-    v2Updates['v2/meta'] = {
-      hideFinances: customState ? customState.hideFinances : (window.appState?.hideFinances !== false),
-      lastUpdated: payload.lastUpdated
-    };
-
-    if (Object.keys(v2Updates).length === 0) return { success: true };
-
-    if (window.firebaseDB && window.firebaseRef && window.firebaseUpdate) {
-      try {
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
-        rtdbSuccess = true;
-      } catch (err) {
-        console.warn('Realtime Database SDK update note:', err?.message || err);
-        lastErrMsg = err?.message || String(err);
-      }
-    }
-
-    if (!rtdbSuccess) {
-      try {
-        const baseUrl = getRTDBUrl();
-        const res = await fetch(`${baseUrl}/.json`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(v2Updates)
-        });
-        if (res.ok) restSuccess = true;
-      } catch (fetchErr) {
-        console.warn('REST PATCH fallback note:', fetchErr);
-      }
-    }
-
-    if (rtdbSuccess || restSuccess) {
-      window.firebaseSyncState.lastSync = new Date();
-      window.firebaseSyncState.lastError = null;
-      updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
-      return { success: true };
-    } else {
-      window.firebaseSyncState.lastError = lastErrMsg;
-      if (lastErrMsg.toLowerCase().includes('permission') || lastErrMsg.toLowerCase().includes('denied')) {
-        updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'تم رفض الكتابة في Realtime Database (Permission Denied). يرجى فتح Firebase Console وتحديث Rules إلى .read: true, .write: true.');
-      } else {
-        updateFirebaseUIBadge('error', 'Firebase: غير متصل', lastErrMsg || 'تعذر الاتصال بقاعدة البيانات');
-      }
-      return { success: false, error: lastErrMsg };
-    }
-  };
+  // Full-State Sync removed completely in favor of Record-Level CRUD
   // Optimized Fast Data Sync with Firebase Realtime Database (Single guarded load + WebSocket listener)
   // Optimized Fast Data Sync with Firebase Realtime Database (Bounded V2 Queries + Local Cache)
   window.__firebaseAlreadyFetched = false;
@@ -2333,6 +2393,9 @@ window.setElemRequired = setElemRequired;
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('quickSessions', newQuickSession);
             }
+            if (typeof logActivity === 'function') {
+                logActivity('customer', 'تسجيل حصة سريعة', `حصة سريعة (${sessionCount} حصص، ${clientCount} زبائن) - المبلغ: ${price} دج`, price);
+            }
             if (Array.isArray(appState.customers)) {
                 appState.customers = appState.customers.filter(c => c && c.subscriptionType !== 'session' && !c.name?.startsWith('حصة '));
             } if (typeof saveState === 'function') saveState();
@@ -3036,15 +3099,22 @@ window.setElemRequired = setElemRequired;
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('packages', newPkg);
         }
+        if (typeof logActivity === 'function') {
+            logActivity('customer', 'إضافة باقة جديدة', `اسم الباقة: ${pkgName} - السعر: ${price} دج - المدة: ${duration} يوم`, price);
+        }
         saveState(); this.reset();
         showSuccessToast('تم إضافة الباقة بنجاح');
         render(); }); function deletePackage(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف باقة', prompt: 'أدخل كلمة المرور لتأكيد حذف الباقة', buttonText: 'تأكيد الحذف' }, () => {
             if (!Array.isArray(appState.packages)) return;
+            const deletedPkg = appState.packages.find(p => String(p && p.id) === String(id));
             window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
             if (window.deleteFirebaseSectionItem) {
                 window.deleteFirebaseSectionItem('packages', id);
+            }
+            if (typeof logActivity === 'function') {
+                logActivity('customer', 'حذف باقة', `حذف الباقة: ${deletedPkg ? deletedPkg.name : id}`);
             }
             saveState(); showSuccessToast('تم حذف الباقة بنجاح');
             render();
@@ -3383,6 +3453,9 @@ window.setElemRequired = setElemRequired;
             if (window.deleteFirebaseSectionItem) {
                 window.deleteFirebaseSectionItem('products', id);
                 if (prodToDelete?.barcode) window.deleteFirebaseSectionItem('products', prodToDelete.barcode);
+            }
+            if (typeof logActivity === 'function') {
+                logActivity('sale', 'حذف منتج من المخزون', `حذف المنتج: ${prodToDelete ? prodToDelete.name : id}`);
             }
             saveState(); showSuccessToast('تم حذف المنتج بنجاح');
             if (typeof renderProductsList === 'function') renderProductsList();
@@ -3952,6 +4025,9 @@ window.setElemRequired = setElemRequired;
                 window.saveFirebaseSectionItem('suppliers', existing);
                 window.saveFirebaseSectionItem('supplierTransactions', newTxObj);
             }
+            if (typeof logActivity === 'function') {
+                logActivity('supplier', 'تحديث حساب مورد', `المورد: ${existing.name} - مدفوع: ${paid} دج - الكريدي المتبقي: ${debt} دج`, paid);
+            }
             saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
             if (sDate) sDate.value = new Date().toISOString().split('T')[0];
             autoFillSupplierInfo('');
@@ -3978,6 +4054,9 @@ window.setElemRequired = setElemRequired;
             window.saveFirebaseSectionItem('suppliers', newSupObj);
             window.saveFirebaseSectionItem('supplierTransactions', newTxObj);
         }
+        if (typeof logActivity === 'function') {
+            logActivity('supplier', 'تسجيل فاتورة/معاملة مورد', `المورد: ${name} - التفاصيل: ${items} - مدفوع: ${paid} دج`, paid);
+        }
         saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
         if (sDate) sDate.value = new Date().toISOString().split('T')[0];
         showSuccessToast('تم تسجيل فاتورة / معاملة المورد بنجاح');
@@ -3986,9 +4065,13 @@ window.setElemRequired = setElemRequired;
         if (!id) return;
         promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
             if (!Array.isArray(appState.suppliers)) return;
+            const deletedSup = appState.suppliers.find(s => String(s && s.id) === String(id));
             appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
             window.appState.suppliers = appState.suppliers;
             if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
+            if (typeof logActivity === 'function') {
+                logActivity('supplier', 'حذف معاملة مورد', `حذف المورد: ${deletedSup ? deletedSup.name : id}`);
+            }
             saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
             renderSuppliersList();
         }); } window.deleteSupplier = deleteSupplier;
@@ -4644,6 +4727,9 @@ window.setElemRequired = setElemRequired;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
         promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
             appState.credits = []; window.appState.credits = [];
+            if (typeof logActivity === 'function') {
+                logActivity('credit', 'حذف جميع سجلات الكريدي', `تم مسح جميع سجلات الديون والكريدي بالكامل (${count} سجل)`);
+            }
             const searchInput = document.getElementById('creditSearchInput');
             if (searchInput) searchInput.value = '';
             saveState(); renderCreditsList();
@@ -5491,6 +5577,9 @@ window.setElemRequired = setElemRequired;
         appState.coachAbsences.unshift(newAbsence);
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('coachAbsences', newAbsence);
+        }
+        if (typeof logActivity === 'function') {
+            logActivity('customer', 'تمديد اشتراكات لغياب المدرب', `تاريخ الغياب: ${formattedDate} - مدة التمديد: ${numDays} يوم لجميع المشتركين النشطين`, 0);
         }
         saveState(); closeModal('coachAbsenceModal');
         showSuccessToast('تم تمديد اشتراك المشتركين بنجاح');
