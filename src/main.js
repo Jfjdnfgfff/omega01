@@ -1,6 +1,6 @@
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
-  import { getDatabase, ref, set, update, push, onValue, get } from "firebase/database";
+  import { getDatabase, ref, set, update, push, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -212,6 +212,82 @@
     window.firebaseSyncState.lastError = null;
     updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
     return true; };
+
+  // Granular section-level updater: merges ONLY the target section with O(N) deduplication
+  window.applyFirebaseSectionUpdate = function(sectionName, sectionData, sourceLabel) {
+    if (!sectionName || sectionData === undefined || sectionData === null) return false;
+    window.appState = window.appState || {};
+    const toArr = (val) => {
+      if (!val) return [];
+      if (Array.isArray(val)) return val.filter(item => item && typeof item === 'object');
+      if (typeof val === 'object') return Object.values(val).filter(item => item && typeof item === 'object');
+      return [];
+    };
+
+    if (sectionName === 'appState' && typeof sectionData === 'object') {
+      if (typeof sectionData.hideFinances === 'boolean') {
+        window.appState.hideFinances = sectionData.hideFinances;
+      }
+      return true;
+    }
+
+    const items = toArr(sectionData);
+    const existing = Array.isArray(window.appState[sectionName]) ? window.appState[sectionName] : [];
+
+    // Fast deduplication map
+    const map = new Map();
+    const idProp = (sectionName === 'products') ? 'barcode' : 'id';
+    
+    // Add existing first (if we have bounded streaming, don't drop older items unless replaced)
+    for (let i = 0; i < existing.length; i++) {
+      const it = existing[i];
+      if (it) {
+        const key = String(it[idProp] || it.id || it.barcode || i);
+        map.set(key, it);
+      }
+    }
+    // Overlay incoming items
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it) {
+        const key = String(it[idProp] || it.id || it.barcode || i);
+        map.set(key, it);
+      }
+    }
+
+    const merged = Array.from(map.values());
+    // Pre-calculate search keys for hyper-fast search filtering
+    if (sectionName === 'customers') {
+      for (let i = 0; i < merged.length; i++) {
+        const c = merged[i];
+        if (c && !c._searchKey) {
+          c._searchKey = `${c.name || ''} ${(c.phone || '').replace(/\D/g, '')}`.toLowerCase();
+        }
+      }
+    }
+
+    window.appState[sectionName] = merged;
+    if (typeof scheduleLocalStorageSave === 'function') {
+      scheduleLocalStorageSave();
+    } else {
+      try { localStorage.setItem('sm_appState', JSON.stringify(window.appState)); } catch(e) {}
+    }
+
+    // Debounced render
+    if (!window.renderScheduled) {
+      window.renderScheduled = true;
+      requestAnimationFrame(() => {
+        window.renderScheduled = false;
+        if (typeof window.render === 'function') window.render();
+      });
+    }
+
+    window.firebaseSyncState = window.firebaseSyncState || {};
+    window.firebaseSyncState.rtdb = 'connected';
+    window.firebaseSyncState.lastSync = new Date();
+    updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
+    return true;
+  };
 
   // Clean and sanitize payload to eliminate undefined fields
   function getCleanSyncPayload(sourceState) {
@@ -474,16 +550,16 @@
         lastErrMsg = err?.message || String(err);
       }
     }
-    // 2. Direct Realtime Database REST API using PATCH on each dedicated section path
-    try {
-      const baseUrl = getRTDBUrl();
-      const patchOpts = (bodyData) => ({
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyData)
-      });
-      const restPromises = [
-        fetch(`${baseUrl}/.json`, patchOpts({
+    // 2. Direct Realtime Database REST API using PATCH on root (Fallback only if SDK is unavailable or failed)
+    if (!rtdbSuccess) {
+      try {
+        const baseUrl = getRTDBUrl();
+        const patchOpts = (bodyData) => ({
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bodyData)
+        });
+        const res = await fetch(`${baseUrl}/.json`, patchOpts({
           customers: customersDict,
           products: productsDict,
           packages: packagesDict,
@@ -498,28 +574,13 @@
           quickSessions: quickSessionsDict,
           appState: appStateObj,
           lastUpdated: payload.lastUpdated
-        })),
-        fetch(`${baseUrl}/customers.json`, patchOpts(customersDict)),
-        fetch(`${baseUrl}/products.json`, patchOpts(productsDict)),
-        fetch(`${baseUrl}/packages.json`, patchOpts(packagesDict)),
-        fetch(`${baseUrl}/sales.json`, patchOpts(salesDict)),
-        fetch(`${baseUrl}/expenses.json`, patchOpts(expensesDict)),
-        fetch(`${baseUrl}/caisseLogs.json`, patchOpts(caisseLogsDict)),
-        fetch(`${baseUrl}/coachAbsences.json`, patchOpts(coachAbsencesDict)),
-        fetch(`${baseUrl}/staffPayouts.json`, patchOpts(staffPayoutsDict)),
-        fetch(`${baseUrl}/credits.json`, patchOpts(creditsDict)),
-        fetch(`${baseUrl}/suppliers.json`, patchOpts(suppliersDict)),
-        fetch(`${baseUrl}/supplierTransactions.json`, patchOpts(supplierTxDict)),
-        fetch(`${baseUrl}/quickSessions.json`, patchOpts(quickSessionsDict)),
-        fetch(`${baseUrl}/appState.json`, patchOpts(appStateObj))
-      ];
-      const responses = await Promise.allSettled(restPromises);
-      const successfulSaves = responses.filter(r => r.status === 'fulfilled' && r.value.ok);
-      if (successfulSaves.length > 0) {
-        restSuccess = true;
+        }));
+        if (res.ok) {
+          restSuccess = true;
+        }
+      } catch (fetchErr) {
+        console.warn('REST PATCH fallback note:', fetchErr);
       }
-    } catch (fetchErr) {
-      console.warn('REST PATCH fallback note:', fetchErr);
     }
     if (rtdbSuccess || restSuccess) {
       window.firebaseSyncState.lastSync = new Date();
@@ -617,29 +678,105 @@
           if (cfgJson && cfgJson.apiKey) {
             firebaseConfig = { ...firebaseConfig, ...cfgJson };
           } } } catch (e) {} const app = initializeApp(firebaseConfig);
-      // Realtime Database WebSocket Initialization & Live Listener
-      try { const database = getDatabase(app);
-        window.firebaseDB = database; window.firebaseSet = set;
-        window.firebaseUpdate = update; window.firebasePush = push;
-        window.firebaseRef = ref; window.firebaseOnValue = onValue;
-        window.firebaseGet = get; const dbRef = ref(database);
-        onValue(dbRef, (snapshot) => { if (snapshot.exists()) {
-                const data = snapshot.val() || {};
-                let sameAsRest = false;
-                if (lastRootStr !== null) { try { sameAsRest = JSON.stringify(data) === lastRootStr; } catch (e) {} lastRootStr = null; }
-                if (!sameAsRest) window.applyFirebaseDataToAppState(data, 'Realtime Listener');
-            } else if (!snapshot.exists()) {
-                // If cloud database is empty and this device has existing local data, seed cloud
-                if (window.appState && (window.appState.customers?.length > 0 || window.appState.products?.length > 0 || window.appState.sales?.length > 0)) {
-                    window.pushFullStateToFirebase();
-                } } window.firebaseSyncState.rtdb = 'connected';
+      // Realtime Database High-Speed Sectional WebSocket Listeners & Bounded Queries
+      try {
+        const database = getDatabase(app);
+        window.firebaseDB = database;
+        window.firebaseSet = set;
+        window.firebaseUpdate = update;
+        window.firebasePush = push;
+        window.firebaseRef = ref;
+        window.firebaseOnValue = onValue;
+        window.firebaseGet = get;
+        window.firebaseQuery = query;
+        window.firebaseLimitToLast = limitToLast;
+        window.firebaseLimitToFirst = limitToFirst;
+        window.firebaseStartAt = startAt;
+        window.firebaseEndAt = endAt;
+        window.firebaseStartAfter = startAfter;
+        window.firebaseEndBefore = endBefore;
+        window.firebaseOrderByKey = orderByKey;
+        window.firebaseOrderByChild = orderByChild;
+        window.firebaseEqualTo = equalTo;
+
+        // Generic Ultra-Fast Cursor-Based Pagination Utility for any flat section
+        window.fetchPaginatedSection = async function(sectionName, limitCount = 50, startAfterKey = null) {
+          if (!window.firebaseDB) return [];
+          try {
+            const dbRef = ref(window.firebaseDB, sectionName);
+            let q;
+            if (startAfterKey) {
+              q = query(dbRef, orderByKey(), startAfter(startAfterKey), limitToFirst(limitCount));
+            } else {
+              q = query(dbRef, orderByKey(), limitToLast(limitCount));
+            }
+            const snap = await get(q);
+            if (snap.exists()) {
+              const data = snap.val();
+              const items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+              return items;
+            }
+          } catch (err) {
+            console.warn(`Pagination fetch note for ${sectionName}:`, err);
+          }
+          return [];
+        };
+
+        // Bounded & indexed section configurations
+        const sectionListeners = [
+          { name: 'customers', q: ref(database, 'customers') },
+          { name: 'products', q: ref(database, 'products') },
+          { name: 'packages', q: ref(database, 'packages') },
+          { name: 'credits', q: ref(database, 'credits') },
+          { name: 'sales', q: query(ref(database, 'sales'), limitToLast(200)) },
+          { name: 'caisseLogs', q: query(ref(database, 'caisseLogs'), limitToLast(200)) },
+          { name: 'expenses', q: query(ref(database, 'expenses'), limitToLast(200)) },
+          { name: 'coachAbsences', q: ref(database, 'coachAbsences') },
+          { name: 'suppliers', q: ref(database, 'suppliers') },
+          { name: 'supplierTransactions', q: ref(database, 'supplierTransactions') },
+          { name: 'staffPayouts', q: ref(database, 'staffPayouts') },
+          { name: 'quickSessions', q: ref(database, 'quickSessions') },
+          { name: 'appState', q: ref(database, 'appState') }
+        ];
+
+        let connectedCount = 0;
+        sectionListeners.forEach(sec => {
+          onValue(sec.q, (snapshot) => {
+            connectedCount++;
+            if (snapshot.exists()) {
+              window.applyFirebaseSectionUpdate(sec.name, snapshot.val(), `Realtime ${sec.name}`);
+            }
+            window.firebaseSyncState.rtdb = 'connected';
             window.firebaseSyncState.lastSync = new Date();
-            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
+            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (وضع عالي السرعة)');
             window.dispatchEvent(new Event('firebaseReady'));
-        }, (error) => { console.warn('Firebase RTDB sync note:', error?.message || error);
+          }, (error) => {
+            console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
             if (error?.message && (error.message.includes('permission_denied') || error.message.includes('Permission denied'))) {
               updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'يرجى تفعيل .read: true, .write: true في قواعد Realtime Database');
-            } }); } catch (rtdbInitErr) {
+            }
+          });
+        });
+
+        // Helper to load older historical data on demand
+        window.loadOlderHistoricalData = async function(sectionName = 'sales', limitCount = 500) {
+          try {
+            const olderQ = query(ref(database, sectionName), limitToLast(limitCount));
+            const snap = await get(olderQ);
+            if (snap.exists()) {
+              window.applyFirebaseSectionUpdate(sectionName, snap.val(), 'Historical Fetch');
+              if (typeof showSuccessToast === 'function') {
+                showSuccessToast(`تم تحميل أحدث ${limitCount} سجل لـ ${sectionName} بنجاح`);
+              }
+              return true;
+            }
+          } catch (e) {
+            console.warn('Error loading older data:', e);
+          }
+          return false;
+        };
+
+      } catch (rtdbInitErr) {
         console.warn('RTDB Init Note:', rtdbInitErr);
       } } catch (error) { console.warn('Notice initializing Firebase:', error?.message || error);
       updateFirebaseUIBadge('error', 'Firebase: خطأ في الاتصال', error?.message || String(error));

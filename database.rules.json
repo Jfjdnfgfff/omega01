@@ -1,0 +1,27 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "customers": {
+      ".indexOn": ["startDate", "endDate", "phone", "status", "paymentStatus"]
+    },
+    "credits": {
+      ".indexOn": ["date", "name", "phone"]
+    },
+    "sales": {
+      ".indexOn": ["date", "customerId"]
+    },
+    "products": {
+      ".indexOn": ["barcode", "category", "stockLocation"]
+    },
+    "expenses": {
+      ".indexOn": ["date", "category"]
+    },
+    "caisseLogs": {
+      ".indexOn": ["date", "type"]
+    },
+    "coachAbsences": {
+      ".indexOn": ["date", "coachName"]
+    }
+  }
+}
