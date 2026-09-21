@@ -1760,6 +1760,7 @@ window.setElemRequired = setElemRequired;
       appState.suppliers = ensureArray(appState.suppliers);
       appState.quickSessions = ensureArray(appState.quickSessions);
       appState.caisseLogs = ensureArray(appState.caisseLogs);
+      appState.activityLogs = ensureArray(appState.activityLogs);
       
       // Async non-blocking debounced save
       scheduleLocalStorageSave();
@@ -2515,7 +2516,22 @@ window.setElemRequired = setElemRequired;
     }
     document.getElementById('editCustomerForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const customer = appState.customers.find(c => c.id === getElemVal('editCustId'));
-        if(!customer) return; let custName = getElemVal('editCustName').trim();
+        if(!customer) return;
+
+        // Snapshot old values before edits for exact diff logging
+        const oldName = customer.name || '';
+        const oldPhone = customer.phone || '';
+        const oldDob = customer.dob || '';
+        const oldWeight = customer.weight;
+        const oldPkgObj = appState.packages.find(p => p.id === customer.packageId);
+        const oldPkgName = oldPkgObj ? oldPkgObj.name : 'بدون باقة';
+        const oldPrice = Number(customer.price) || 0;
+        const oldDebt = Number(customer.debtAmount) || 0;
+        const oldSubType = customer.subscriptionType || 'time';
+        const oldSessions = Number(customer.remainingSessions) || 0;
+        const oldEndDateStr = customer.endDate ? (typeof getLocalDateString === 'function' ? getLocalDateString(new Date(customer.endDate)) : new Date(customer.endDate).toISOString().split('T')[0]) : '';
+
+        let custName = getElemVal('editCustName').trim();
         if (!custName) { showErrorToast('يرجى إدخال اسم المشترك');
             return; } if (containsDangerousCode(custName)) {
             showErrorToast('تم رفض الإدخال: اسم المشترك يحتوي على أسطر برمجة أو كود غير مسموح به.');
@@ -2558,9 +2574,9 @@ window.setElemRequired = setElemRequired;
         const editPriceInput = document.getElementById('editCustPrice');
         customer.price = editPriceInput && editPriceInput.value !== '' ? parseInt(editPriceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
         customer.paymentStatus = getElemVal('editPaymentStatus');
-        const oldDebt = customer.debtAmount || 0;
         customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(getElemVal('editDebtAmount') || 0) : 0;
         customer.imageUrl = getElemVal('editCustImageUrl') || null;
+
         // Sync with Credits section
         if (customer.debtAmount > 0) { if (!appState.credits) appState.credits = [];
             const autoId = 'cr_auto_' + customer.id;
@@ -2587,6 +2603,36 @@ window.setElemRequired = setElemRequired;
             } }
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', customer);
+            }
+
+            // Calculate exact field modifications
+            const newPkgName = pkg ? pkg.name : 'بدون باقة';
+            const newEndDateStr = customer.endDate ? (typeof getLocalDateString === 'function' ? getLocalDateString(new Date(customer.endDate)) : new Date(customer.endDate).toISOString().split('T')[0]) : '';
+            const changes = [];
+
+            if (oldName !== customer.name) changes.push(`الاسم: من "${oldName}" إلى "${customer.name}"`);
+            if (oldPhone !== customer.phone) changes.push(`الهاتف: من "${oldPhone || 'غير محدد'}" إلى "${customer.phone || 'غير محدد'}"`);
+            if (oldDob !== custDob && custDob) changes.push(`تاريخ الميلاد: من "${oldDob || 'غير محدد'}" إلى "${custDob}"`);
+            if (oldPkgName !== newPkgName) changes.push(`الباقة: من "${oldPkgName}" إلى "${newPkgName}"`);
+            if (oldPrice !== Number(customer.price || 0)) changes.push(`السعر: من ${oldPrice.toLocaleString()} دج إلى ${Number(customer.price || 0).toLocaleString()} دج`);
+            if (oldDebt !== Number(customer.debtAmount || 0)) changes.push(`الدين: من ${oldDebt.toLocaleString()} دج إلى ${Number(customer.debtAmount || 0).toLocaleString()} دج`);
+            if (oldSubType !== customer.subscriptionType) changes.push(`نوع الاشتراك: من "${oldSubType === 'session' ? 'حصص' : 'زمني'}" إلى "${customer.subscriptionType === 'session' ? 'حصص' : 'زمني'}"`);
+            if (customer.subscriptionType === 'session' && oldSessions !== customer.remainingSessions) {
+                changes.push(`الحصص المتبقية: من ${oldSessions} إلى ${customer.remainingSessions}`);
+            }
+            if (extraDays > 0) changes.push(`تاريخ الانتهاء: من "${oldEndDateStr || 'غير محدد'}" إلى "${newEndDateStr}" (تمديد ${extraDays} يوماً)`);
+            else if (oldEndDateStr !== newEndDateStr && newEndDateStr) changes.push(`تاريخ الانتهاء: من "${oldEndDateStr || 'غير محدد'}" إلى "${newEndDateStr}"`);
+            if (oldWeight !== customer.weight && customer.weight !== null) changes.push(`الوزن: من ${oldWeight || '--'} كغ إلى ${customer.weight} كغ`);
+
+            let detailMsg = `تعديل بيانات المشترك (${customer.name})`;
+            if (changes.length > 0) {
+                detailMsg += ` | ` + changes.join(' | ');
+            } else {
+                detailMsg += ` | تم التحديث بدون تغييرات رئيسية`;
+            }
+
+            if (typeof logActivity === 'function') {
+                logActivity('customer', 'تعديل بيانات مشترك', detailMsg, customer.price || 0);
             }
             saveState(); closeModal('editCustomerModal');
         showSuccessToast('تم تعديل بيانات المشترك بنجاح');
@@ -2916,19 +2962,18 @@ window.setElemRequired = setElemRequired;
         render(); }); function deleteExpense(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مصروف', prompt: 'أدخل كلمة المرور لتأكيد حذف المصروف', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذا المصروف؟', function() {
-                if (!Array.isArray(appState.expenses)) return;
-                const deletedExp = appState.expenses.find(ex => String(ex && ex.id) === String(id));
-                const expDesc = deletedExp ? deletedExp.desc : id;
-                if (typeof logActivity === 'function') logActivity('expense', 'حذف مصروف', `حذف المصروف: ${expDesc}`);
-                window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('expenses', id);
-                }
-                saveState(); showSuccessToast('تم حذف المصروف بنجاح');
-                if (window.renderExpensesListView) window.renderExpensesListView();
-                if (window.renderExpensesListModal) window.renderExpensesListModal();
-                render(); }, { title: 'حذف المصروف', confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.expenses)) return;
+            const deletedExp = appState.expenses.find(ex => String(ex && ex.id) === String(id));
+            const expDesc = deletedExp ? deletedExp.desc : id;
+            if (typeof logActivity === 'function') logActivity('expense', 'حذف مصروف', `حذف المصروف: ${expDesc}`);
+            window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('expenses', id);
+            }
+            saveState(); showSuccessToast('تم حذف المصروف بنجاح');
+            if (window.renderExpensesListView) window.renderExpensesListView();
+            if (window.renderExpensesListModal) window.renderExpensesListModal();
+            render();
         }); }
     function setPackageTypeForm(type) {
         // Only time packages supported
@@ -2956,14 +3001,13 @@ window.setElemRequired = setElemRequired;
         render(); }); function deletePackage(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف باقة', prompt: 'أدخل كلمة المرور لتأكيد حذف الباقة', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذه الباقة؟', function() {
-                if (!Array.isArray(appState.packages)) return;
-                window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('packages', id);
-                }
-                saveState(); showSuccessToast('تم حذف الباقة بنجاح');
-                render(); }, { title: 'حذف الباقة', confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.packages)) return;
+            window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('packages', id);
+            }
+            saveState(); showSuccessToast('تم حذف الباقة بنجاح');
+            render();
         }); }
     function handleProdStockLocationChange() {
         const locSelect = document.getElementById('prodStockLocation');
@@ -3063,7 +3107,11 @@ window.setElemRequired = setElemRequired;
                         p.stock = parseFloat(getElemVal('prodStock')) || 0;
                     } if (p && window.saveFirebaseSectionItem) {
                         window.saveFirebaseSectionItem('products', p);
-                    } } delete formEl.dataset.editId;
+                    } }
+                if (typeof logActivity === 'function') {
+                    logActivity('sale', 'تعديل منتج في المخزون', `تعديل بيانات المنتج: ${prodName} (السعر: ${priceVal} دج)`);
+                }
+                delete formEl.dataset.editId;
                 const submitBtn = formEl.querySelector('button[type="submit"]');
                 if (submitBtn) { submitBtn.textContent = 'إضافة المنتج إلى Stock 1 و Stock 2 معاً';
                     submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
@@ -3289,18 +3337,17 @@ window.setElemRequired = setElemRequired;
         promptWithPassword({ title: 'حذف منتج من المخزون',
             prompt: 'أدخل كلمة المرور لتأكيد حذف هذا المنتج نهائياً من المخزون',
             buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذا المنتج؟', function() {
-                if (!Array.isArray(appState.products)) return;
-                const prodToDelete = appState.products.find(p => String(p && p.id) === String(id));
-                window.appState.products = appState.products.filter(p => String(p && p.id) !== String(id));
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('products', id);
-                    if (prodToDelete?.barcode) window.deleteFirebaseSectionItem('products', prodToDelete.barcode);
-                }
-                saveState(); showSuccessToast('تم حذف المنتج بنجاح');
-                if (typeof renderProductsList === 'function') renderProductsList();
-                render(); }, { title: 'حذف المنتج',
-                confirmText: 'نعم، حذف' }); });
+            if (!Array.isArray(appState.products)) return;
+            const prodToDelete = appState.products.find(p => String(p && p.id) === String(id));
+            window.appState.products = appState.products.filter(p => String(p && p.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('products', id);
+                if (prodToDelete?.barcode) window.deleteFirebaseSectionItem('products', prodToDelete.barcode);
+            }
+            saveState(); showSuccessToast('تم حذف المنتج بنجاح');
+            if (typeof renderProductsList === 'function') renderProductsList();
+            render();
+        });
     } window.deleteProduct = deleteProduct;
     // Attach globals for HTML event handlers
     window.toggleView = toggleView; window.openModal = openModal;
@@ -3556,25 +3603,24 @@ window.setElemRequired = setElemRequired;
         render(); }); function deleteCustomer(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذا المشترك نهائياً؟', function() {
-                if (!Array.isArray(appState.customers)) return;
-                const deletedCust = appState.customers.find(c => String(c && c.id) === String(id));
-                const custNameStr = deletedCust ? deletedCust.name : id;
-                if (typeof logActivity === 'function') logActivity('customer', 'حذف مشترك', `حذف المشترك: ${custNameStr}`);
-                window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
+            if (!Array.isArray(appState.customers)) return;
+            const deletedCust = appState.customers.find(c => String(c && c.id) === String(id));
+            const custNameStr = deletedCust ? deletedCust.name : id;
+            if (typeof logActivity === 'function') logActivity('customer', 'حذف مشترك', `حذف المشترك: ${custNameStr}`);
+            window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('customers', id);
+            }
+            // Clean up auto-generated credits for this customer
+            if (Array.isArray(appState.credits)) {
+                const autoId = 'cr_auto_' + id;
+                window.appState.credits = appState.credits.filter(c => c.id !== autoId);
                 if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('customers', id);
+                    window.deleteFirebaseSectionItem('credits', autoId);
                 }
-                // Clean up auto-generated credits for this customer
-                if (Array.isArray(appState.credits)) {
-                    const autoId = 'cr_auto_' + id;
-                    window.appState.credits = appState.credits.filter(c => c.id !== autoId);
-                    if (window.deleteFirebaseSectionItem) {
-                        window.deleteFirebaseSectionItem('credits', autoId);
-                    }
-                } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
-                if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
-                render(); }, { title: 'حذف المشترك', confirmText: 'نعم، حذف' });
+            } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
+            if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+            render();
         }); }
     function calculateStatus(customer, cachedNowMs) {
       if (!customer) return 'active';
@@ -3620,6 +3666,9 @@ window.setElemRequired = setElemRequired;
                 date: new Date().toISOString(),
                 type: 'time_checkin' });
             customer.attendedSessions = (customer.attendedSessions || 0) + 1;
+            if (typeof logActivity === 'function') {
+                logActivity('customer', 'تسجيل حضور مشترك', `تسجيل حضور المشترك: ${customer.name}`);
+            }
             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
             saveState(); playBeep();
             showSuccessToast(`تم تسجيل حضور المشترك (${customer.name}) بنجاح`);
@@ -3632,6 +3681,9 @@ window.setElemRequired = setElemRequired;
             type: 'session_deduct',
             remainingAfter: customer.remainingSessions
         });
+        if (typeof logActivity === 'function') {
+            logActivity('customer', 'خصم حصة مشترك', `خصم حصة للمشترك: ${customer.name} (المتبقي: ${customer.remainingSessions} حصة)`);
+        }
         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
         saveState(); playBeep(); if (customer.remainingSessions === 0) {
             showSuccessToast(`تم تسجيل الحصة الأخيرة لـ (${customer.name})! انتهت باقة الحصص.`);
@@ -3642,6 +3694,9 @@ window.setElemRequired = setElemRequired;
         if (!customer) return; const current = parseInt(customer.remainingSessions) || 0;
         const nextVal = Math.max(0, current + delta);
         customer.remainingSessions = nextVal;
+        if (typeof logActivity === 'function') {
+            logActivity('customer', 'تعديل حصص مشترك', `تعديل عدد حصص المشترك (${customer.name}) المتبقية إلى: ${nextVal} حصة`);
+        }
         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
         saveState(); showSuccessToast(`تم تعديل الحصص المتبقية لـ (${customer.name}) إلى: ${nextVal}`);
         render(); } window.adjustCustomerSessions = adjustCustomerSessions;
@@ -3743,14 +3798,11 @@ window.setElemRequired = setElemRequired;
         render(); // Update totals
     }); function deleteStaffPayout(id) { if (!id) return;
         promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذه الدفعة؟', function() {
-                if (!Array.isArray(appState.staffPayouts)) return;
-                window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
-                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
-                saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
-                renderStaffPayouts(); render(); }, {
-                title: 'حذف دفعة العامل',
-                confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.staffPayouts)) return;
+            window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
+            saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
+            renderStaffPayouts(); render();
         }); } window.deleteStaffPayout = deleteStaffPayout;
     function switchPayoutTab(tab) { const staffBtn = document.getElementById('tabStaffPayoutsBtn');
         const supBtn = document.getElementById('tabSuppliersBtn');
@@ -3893,13 +3945,12 @@ window.setElemRequired = setElemRequired;
         }); function deleteSupplier(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف معاملة هذا المورد؟', function() {
-                if (!Array.isArray(appState.suppliers)) return;
-                appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
-                window.appState.suppliers = appState.suppliers;
-                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
-                saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
-                renderSuppliersList(); }, { title: 'حذف معاملة المورد', confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.suppliers)) return;
+            appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
+            window.appState.suppliers = appState.suppliers;
+            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
+            saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
+            renderSuppliersList();
         }); } window.deleteSupplier = deleteSupplier;
     function openEditSupplierModal(id) { if (!appState.suppliers) return;
         const sup = appState.suppliers.find(s => String(s.id) === String(id));
@@ -3929,10 +3980,31 @@ window.setElemRequired = setElemRequired;
             return false; } name = sanitizeInputText(name, 80);
         info = sanitizeInputText(info, 100);
         items = sanitizeInputText(items, 300);
+
+        const oldSup = appState.suppliers[index];
+        const oldName = oldSup ? (oldSup.name || '') : '';
+        const oldPaid = oldSup ? (Number(oldSup.paid) || 0) : 0;
+        const oldDebt = oldSup ? (Number(oldSup.debt) || 0) : 0;
+        const oldItems = oldSup ? (oldSup.items || '') : '';
+
         appState.suppliers[index] = { ...appState.suppliers[index],
             name, info, items, paid, debt, date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
             notes };
         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('suppliers', appState.suppliers[index]);
+
+        const changes = [];
+        if (oldName !== name) changes.push(`الاسم: من "${oldName}" إلى "${name}"`);
+        if (oldPaid !== paid) changes.push(`المدفوع: من ${oldPaid.toLocaleString()} دج إلى ${paid.toLocaleString()} دج`);
+        if (oldDebt !== debt) changes.push(`الدين: من ${oldDebt.toLocaleString()} دج إلى ${debt.toLocaleString()} دج`);
+        if (oldItems !== items && items) changes.push(`السلع: من "${oldItems || 'غير محدد'}" إلى "${items}"`);
+
+        let detailMsg = `تعديل بيانات المورد (${name})`;
+        if (changes.length > 0) detailMsg += ` | ` + changes.join(' | ');
+
+        if (typeof logActivity === 'function') {
+            logActivity('supplier', 'تعديل معاملة مورد', detailMsg, paid);
+        }
+
         saveState(); closeModal('editSupplierModal');
         showSuccessToast('تم تعديل معاملة المورد بنجاح');
         renderSuppliersList(); return false; }
@@ -4531,13 +4603,11 @@ window.setElemRequired = setElemRequired;
     function deleteAllCredits() { const count = Array.isArray(appState.credits) ? appState.credits.length : 0;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
         promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('سيتم حذف كل سجلات الكريدي (' + count + ' سجل) نهائيا.\nهل أنت متأكد؟', function() {
-                appState.credits = []; window.appState.credits = [];
-                const searchInput = document.getElementById('creditSearchInput');
-                if (searchInput) searchInput.value = '';
-                saveState(); renderCreditsList();
-                showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
-            }, { title: 'حذف كل الكريدي', confirmText: 'نعم، حذف الكل' });
+            appState.credits = []; window.appState.credits = [];
+            const searchInput = document.getElementById('creditSearchInput');
+            if (searchInput) searchInput.value = '';
+            saveState(); renderCreditsList();
+            showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
         });
     } window.deleteAllCredits = deleteAllCredits;
     function renderCreditsList() { const container = document.getElementById('creditsList');
@@ -4747,6 +4817,12 @@ window.setElemRequired = setElemRequired;
             return false; } if (isNaN(amount) || amount <= 0 || amount > 100000000) {
             showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0');
             return false; }
+        const oldCredit = appState.credits[index];
+        const oldName = oldCredit ? (oldCredit.name || '') : '';
+        const oldAmount = oldCredit ? (Number(oldCredit.amount) || 0) : 0;
+        const oldPhone = oldCredit ? (oldCredit.phone || '') : '';
+        const oldDesc = oldCredit ? (oldCredit.desc || '') : '';
+
         const updatedCredit = {
             ...appState.credits[index], name,
             nickname, phone: cleanPhone(phone),
@@ -4756,26 +4832,38 @@ window.setElemRequired = setElemRequired;
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('credits', updatedCredit);
         }
+
+        const changes = [];
+        if (oldName !== name) changes.push(`الاسم: من "${oldName}" إلى "${name}"`);
+        if (oldAmount !== amount) changes.push(`المبلغ: من ${oldAmount.toLocaleString()} دج إلى ${amount.toLocaleString()} دج`);
+        if (oldPhone !== cleanPhone(phone)) changes.push(`الهاتف: من "${oldPhone || 'غير محدد'}" إلى "${phone || 'غير محدد'}"`);
+        if (oldDesc !== desc) changes.push(`الوصف: من "${oldDesc}" إلى "${desc}"`);
+
+        let detailMsg = `تعديل بيانات الكريدي (${name})`;
+        if (changes.length > 0) detailMsg += ` | ` + changes.join(' | ');
+
+        if (typeof logActivity === 'function') {
+            logActivity('credit', 'تعديل كريدي', detailMsg, amount);
+        }
+
         saveState(); closeModal('editCreditModal');
         showSuccessToast('تم تعديل الكريدي بنجاح');
         renderCreditsList(); render(); // Update dashboard totals
         return false; } function deleteCredit(id) {
         if (!id) return; const targetId = String(id).trim();
         promptWithPassword({ title: 'حذف الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا الكريدي', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذا الكريدي نهائياً؟', function() {
-                if (!Array.isArray(appState.credits)) appState.credits = [];
-                const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
-                if (typeof logActivity === 'function') logActivity('credit', 'حذف كريدي', `حذف سجل الكريدي الخاص بـ: ${targetCredit ? targetCredit.name : targetId}`);
-                // Delete matching credit
-                appState.credits = appState.credits.filter(c => {
-                    if (!c) return false; return String(c.id).trim() !== targetId;
-                }); window.appState.credits = appState.credits;
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('credits', targetId);
-                }
-                saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
-                renderCreditsList(); render(); // Update dashboard totals
-            }, { title: 'حذف الكريدي', confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.credits)) appState.credits = [];
+            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
+            if (typeof logActivity === 'function') logActivity('credit', 'حذف كريدي', `حذف سجل الكريدي الخاص بـ: ${targetCredit ? targetCredit.name : targetId}`);
+            // Delete matching credit
+            appState.credits = appState.credits.filter(c => {
+                if (!c) return false; return String(c.id).trim() !== targetId;
+            }); window.appState.credits = appState.credits;
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('credits', targetId);
+            }
+            saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
+            renderCreditsList(); render(); // Update dashboard totals
         }); } function deleteCreditFromModal() {
         const idElem = document.getElementById('editCreditId');
         const id = idElem ? idElem.value : null;
@@ -5370,10 +5458,13 @@ window.setElemRequired = setElemRequired;
            customer.status = 'active'; } else {
            customer.frozenRemainingDays = getRemainingDays(customer);
            customer.status = 'frozen'; }
-       saveState();
        if (window.saveFirebaseSectionItem) {
            window.saveFirebaseSectionItem('customers', customer);
        }
+       if (typeof logActivity === 'function') {
+           logActivity('customer', customer.status === 'frozen' ? 'تجميد حساب مشترك' : 'إلغاء تجميد مشترك', `${customer.status === 'frozen' ? 'تجميد' : 'إلغاء تجميد'} المشترك: ${customer.name}`);
+       }
+       saveState();
     } function getMsgTextForTemplate(type, c) {
         if (!c) return ''; const name = (c.name || 'المشترك').trim();
         const remDays = typeof getRemainingDays === 'function' ? getRemainingDays(c) : 0;
@@ -6210,26 +6301,24 @@ window.setElemRequired = setElemRequired;
     } window.getUniqueCoaches = getUniqueCoaches;
     function deleteSale(saleId) { if (!saleId) return;
         promptWithPassword({ title: 'إلغاء عملية البيع', prompt: 'أدخل كلمة المرور لتأكيد إلغاء عملية البيع واسترجاع الكمية للمخزون', buttonText: 'تأكيد الإلغاء' }, () => {
-            showAppConfirm('هل أنت متأكد من إلغاء/حذف عملية البيع هذه واسترجاع الكمية للمخزون؟', function() {
-                if (!appState.sales) return; const idx = appState.sales.findIndex(s => String(s && s.id) === String(saleId));
-                if (idx === -1) return; const sale = appState.sales[idx];
-                if (sale.prodId && appState.products) {
-                    const prod = appState.products.find(p => p.id === sale.prodId);
-                    if (prod) {
-                        prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
-                        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
-                    }
+            if (!appState.sales) return; const idx = appState.sales.findIndex(s => String(s && s.id) === String(saleId));
+            if (idx === -1) return; const sale = appState.sales[idx];
+            if (sale.prodId && appState.products) {
+                const prod = appState.products.find(p => p.id === sale.prodId);
+                if (prod) {
+                    prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
+                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                 }
-                if (typeof logActivity === 'function') logActivity('sale', 'إلغاء عملية بيع', `إلغاء البيع واسترجاع الكمية: ${sale ? sale.prodName || sale.name : saleId}`);
-                appState.sales.splice(idx, 1);
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('sales', saleId);
-                }
-                saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
-                render(); if (typeof updateFullReportSalesSection === 'function') {
-                    updateFullReportSalesSection();
-                } }, { title: 'إلغاء عملية البيع',
-                confirmText: 'نعم، إلغاء البيع' });
+            }
+            if (typeof logActivity === 'function') logActivity('sale', 'إلغاء عملية بيع', `إلغاء البيع واسترجاع الكمية: ${sale ? sale.prodName || sale.name : saleId}`);
+            appState.sales.splice(idx, 1);
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('sales', saleId);
+            }
+            saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
+            render(); if (typeof updateFullReportSalesSection === 'function') {
+                updateFullReportSalesSection();
+            }
         });
     } window.deleteSale = deleteSale; function getLocalDateString(dateInput) {
         if (!dateInput) return ''; const d = new Date(dateInput);
@@ -7050,20 +7139,17 @@ window.setElemRequired = setElemRequired;
         render(); } window.handleCaisseClotureSubmit = handleCaisseClotureSubmit;
     function deleteCaisseLog(logId) { if (!logId) return;
         promptWithPassword({ title: 'حذف سجل جرد الصندوق', prompt: 'أدخل كلمة المرور لتأكيد حذف سجل جرد الصندوق', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف سجل جرد الصندوق هذا؟', function() {
-                if (!Array.isArray(appState.caisseLogs)) return;
-                const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
-                if (idx === -1) return;
-                const logItem = appState.caisseLogs[idx];
-                if (typeof logActivity === 'function') logActivity('caisse', 'حذف سجل جرد الخزينة', `حذف سجل الجرد ليوم: ${logItem ? logItem.date : logId}`);
-                appState.caisseLogs.splice(idx, 1);
-                if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('caisseLogs', logId);
-                }
-                saveState(); showSuccessToast('تم حذف سجل جرد الصندوق');
-                renderCaisseView(); render(); }, {
-                title: 'حذف سجل جرد الصندوق',
-                confirmText: 'نعم، حذف' });
+            if (!Array.isArray(appState.caisseLogs)) return;
+            const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
+            if (idx === -1) return;
+            const logItem = appState.caisseLogs[idx];
+            if (typeof logActivity === 'function') logActivity('caisse', 'حذف سجل جرد الخزينة', `حذف سجل الجرد ليوم: ${logItem ? logItem.date : logId}`);
+            appState.caisseLogs.splice(idx, 1);
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('caisseLogs', logId);
+            }
+            saveState(); showSuccessToast('تم حذف سجل جرد الصندوق');
+            renderCaisseView(); render();
         });
     } window.deleteCaisseLog = deleteCaisseLog;
     function scrollToCaisseClotureForm(dateStr) {
@@ -8141,23 +8227,18 @@ window.setElemRequired = setElemRequired;
     window.deleteStaffPayout = function(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف هذه الدفعة المخصصة للعامل؟', function() {
-                if (!Array.isArray(appState.staffPayouts)) return;
-                const idx = appState.staffPayouts.findIndex(p => String(p.id) === String(id));
-                if (idx !== -1) {
-                    const pItem = appState.staffPayouts[idx];
-                    if (typeof logActivity === 'function') logActivity('payout', 'حذف خلاص عامل', `حذف الدفعة المخصصة لـ: ${pItem ? pItem.name : id}`);
-                    appState.staffPayouts.splice(idx, 1);
-                    if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
-                    saveState();
-                    showSuccessToast('تم حذف الدفعة بنجاح');
-                    renderStaffPayouts();
-                    render();
-                }
-            }, {
-                title: 'حذف خلاص عامل',
-                confirmText: 'نعم، حذف'
-            });
+            if (!Array.isArray(appState.staffPayouts)) return;
+            const idx = appState.staffPayouts.findIndex(p => String(p.id) === String(id));
+            if (idx !== -1) {
+                const pItem = appState.staffPayouts[idx];
+                if (typeof logActivity === 'function') logActivity('payout', 'حذف خلاص عامل', `حذف الدفعة المخصصة لـ: ${pItem ? pItem.name : id}`);
+                appState.staffPayouts.splice(idx, 1);
+                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
+                saveState();
+                showSuccessToast('تم حذف الدفعة بنجاح');
+                renderStaffPayouts();
+                render();
+            }
         });
     };
 
@@ -8339,21 +8420,16 @@ window.setElemRequired = setElemRequired;
     window.deleteSupplierTransaction = function(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
-            showAppConfirm('هل أنت متأكد من حذف معاملة المورد هذه؟', function() {
-                if (!Array.isArray(appState.supplierTransactions)) return;
-                const idx = appState.supplierTransactions.findIndex(tx => String(tx.id) === String(id));
-                if (idx !== -1) {
-                    appState.supplierTransactions.splice(idx, 1);
-                    if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('supplierTransactions', id);
-                    saveState();
-                    showSuccessToast('تم حذف معاملة المورد بنجاح');
-                    renderSuppliersList();
-                    render();
-                }
-            }, {
-                title: 'حذف معاملة مورد',
-                confirmText: 'نعم، حذف'
-            });
+            if (!Array.isArray(appState.supplierTransactions)) return;
+            const idx = appState.supplierTransactions.findIndex(tx => String(tx.id) === String(id));
+            if (idx !== -1) {
+                appState.supplierTransactions.splice(idx, 1);
+                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('supplierTransactions', id);
+                saveState();
+                showSuccessToast('تم حذف معاملة المورد بنجاح');
+                renderSuppliersList();
+                render();
+            }
         });
     };
 
@@ -8435,103 +8511,6 @@ window.setElemRequired = setElemRequired;
 
     function ensureSeedActivityLogs() {
         if (!Array.isArray(appState.activityLogs)) appState.activityLogs = [];
-        if (appState.activityLogs.length > 0) return;
-
-        const seeded = [];
-        if (Array.isArray(appState.sales)) {
-            appState.sales.forEach(s => {
-                if (!s) return;
-                const d = s.date || s.createdAt || new Date().toISOString();
-                seeded.push({
-                    id: 'act_s_' + (s.id || Math.random()),
-                    timestamp: d,
-                    type: 'sale',
-                    title: 'عملية بيع منتج',
-                    details: `المنتج: ${s.prodName || s.name || 'منتج'} - الكمية: ${s.qty || 1}`,
-                    amount: Number(s.totalPrice || s.price || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-        if (Array.isArray(appState.expenses)) {
-            appState.expenses.forEach(e => {
-                if (!e) return;
-                const d = e.date || new Date().toISOString();
-                seeded.push({
-                    id: 'act_e_' + (e.id || Math.random()),
-                    timestamp: d,
-                    type: 'expense',
-                    title: 'تسجيل مصروف',
-                    details: `البيان: ${e.desc || 'مصروف'} - الفئة: ${e.category || 'عام'}`,
-                    amount: Number(e.amount || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-        if (Array.isArray(appState.credits)) {
-            appState.credits.forEach(c => {
-                if (!c) return;
-                const d = c.date || new Date().toISOString();
-                seeded.push({
-                    id: 'act_cr_' + (c.id || Math.random()),
-                    timestamp: d,
-                    type: 'credit',
-                    title: 'تسجيل دين / كريدي',
-                    details: `الاسم: ${c.name || 'عميل'} - ${c.desc || ''}`,
-                    amount: Number(c.amount || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-        if (Array.isArray(appState.customers)) {
-            appState.customers.forEach(cust => {
-                if (!cust) return;
-                const d = cust.startDate || new Date().toISOString();
-                seeded.push({
-                    id: 'act_cust_' + (cust.id || Math.random()),
-                    timestamp: d,
-                    type: 'customer',
-                    title: 'اشتراك مشترك',
-                    details: `المشترك: ${cust.name || ''} - الهاتف: ${cust.phone || ''}`,
-                    amount: Number(cust.price || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-        if (Array.isArray(appState.staffPayouts)) {
-            appState.staffPayouts.forEach(p => {
-                if (!p) return;
-                const d = p.date || new Date().toISOString();
-                seeded.push({
-                    id: 'act_p_' + (p.id || Math.random()),
-                    timestamp: d,
-                    type: 'payout',
-                    title: 'تسجيل خلاص عامل',
-                    details: `العامل: ${p.name || ''} - النوع: ${p.type || 'خلاص'}`,
-                    amount: Number(p.amount || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-        if (Array.isArray(appState.caisseLogs)) {
-            appState.caisseLogs.forEach(l => {
-                if (!l) return;
-                const d = l.date || new Date().toISOString();
-                seeded.push({
-                    id: 'act_l_' + (l.id || Math.random()),
-                    timestamp: d,
-                    type: 'caisse',
-                    title: 'جرد إغلاق الخزينة',
-                    details: `المبلغ الفعلي: ${Number(l.actualAmount || 0).toLocaleString()} دج`,
-                    amount: Number(l.actualAmount || 0),
-                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
-                });
-            });
-        }
-
-        seeded.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-        appState.activityLogs = seeded;
-        saveState();
     }
     window.ensureSeedActivityLogs = ensureSeedActivityLogs;
 
@@ -8544,6 +8523,147 @@ window.setElemRequired = setElemRequired;
         }
     }
     window.openActivityLogModal = openActivityLogModal;
+
+    function getFieldIcon(name) {
+        if (!name) return '📝';
+        if (name.includes('الاسم')) return '👤';
+        if (name.includes('الهاتف')) return '📞';
+        if (name.includes('الباقة')) return '📦';
+        if (name.includes('السعر') || name.includes('المبلغ') || name.includes('التكلفة')) return '💰';
+        if (name.includes('الدين') || name.includes('الكريدي')) return '💳';
+        if (name.includes('نوع الاشتراك')) return '🏷️';
+        if (name.includes('الحصص')) return '🔢';
+        if (name.includes('الانتهاء') || name.includes('التاريخ')) return '⏳';
+        if (name.includes('الوزن')) return '🏋️';
+        if (name.includes('الكمية') || name.includes('المخزون')) return '📦';
+        if (name.includes('المدفوع')) return '💵';
+        if (name.includes('السلع')) return '🛒';
+        return '✏️';
+    }
+
+    function toggleActivityLogDetail(id) {
+        const detailEl = document.getElementById('log_detail_' + id);
+        const arrowEl = document.getElementById('log_arrow_' + id);
+        if (!detailEl) return;
+        if (detailEl.classList.contains('hidden')) {
+            detailEl.classList.remove('hidden');
+            if (arrowEl) arrowEl.classList.add('rotate-180');
+        } else {
+            detailEl.classList.add('hidden');
+            if (arrowEl) arrowEl.classList.remove('rotate-180');
+        }
+    }
+    window.toggleActivityLogDetail = toggleActivityLogDetail;
+
+    function parseDiffItem(diff) {
+        let fieldName = 'التعديل';
+        let rawValue = diff ? String(diff).trim() : '';
+        
+        if (rawValue.includes(': ')) {
+            const idx = rawValue.indexOf(': ');
+            fieldName = rawValue.substring(0, idx).trim();
+            rawValue = rawValue.substring(idx + 2).trim();
+        } else if (rawValue.includes(':')) {
+            const idx = rawValue.indexOf(':');
+            fieldName = rawValue.substring(0, idx).trim();
+            rawValue = rawValue.substring(idx + 1).trim();
+        }
+
+        let beforeVal = '--';
+        let afterVal = rawValue;
+
+        if (rawValue.includes('من ') && rawValue.includes(' إلى ')) {
+            const fromIdx = rawValue.indexOf('من ');
+            const toIdx = rawValue.indexOf(' إلى ');
+            
+            let rawBefore = rawValue.substring(fromIdx + 3, toIdx).trim();
+            let rawAfter = rawValue.substring(toIdx + 5).trim();
+
+            if (rawBefore.startsWith('"') && rawBefore.endsWith('"') && rawBefore.length >= 2) {
+                rawBefore = rawBefore.slice(1, -1);
+            }
+            if (rawAfter.startsWith('"') && rawAfter.endsWith('"') && rawAfter.length >= 2) {
+                rawAfter = rawAfter.slice(1, -1);
+            }
+
+            beforeVal = rawBefore || 'غير محدد';
+            afterVal = rawAfter || 'غير محدد';
+        } else if (rawValue.startsWith('إلى ')) {
+            beforeVal = 'سابقاً';
+            afterVal = rawValue.substring(4).trim();
+        }
+
+        return { fieldName, beforeVal, afterVal, rawValue };
+    }
+
+    function formatActivityDetailsHtml(detailsText, itemId) {
+        if (!detailsText) return '';
+        const safeText = escapeHTML(detailsText);
+        const safeId = escapeHTML(itemId || 'item_' + Math.random().toString(36).substr(2, 6));
+        
+        if (safeText.includes(' | ')) {
+            const parts = safeText.split(' | ');
+            const mainSummary = parts[0];
+            const diffs = parts.slice(1);
+            
+            const badgeList = diffs.map(diff => {
+                const parsed = parseDiffItem(diff);
+                const icon = getFieldIcon(parsed.fieldName);
+                return `
+                    <span class="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-xl border bg-blue-50 text-blue-950 border-blue-200 shadow-2xs">
+                        <span>${icon} <strong>${escapeHTML(parsed.fieldName)}:</strong></span>
+                        <span class="text-slate-400 line-through text-[10px]">${escapeHTML(parsed.beforeVal)}</span>
+                        <span class="text-blue-600 font-extrabold text-xs">⬅️</span>
+                        <span class="text-blue-900 font-black">${escapeHTML(parsed.afterVal)}</span>
+                    </span>
+                `;
+            }).join(' ');
+
+            const rowsHtml = diffs.map(diff => {
+                const parsed = parseDiffItem(diff);
+                const icon = getFieldIcon(parsed.fieldName);
+
+                return `
+                    <div class="flex items-center justify-between gap-2 p-2.5 bg-white rounded-xl border border-blue-100 shadow-2xs hover:border-blue-300 transition-colors">
+                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 text-blue-900 font-black text-xs">
+                            <span>${icon}</span>
+                            <span>${escapeHTML(parsed.fieldName)}</span>
+                        </div>
+                        <div class="text-xs font-bold text-slate-800 text-right dir-rtl flex-1 leading-normal overflow-x-auto">
+                            <span class="text-slate-500 font-medium">من</span>
+                            <span class="font-extrabold text-slate-700 mx-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">${escapeHTML(parsed.beforeVal)}</span>
+                            <span class="text-blue-700 font-black mx-1">إلى</span>
+                            <span class="font-black text-blue-900 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200/80">${escapeHTML(parsed.afterVal)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="mt-1 space-y-1">
+                    <p class="text-xs font-extrabold text-slate-800 leading-normal">${mainSummary}</p>
+                    <div class="flex flex-wrap gap-1 mt-1">${badgeList}</div>
+
+                    <button type="button" onclick="event.stopPropagation(); toggleActivityLogDetail('${safeId}')" class="mt-2 text-xs font-black text-blue-600 hover:text-blue-800 flex items-center gap-1.5 py-1 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all border border-blue-200 shadow-2xs cursor-pointer">
+                        <span>🔍 اضغط لرؤية تفاصيل التغييرات (من ⬅️ إلى) (${diffs.length})</span>
+                        <svg id="log_arrow_${safeId}" class="w-3.5 h-3.5 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+
+                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-slate-50/90 border border-slate-200/90 rounded-2xl space-y-2 shadow-inner">
+                        <div class="text-[11px] font-black text-slate-600 border-b border-slate-200 pb-1.5 flex items-center justify-between">
+                            <span>التعديلات المنجزة (من ⬅️ إلى بالعربية):</span>
+                            <span class="text-blue-700 font-extrabold">${diffs.length} حقول</span>
+                        </div>
+                        <div class="space-y-1.5 mt-2">
+                            ${rowsHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        return `<p class="text-xs text-slate-600 font-medium leading-normal mt-0.5">${safeText}</p>`;
+    }
 
     function renderActivityLogModal() {
         const container = document.getElementById('activityLogList');
@@ -8582,7 +8702,7 @@ window.setElemRequired = setElemRequired;
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     </div>
                     <p class="text-sm font-bold text-slate-700">لا توجد عمليات مسجلة في السجل</p>
-                    <p class="text-xs text-slate-400 mt-1">سيتم تسجيل كافة التحركات المالية والاشتراكات هنا تلقائياً</p>
+                    <p class="text-xs text-slate-400 mt-1">سيتم تسجيل كافة التحركات المالية والاشتراكات والتعديلات هنا تلقائياً</p>
                 </div>
             `;
             return;
@@ -8613,24 +8733,24 @@ window.setElemRequired = setElemRequired;
                 : '';
 
             return `
-            <div class="flex items-center justify-between p-3.5 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all gap-3">
-                <div class="flex items-center gap-3 min-w-0 flex-1">
-                    <div class="w-10 h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-base shrink-0">
+            <div class="flex items-start justify-between p-3.5 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all gap-3">
+                <div class="flex items-start gap-3 min-w-0 flex-1">
+                    <div class="w-10 h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-base shrink-0 mt-0.5">
                         ${cfg.icon}
                     </div>
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-2 flex-wrap mb-0.5">
                             <span class="px-2 py-0.5 rounded-md text-[10px] font-black ${cfg.color} border">${cfg.label}</span>
-                            <h4 class="font-bold text-slate-800 text-xs sm:text-sm truncate">${escapeHTML(item.title || '')}</h4>
+                            <h4 class="font-bold text-slate-800 text-xs sm:text-sm">${escapeHTML(item.title || '')}</h4>
                         </div>
-                        <p class="text-xs text-slate-600 font-medium truncate">${escapeHTML(item.details || '')}</p>
-                        <span class="text-[10px] text-slate-400 font-bold block mt-1">${formattedDate}</span>
+                        ${formatActivityDetailsHtml(item.details || '', safeId)}
+                        <span class="text-[10px] text-slate-400 font-bold block mt-1.5">${formattedDate}</span>
                     </div>
                 </div>
 
                 <div class="flex items-center gap-2 shrink-0">
                     ${amtBadge}
-                    <button type="button" onclick="deleteActivityLog('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
+                    <button type="button" onclick="event.stopPropagation(); deleteActivityLog('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                     </button>
                 </div>
@@ -8654,12 +8774,29 @@ window.setElemRequired = setElemRequired;
         });
     }
     window.deleteActivityLog = deleteActivityLog;
+
+    function clearAllActivityLogs() {
+        promptWithPassword({ title: 'إفراغ سجل العمليات', prompt: 'أدخل كلمة المرور لتأكيد إفراغ سجل العمليات بالكامل', buttonText: 'تأكيد الإفراغ' }, () => {
+            appState.activityLogs = [];
+            window.appState.activityLogs = [];
+            if (window.firebaseDB && window.firebaseRef && window.firebaseRemove) {
+                try {
+                    window.firebaseRemove(window.firebaseRef(window.firebaseDB, 'v2/activityLogs'));
+                } catch(e) {}
+            }
+            saveState();
+            showSuccessToast('تم إفراغ سجل العمليات بالكامل بنجاح');
+            renderActivityLogModal();
+        });
+    }
+    window.clearAllActivityLogs = clearAllActivityLogs;
+
     setupGlobalInputSecurity(); render(); if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
