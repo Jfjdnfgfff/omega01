@@ -4753,14 +4753,65 @@ window.setElemRequired = setElemRequired;
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
+    function setSellUnitMode(mode) {
+        const hiddenInput = document.getElementById('sellUnitModeInput');
+        if (hiddenInput) hiddenInput.value = mode;
+        const doseBtn = document.getElementById('sellModeDosesBtn');
+        const countBtn = document.getElementById('sellModeCountBtn');
+        if (doseBtn && countBtn) {
+            if (mode === 'doses') {
+                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
+                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
+            } else {
+                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
+                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
+            }
+        }
+        if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
+    }
+    window.setSellUnitMode = setSellUnitMode;
+
     function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
         const stockInfo = document.getElementById('stockInfo');
         if (!stockInfo) return; const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
+        const modeWrapper = document.getElementById('sellModeWrapper');
+        const modeInput = document.getElementById('sellUnitModeInput');
         if (!product) { stockInfo.classList.add('hidden');
+            if (modeWrapper) modeWrapper.classList.add('hidden');
             return; } const qty = parseFloat(getElemVal('sellProdQty')) || 0;
         const currentStock = Number(product.stock || 0);
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-        const deduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+
+        if (weightVal && weightVal > 0) {
+            if (modeWrapper) modeWrapper.classList.remove('hidden');
+            const perDosePrice = (Number(product.price || 0) / weightVal).toFixed(2);
+            const doseBtn = document.getElementById('sellModeDosesBtn');
+            const countBtn = document.getElementById('sellModeCountBtn');
+            if (doseBtn) doseBtn.innerHTML = `<span>بالدوزة / الكيلو</span> <span class="text-[10px] opacity-90">(${perDosePrice} دج)</span>`;
+            if (countBtn) countBtn.innerHTML = `<span>بالعلبة / القطعة</span> <span class="text-[10px] opacity-90">(${product.price} دج)</span>`;
+        } else {
+            if (modeWrapper) modeWrapper.classList.add('hidden');
+        }
+
+        let sellMode = modeInput ? modeInput.value : 'doses';
+        if (!weightVal || weightVal <= 0) sellMode = 'count';
+
+        let deduction = qty;
+        let unitPrice = Number(product.price || 0);
+        let totalPrice = 0;
+
+        if (weightVal && weightVal > 0 && sellMode === 'doses') {
+            unitPrice = Number((product.price / weightVal).toFixed(2));
+            deduction = qty;
+            totalPrice = (unitPrice * qty).toFixed(2);
+        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
+            deduction = qty * weightVal;
+            totalPrice = (unitPrice * qty).toFixed(2);
+        } else {
+            deduction = qty;
+            totalPrice = (unitPrice * qty).toFixed(2);
+        }
+
         const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
         stockInfo.classList.remove('hidden'); if (isStock2) {
             stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border text-slate-800 bg-slate-100 border-slate-200`;
@@ -4774,15 +4825,17 @@ window.setElemRequired = setElemRequired;
             `; return; } const locName = 'Stock 1 (صالة البيع)';
         const locColor = 'text-blue-700 bg-blue-50 border-blue-200';
         stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
-        const totalPrice = (Number(product.price || 0) * qty).toFixed(2);
+        const modeText = (weightVal && weightVal > 0)
+            ? (sellMode === 'doses' ? ` (سعر الدوزة/الكيلو: ${unitPrice} دج)` : ` (سعر العلبة الكاملة: ${unitPrice} دج)`)
+            : '';
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong></span>
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong>${(weightVal && weightVal > 0) ? ` <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span>` : ''}</span>
-                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong></span>
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
+                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong>${modeText}</span>
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
@@ -4797,17 +4850,40 @@ window.setElemRequired = setElemRequired;
             return; } if (isNaN(qty) || qty <= 0) {
             showErrorToast('يرجى تحديد كمية صحيحة يدوياً');
             return; }
-        // Strictly calculate stock deduction using quantity multiplied by product measurement/weight if defined
-        const finalQty = qty; const isStock2 = product.stockLocation === 'stock2';
-        const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
+
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-        const stockDeduction = (weightVal && weightVal > 0) ? (finalQty * weightVal) : finalQty;
+        const modeInput = document.getElementById('sellUnitModeInput');
+        let sellMode = modeInput ? modeInput.value : 'doses';
+        if (!weightVal || weightVal <= 0) sellMode = 'count';
+
+        let stockDeduction = qty;
+        let salePrice = Number(product.price || 0);
+        let saleCost = Number(product.cost || 0);
+        let saleLabel = product.name;
+
+        if (weightVal && weightVal > 0 && sellMode === 'doses') {
+            salePrice = Number((salePrice / weightVal).toFixed(2));
+            saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
+            stockDeduction = qty;
+            saleLabel += ' (دوزة/كيلو)';
+        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
+            saleCost = saleCost * qty;
+            stockDeduction = qty * weightVal;
+            saleLabel += ' (علبة كاملة)';
+        } else {
+            saleCost = saleCost * qty;
+            stockDeduction = qty;
+        }
+
+        const isStock2 = product.stockLocation === 'stock2';
+        const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
+
         if (Number(product.stock || 0) < stockDeduction) {
             showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
-            return; } let salePrice = Number(product.price || 0);
-        let saleCost = Number(product.cost || 0) * finalQty;
-        let saleTotal = salePrice * finalQty;
-        let saleLabel = product.name; product.stock = Number(product.stock || 0) - stockDeduction;
+            return; }
+
+        let saleTotal = Number((salePrice * qty).toFixed(2));
+        let saleProfit = saleTotal - saleCost;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
         const dateVal = getElemVal('sellDate') || '';
@@ -4817,15 +4893,18 @@ window.setElemRequired = setElemRequired;
                 dateStr = !isNaN(dt.getTime()) ? dt.toISOString() : new Date().toISOString();
             } else { dateStr = new Date(dateVal).toISOString();
             } } else { dateStr = new Date().toISOString();
-        } const saleProfit = saleTotal - saleCost;
+        }
         const coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
         const prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
+
+        product.stock = Number(product.stock || 0) - stockDeduction;
+
         const newSale = { id: Date.now().toString(),
             prodId: product.id, prodName: saleLabel,
             category: prodCategory,
             stockLocation: product.stockLocation || 'stock1',
             stockName: isStock2 ? 'مخزون 2' : 'مخزون 1',
-            qty: finalQty,
+            qty: qty,
             stockDeduction: stockDeduction,
             price: salePrice,
             cost: saleCost, total: saleTotal,
@@ -4838,7 +4917,7 @@ window.setElemRequired = setElemRequired;
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
-        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${finalQty} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
+        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${qty} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
@@ -7060,7 +7139,29 @@ window.setElemRequired = setElemRequired;
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
             const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-            const stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+            const modeInput = document.getElementById('sellUnitModeInput');
+            let sellMode = modeInput ? modeInput.value : 'doses';
+            if (product.category === 'boxes') sellMode = 'count';
+            if (!weightVal || weightVal <= 0) sellMode = 'count';
+
+            let stockDeduction = qty;
+            let salePrice = Number(product.price || 0);
+            let saleCost = Number(product.cost || 0);
+            let unitLabel = '';
+
+            if (weightVal && weightVal > 0 && sellMode === 'doses') {
+                salePrice = Number((salePrice / weightVal).toFixed(2));
+                saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
+                stockDeduction = qty;
+                unitLabel = ' (دوزة/كيلو)';
+            } else if (weightVal && weightVal > 0 && sellMode === 'count') {
+                saleCost = saleCost * qty;
+                stockDeduction = qty * weightVal;
+                unitLabel = ' (علبة كاملة)';
+            } else {
+                saleCost = saleCost * qty;
+                stockDeduction = qty;
+            }
 
             if (currentStock < stockDeduction) {
                 showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
@@ -7085,13 +7186,11 @@ window.setElemRequired = setElemRequired;
                 }
             }
 
-            let salePrice = Number(product.price || 0);
-            let saleCost = Number(product.cost || 0) * qty;
-            let saleTotal = salePrice * qty;
+            let saleTotal = Number((salePrice * qty).toFixed(2));
             let saleProfit = saleTotal - saleCost;
             let coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
             let prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
-            let saleLabel = product.name;
+            let saleLabel = product.name + unitLabel;
 
             // Deduct quantity from stock
             product.stock = currentStock - stockDeduction;
@@ -7189,7 +7288,12 @@ window.setElemRequired = setElemRequired;
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
                     const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
-                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0) ? (chosenQty * weightValBarcode) : chosenQty;
+                    const modeInputBarcode = document.getElementById('sellUnitModeInput');
+                    let sellModeBarcode = modeInputBarcode ? modeInputBarcode.value : 'doses';
+                    if (prodStock1.category === 'boxes') sellModeBarcode = 'count';
+                    if (!weightValBarcode || weightValBarcode <= 0) sellModeBarcode = 'count';
+
+                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0 && sellModeBarcode === 'count') ? (chosenQty * weightValBarcode) : chosenQty;
 
                     if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
                         showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);

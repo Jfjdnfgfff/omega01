@@ -857,6 +857,22 @@
                                   <option value="">-- اختر المنتج يدوياً --</option>
                               </select>
                           </div>
+                          <!-- Sell Mode Selection (بالدوزة / الكيلو VS بالعلبة / القطعة) -->
+                          <div id="sellModeWrapper" class="p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2 hidden">
+                              <div class="flex items-center justify-between text-xs font-bold text-indigo-950">
+                                  <span>طريقة البيع والاحتساب:</span>
+                                  <span id="sellModeHelpBadge" class="text-[10px] text-blue-700 font-extrabold bg-white px-2 py-0.5 rounded-md border border-blue-200 shadow-2xs"></span>
+                              </div>
+                              <div class="grid grid-cols-2 gap-2">
+                                  <button type="button" id="sellModeDosesBtn" onclick="setSellUnitMode('doses')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer">
+                                      <span>بالدوزة / الكيلو</span>
+                                  </button>
+                                  <button type="button" id="sellModeCountBtn" onclick="setSellUnitMode('count')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer">
+                                      <span>بالعلبة / القطعة</span>
+                                  </button>
+                              </div>
+                              <input type="hidden" id="sellUnitModeInput" value="doses">
+                          </div>
                           <div id="stockInfo" class="text-xs text-blue-800 font-bold p-2.5 bg-blue-50/90 rounded-xl border border-blue-200 hidden">
                           </div>
                           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
