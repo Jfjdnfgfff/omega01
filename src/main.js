@@ -2471,7 +2471,327 @@ window.setElemRequired = setElemRequired;
             } if (typeof render === 'function') render();
         } catch (err) { console.error('Error in handleQuickSessionSubmit:', err);
             if (typeof showErrorToast === 'function') showErrorToast('حدث خطأ أثناء تسجيل اشتراك الحصة');
-        } return false; }; window.updateAddCustomerEndDate = function() {
+        } return false; };
+
+    // ==========================================
+    // قسم مستحقات مدربة الإناث (33% من المشتركين)
+    // ==========================================
+    window.openFemaleCoachModal = function() {
+        if (typeof window.openModal === 'function') {
+            window.openModal('femaleCoachModal');
+        } else {
+            const modal = document.getElementById('femaleCoachModal');
+            if (modal) modal.classList.add('active');
+        }
+        renderFemaleCoachModal();
+    };
+    window.openFemaleCommissionModal = window.openFemaleCoachModal;
+
+    window.renderFemaleCoachModal = function() {
+        if (!appState.customers) appState.customers = [];
+        if (!appState.staffPayouts) appState.staffPayouts = [];
+
+        const period = document.getElementById('femaleCommPeriod')?.value || 'month';
+        const paymentFilter = document.getElementById('femaleCommPaymentFilter')?.value || 'all';
+        const rate = parseFloat(document.getElementById('femaleCommPercent')?.value) || 33;
+        const searchQuery = (document.getElementById('femaleCommSearchInput')?.value || '').trim().toLowerCase();
+
+        const safeStr = (s) => (typeof escapeHTML === 'function' ? escapeHTML(s) : String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        // Filter female subscribers
+        const femaleSubs = appState.customers.filter(c => {
+            if (!c || c.gender !== 'female') return false;
+
+            // Date filtering
+            const subDateStr = c.startDate || (c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : null);
+            if (subDateStr) {
+                const cDate = new Date(subDateStr);
+                if (!isNaN(cDate.getTime())) {
+                    if (period === 'month' && (cDate.getMonth() !== currentMonth || cDate.getFullYear() !== currentYear)) return false;
+                    if (period === 'today' && cDate.toDateString() !== now.toDateString()) return false;
+                    if (period === 'year' && cDate.getFullYear() !== currentYear) return false;
+                }
+            }
+
+            // Payment status filtering
+            if (paymentFilter === 'paid' && c.paymentStatus !== 'paid') return false;
+            if (paymentFilter === 'credit' && c.paymentStatus !== 'credit') return false;
+
+            // Search query
+            if (searchQuery) {
+                const nameMatch = c.name && c.name.toLowerCase().includes(searchQuery);
+                const phoneMatch = c.phone && c.phone.includes(searchQuery);
+                if (!nameMatch && !phoneMatch) return false;
+            }
+
+            return true;
+        });
+
+        // Financial calculations
+        let totalFullPrice = 0;
+        let totalPaidRevenue = 0;
+        let totalCoachCommission = 0;
+
+        femaleSubs.forEach(c => {
+            const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+            const fullPrice = c.price !== undefined && c.price !== null ? Number(c.price) : (pkg && pkg.price ? Number(pkg.price) : 0);
+            const debt = c.paymentStatus === 'credit' ? (Number(c.debtAmount) || 0) : 0;
+            const paidAmount = Math.max(0, fullPrice - debt);
+            const comm = Math.round(paidAmount * (rate / 100));
+
+            totalFullPrice += fullPrice;
+            totalPaidRevenue += paidAmount;
+            totalCoachCommission += comm;
+        });
+
+        // Disbursed Payouts to Female Coach
+        const femalePayouts = appState.staffPayouts.filter(p => {
+            if (!p) return false;
+            const text = `${p.name || ''} ${p.staffName || ''} ${p.type || ''} ${p.notes || ''}`.toLowerCase();
+            return text.includes('إناث') || text.includes('اناث') || text.includes('أنثى') || text.includes('انثى') || text.includes('33%') || text.includes('مدربة');
+        });
+
+        let totalDisbursed = 0;
+        femalePayouts.forEach(p => {
+            if (p.date) {
+                const pDate = new Date(p.date);
+                if (!isNaN(pDate.getTime())) {
+                    if (period === 'month' && (pDate.getMonth() !== currentMonth || pDate.getFullYear() !== currentYear)) return;
+                    if (period === 'today' && pDate.toDateString() !== now.toDateString()) return;
+                    if (period === 'year' && pDate.getFullYear() !== currentYear) return;
+                }
+            }
+            totalDisbursed += Number(p.amount || 0);
+        });
+
+        const remainingBalance = Math.max(0, totalCoachCommission - totalDisbursed);
+
+        // Render Count Badge
+        const countBadge = document.getElementById('femaleCommSubCountBadge');
+        if (countBadge) countBadge.textContent = femaleSubs.length;
+
+        // Render Metric Cards
+        const cardsContainer = document.getElementById('femaleCommStatsCards');
+        if (cardsContainer) {
+            cardsContainer.innerHTML = `
+                <div class="bg-white border border-slate-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
+                    <span class="text-slate-500 text-[10px] sm:text-xs font-bold block">عدد المشتركات الإناث</span>
+                    <span class="text-lg sm:text-xl font-black text-purple-700 block">${femaleSubs.length} <span class="text-xs font-normal text-slate-500">مشتركة</span></span>
+                    <span class="text-[10px] text-slate-400 font-medium block">في هذه الفترة المختارة</span>
+                </div>
+                <div class="bg-white border border-slate-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
+                    <span class="text-slate-500 text-[10px] sm:text-xs font-bold block">المداخيل المقبوضة (الإناث)</span>
+                    <span class="text-lg sm:text-xl font-black text-slate-800 block">${totalPaidRevenue.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span></span>
+                    <span class="text-[10px] text-slate-400 font-medium block">إجمالي الاشتراكات: ${totalFullPrice.toLocaleString()} دج</span>
+                </div>
+                <div class="bg-purple-50 border border-purple-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
+                    <span class="text-purple-900 text-[10px] sm:text-xs font-bold block">مستحقات المدربة (${rate}%)</span>
+                    <span class="text-lg sm:text-xl font-black text-purple-700 block">${totalCoachCommission.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span></span>
+                    <span class="text-[10px] text-purple-600 font-medium block">محسوبة من المبلغ المدفوع</span>
+                </div>
+                <div class="bg-gradient-to-br from-amber-500 to-amber-600 text-white p-3.5 rounded-2xl shadow-xs space-y-1">
+                    <span class="text-amber-100 text-[10px] sm:text-xs font-bold block">المستحقات المتبقية غير المسددة</span>
+                    <span class="text-lg sm:text-xl font-black text-white block">${remainingBalance.toLocaleString()} <span class="text-xs font-normal text-amber-100">دج</span></span>
+                    <span class="text-[10px] text-amber-100 font-medium block">${totalDisbursed > 0 ? `تم تسديد ${totalDisbursed.toLocaleString()} دج سابقاً` : 'لم يتم التسديد بعد'}</span>
+                </div>
+            `;
+        }
+
+        // Auto pre-fill Payout Input if empty or unmodified
+        const payoutInput = document.getElementById('femalePayoutAmountInput');
+        if (payoutInput && (!payoutInput.value || payoutInput.dataset.autoFilled === 'true')) {
+            payoutInput.value = remainingBalance > 0 ? remainingBalance : '';
+            payoutInput.dataset.autoFilled = 'true';
+        }
+
+        // Render Table Rows
+        const tbody = document.getElementById('femaleCommSubscribersTable');
+        if (tbody) {
+            if (femaleSubs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="p-8 text-center text-slate-400 font-bold text-xs bg-slate-50/50">
+                            لا توجد مشتركات إناث مسجلة في هذه الفترة أو تطابق شروط البحث
+                        </td>
+                    </tr>
+                `;
+            } else {
+                tbody.innerHTML = femaleSubs.map(c => {
+                    const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+                    const pkgName = pkg ? pkg.name : 'اشتراك عام';
+                    const fullPrice = c.price !== undefined && c.price !== null ? Number(c.price) : (pkg && pkg.price ? Number(pkg.price) : 0);
+                    const debt = c.paymentStatus === 'credit' ? (Number(c.debtAmount) || 0) : 0;
+                    const paidAmount = Math.max(0, fullPrice - debt);
+                    const comm = Math.round(paidAmount * (rate / 100));
+
+                    const dateStr = c.startDate || (c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : 'غير محدد');
+
+                    return `
+                        <tr class="hover:bg-purple-50/30 transition-colors">
+                            <td class="p-3 font-bold text-slate-900 flex items-center gap-2">
+                                <div class="w-7 h-7 rounded-full bg-purple-100 text-purple-700 font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                                    ${c.name ? safeStr(c.name.charAt(0)) : '؟'}
+                                </div>
+                                <span>${safeStr(c.name || 'بدون اسم')}</span>
+                            </td>
+                            <td class="p-3 font-semibold text-slate-700">${safeStr(pkgName)}</td>
+                            <td class="p-3 font-bold text-slate-800">${fullPrice.toLocaleString()} دج</td>
+                            <td class="p-3">
+                                ${c.paymentStatus === 'paid'
+                                    ? `<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md font-bold text-[10px]">مسدد بالكامل (${paidAmount.toLocaleString()} دج)</span>`
+                                    : `<span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-md font-bold text-[10px]">مسدد ${paidAmount.toLocaleString()} دج (متبقي كريدي ${debt.toLocaleString()} دج)</span>`
+                                }
+                            </td>
+                            <td class="p-3 font-black text-purple-700 bg-purple-50/50">${comm.toLocaleString()} دج</td>
+                            <td class="p-3 text-slate-500 text-[11px] font-mono">${dateStr}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        // Render Payouts History List
+        const historyContainer = document.getElementById('femaleCoachPayoutsHistory');
+        if (historyContainer) {
+            if (femalePayouts.length === 0) {
+                historyContainer.innerHTML = `
+                    <div class="text-center py-4 text-slate-400 text-xs font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                        لا توجد خلاصات مسجلة سابقاً لمدربة الإناث
+                    </div>
+                `;
+            } else {
+                historyContainer.innerHTML = femalePayouts.map(p => `
+                    <div class="flex items-center justify-between p-2.5 bg-white border border-slate-200/90 rounded-xl text-xs font-bold shadow-2xs hover:border-purple-300 transition-all">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="w-2 h-2 rounded-full bg-purple-600 shrink-0"></span>
+                            <span class="text-slate-900 font-black">${safeStr(p.name || 'مدربة الإناث')}</span>
+                            <span class="text-slate-500 font-medium text-[11px]">${safeStr(p.notes || p.type || '')}</span>
+                            <span class="text-slate-400 font-mono text-[10px]">(${p.date || 'اليوم'})</span>
+                        </div>
+                        <div class="flex items-center gap-3 shrink-0">
+                            <span class="text-purple-700 font-black">${Number(p.amount || 0).toLocaleString()} دج</span>
+                            <button type="button" onclick="deleteStaffPayout('${p.id}')" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded-lg transition-colors cursor-pointer" title="حذف هذه الدفعة">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+    };
+
+    window.submitFemaleCoachPayout = function() {
+        const amountInput = document.getElementById('femalePayoutAmountInput');
+        const notesInput = document.getElementById('femalePayoutNotesInput');
+        const nameInput = document.getElementById('femaleCoachNameInput');
+
+        const amount = parseFloat(amountInput ? amountInput.value : 0);
+        const notes = notesInput ? notesInput.value.trim() : '';
+        const name = (nameInput ? nameInput.value.trim() : '') || 'مدربة الإناث (33%)';
+
+        if (!amount || amount <= 0) {
+            if (typeof showErrorToast === 'function') showErrorToast('يرجى إدخال مبلغ خلاص صحيح أكبر من الصفر');
+            if (amountInput) amountInput.focus();
+            return;
+        }
+
+        if (!Array.isArray(appState.staffPayouts)) appState.staffPayouts = [];
+
+        const newPayout = {
+            id: 'payout_female_' + Date.now().toString(),
+            name: name,
+            staffName: name,
+            type: 'عمولة الإناث (33%)',
+            amount: amount,
+            date: typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0],
+            notes: notes || 'تسديد مستحقات قسم الإناث (33%)',
+            createdAt: new Date().toISOString()
+        };
+
+        appState.staffPayouts.unshift(newPayout);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('staffPayouts', newPayout);
+        }
+        if (typeof logActivity === 'function') {
+            logActivity('payout', 'تسديد مستحقات مدربة الإناث', `الاسم: ${name} - المبلغ: ${amount} دج`, amount);
+        }
+
+        saveState();
+        if (typeof showSuccessToast === 'function') {
+            showSuccessToast(`تم تسديد مبلغ ${amount.toLocaleString()} دج للمدربة (${name}) وتسجيله في الخلاصات والمصاريف بنجاح`);
+        }
+
+        if (amountInput) {
+            amountInput.value = '';
+            amountInput.dataset.autoFilled = 'false';
+        }
+        if (notesInput) notesInput.value = '';
+
+        renderFemaleCoachModal();
+        if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+        if (typeof render === 'function') render();
+    };
+
+    window.payFemaleCoachShare = function() {
+        if (typeof window.submitFemaleCoachPayout === 'function') {
+            window.submitFemaleCoachPayout();
+        }
+    };
+
+    window.printFemaleCoachReport = function() {
+        const periodSelect = document.getElementById('femaleCommPeriod');
+        const periodText = periodSelect ? periodSelect.options[periodSelect.selectedIndex]?.text || 'الشهر الحالي' : 'الشهر الحالي';
+        const subCount = document.getElementById('femaleCommSubCountBadge')?.textContent || '0';
+        const tableHtml = document.getElementById('femaleCommSubscribersTable')?.innerHTML || '';
+
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) return;
+
+        printWindow.document.write(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <head>
+                <title>تقرير مستحقات مدربة الإناث (33%)</title>
+                <style>
+                    body { font-family: system-ui, -apple-system, sans-serif; padding: 25px; direction: rtl; color: #1e293b; }
+                    h1 { color: #581c87; margin-bottom: 5px; font-size: 22px; }
+                    .sub { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+                    table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+                    th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: right; font-size: 12px; }
+                    th { background-color: #faf5ff; color: #581c87; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <h1>تقرير مستحقات مدربة الإناث (33%)</h1>
+                <div class="sub">الفترة: ${periodText} | عدد المشتركات: ${subCount} | تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-DZ')}</div>
+                <h3>قائمة المشتركات وحساب النسبة:</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>المشتركة</th>
+                            <th>الباقة / نوع الاشتراك</th>
+                            <th>سعر الاشتراك</th>
+                            <th>المبلغ المدفوع</th>
+                            <th>حصة المدربة (33%)</th>
+                            <th>تاريخ الاشتراك</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableHtml}
+                    </tbody>
+                </table>
+                <script>window.onload = () => { window.print(); };</script>
+            </body>
+            </html>
+        `);
+        printWindow.document.close();
+    };
+
+    window.updateAddCustomerEndDate = function() {
         const startDateInput = document.getElementById('addCustStartDate');
         const endDateInput = document.getElementById('addCustEndDate');
         const packageSelect = document.getElementById('packageIdView');
@@ -3943,14 +4263,34 @@ window.setElemRequired = setElemRequired;
                             window.saveFirebaseSectionItem('products', newProduct);
                         } }
                     showSuccessToast(`تم إضافة المنتج إلى ${stockLocationVal === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)'} بنجاح`);
-                } } saveState(); formEl.reset();
-            if (document.getElementById('prodStock1')) setElemValue('prodStock1', '');
-            if (document.getElementById('prodStock2')) setElemValue('prodStock2', '');
-            if (document.getElementById('prodStock')) setElemValue('prodStock', '');
-            if (document.getElementById('prodExpiryDate')) setElemValue('prodExpiryDate', '');
-            if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
-            handleProdStockLocationChange(); if (typeof removeProductImage === 'function') {
-                removeProductImage(); } }); });
+                } }
+                saveState();
+                const savedExpInfo = getProductExpiryInfo({ expiryDate: expiryDateVal });
+                formEl.reset();
+                if (document.getElementById('prodStock1')) setElemValue('prodStock1', '');
+                if (document.getElementById('prodStock2')) setElemValue('prodStock2', '');
+                if (document.getElementById('prodStock')) setElemValue('prodStock', '');
+                if (document.getElementById('prodExpiryDate')) setElemValue('prodExpiryDate', '');
+                if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
+                handleProdStockLocationChange();
+                if (typeof removeProductImage === 'function') {
+                    removeProductImage();
+                }
+                if (savedExpInfo.hasExpiry && savedExpInfo.isNearExpiry) {
+                    if (typeof setStockFilter === 'function') {
+                        setStockFilter('near_expiry');
+                    }
+                    if (savedExpInfo.isExpired) {
+                        showSuccessToast(`⚠️ تم حفظ المنتج ونقله تلقائياً إلى قائمة [قريبة الانتهاء] (منتهي الصلاحية منذ ${Math.abs(savedExpInfo.diffDays)} يوم)`);
+                    } else {
+                        const approxMonths = Math.max(1, Math.ceil(savedExpInfo.daysLeft / 30));
+                        showSuccessToast(`⚡ تم حفظ المنتج وتوجيهه تلقائياً إلى قائمة [قريبة الانتهاء] (متبقي ${savedExpInfo.daysLeft} يوم ~${approxMonths} أشهر)`);
+                    }
+                } else {
+                    if (typeof renderProductsList === 'function') renderProductsList();
+                    if (typeof render === 'function') render();
+                }
+            }); });
     function editProduct(id) { const p = appState.products.find(p => p.id === id);
         if(!p) return; setElemValue('prodBarcode', p.barcode || '');
         setElemValue('prodName', p.name || '');
@@ -4416,7 +4756,9 @@ window.setElemRequired = setElemRequired;
         if (!product) { stockInfo.classList.add('hidden');
             return; } const qty = parseFloat(getElemVal('sellProdQty')) || 0;
         const currentStock = Number(product.stock || 0);
-        const rem = currentStock - qty; const isStock2 = product.stockLocation === 'stock2';
+        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
+        const deduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+        const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
         stockInfo.classList.remove('hidden'); if (isStock2) {
             stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border text-slate-800 bg-slate-100 border-slate-200`;
             stockInfo.innerHTML = `
@@ -4436,7 +4778,7 @@ window.setElemRequired = setElemRequired;
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong></span>
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong>${(weightVal && weightVal > 0) ? ` <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span>` : ''}</span>
                 <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong></span>
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
@@ -4452,15 +4794,17 @@ window.setElemRequired = setElemRequired;
             return; } if (isNaN(qty) || qty <= 0) {
             showErrorToast('يرجى تحديد كمية صحيحة يدوياً');
             return; }
-        // Strictly use the manual quantity entered by the user
+        // Strictly calculate stock deduction using quantity multiplied by product measurement/weight if defined
         const finalQty = qty; const isStock2 = product.stockLocation === 'stock2';
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
-        if (Number(product.stock || 0) < finalQty) {
-            showErrorToast(`الكمية المطلوبة (${finalQty}) أكبر من المتوفر في ${stockLocName} (${product.stock || 0})!`);
+        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
+        const stockDeduction = (weightVal && weightVal > 0) ? (finalQty * weightVal) : finalQty;
+        if (Number(product.stock || 0) < stockDeduction) {
+            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
             return; } let salePrice = Number(product.price || 0);
         let saleCost = Number(product.cost || 0) * finalQty;
         let saleTotal = salePrice * finalQty;
-        let saleLabel = product.name; product.stock = Number(product.stock || 0) - finalQty;
+        let saleLabel = product.name; product.stock = Number(product.stock || 0) - stockDeduction;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
         const dateVal = getElemVal('sellDate') || '';
@@ -4478,7 +4822,9 @@ window.setElemRequired = setElemRequired;
             category: prodCategory,
             stockLocation: product.stockLocation || 'stock1',
             stockName: isStock2 ? 'مخزون 2' : 'مخزون 1',
-            qty: finalQty, price: salePrice,
+            qty: finalQty,
+            stockDeduction: stockDeduction,
+            price: salePrice,
             cost: saleCost, total: saleTotal,
             profit: saleProfit, coachName: coachVal,
             coachCommission: coachCommission,
@@ -4489,12 +4835,12 @@ window.setElemRequired = setElemRequired;
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
-        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${finalQty} - المكان: ${stockLocName}`, total);
+        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${finalQty} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
         updateStockInfoDisplay();
-        showSuccessToast(`تم البيع بنجاح وخصم (${finalQty}) مباشرة من ${stockLocName}`);
+        showSuccessToast(`تم البيع بنجاح وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
         render(); }); function deleteCustomer(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
@@ -6710,8 +7056,11 @@ window.setElemRequired = setElemRequired;
             const coachInput = document.getElementById('sellCoachName');
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
-            if (currentStock < qty) {
-                showErrorToast(`الكمية المطلوبة (${qty}) غير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
+            const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
+            const stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+
+            if (currentStock < stockDeduction) {
+                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
                 return false;
             }
 
@@ -6742,7 +7091,7 @@ window.setElemRequired = setElemRequired;
             let saleLabel = product.name;
 
             // Deduct quantity from stock
-            product.stock = currentStock - qty;
+            product.stock = currentStock - stockDeduction;
 
             if (!appState.sales) appState.sales = [];
             const newSale = {
@@ -6753,6 +7102,7 @@ window.setElemRequired = setElemRequired;
                 stockLocation: product.stockLocation || 'stock1',
                 stockName: 'مخزون 1',
                 qty: qty,
+                stockDeduction: stockDeduction,
                 price: salePrice,
                 cost: saleCost,
                 total: saleTotal,
@@ -6770,11 +7120,11 @@ window.setElemRequired = setElemRequired;
             saveState();
 
             if (typeof logActivity === 'function') {
-                logActivity('sale', 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} - الإجمالي: ${saleTotal} دج`, saleTotal);
+                logActivity('sale', 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} (خصم مخزون: ${stockDeduction}) - الإجمالي: ${saleTotal} دج`, saleTotal);
             }
 
             playBeep();
-            showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] بنجاح بدون تأكيد! (المتبقي: ${product.stock})`);
+            showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] بنجاح بدون تأكيد! (خصم المخزون: ${stockDeduction} - المتبقي: ${product.stock})`);
 
             if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
             if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
@@ -6835,8 +7185,11 @@ window.setElemRequired = setElemRequired;
                     const qtyInput = document.getElementById('sellProdQty');
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
-                    if (Number(prodStock1.stock || 0) < chosenQty) {
-                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوبة للبيع (${chosenQty})!`);
+                    const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
+                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0) ? (chosenQty * weightValBarcode) : chosenQty;
+
+                    if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
+                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
                         await closeBarcodeCamera();
                         isProcessingBarcode = false;
                         return;
@@ -7114,26 +7467,61 @@ window.setElemRequired = setElemRequired;
     } window.closeBarcodeCamera = closeBarcodeCamera;
     window.openBarcodeCamera = openBarcodeCamera;
     window.restartBarcodeScanner = restartBarcodeScanner;
-    function getProductExpiryInfo(p) { if (!p || !p.expiryDate) {
+    function getProductExpiryInfo(p) {
+        if (!p) {
             return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
-        } try { const exp = new Date(p.expiryDate);
-            if (isNaN(exp.getTime())) { return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
-            } const today = new Date(); today.setHours(0, 0, 0, 0);
-            exp.setHours(0, 0, 0, 0); const diffTime = exp.getTime() - today.getTime();
+        }
+        const rawDate = p.expiryDate || p.expiry || p.expirationDate;
+        if (!rawDate) {
+            return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
+        }
+        try {
+            let dateStr = String(rawDate).trim();
+            // Handle YYYY-MM format by adding the last day of month or 1st
+            if (/^\d{4}-\d{2}$/.test(dateStr)) {
+                dateStr += '-01';
+            } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+                const parts = dateStr.split('/');
+                dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+                const parts = dateStr.split('-');
+                dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            }
+            const exp = new Date(dateStr);
+            if (isNaN(exp.getTime())) {
+                return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
+            }
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            exp.setHours(0, 0, 0, 0);
+            const diffTime = exp.getTime() - today.getTime();
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            // <= 90 days (approx 3 months) or already expired (diffDays <= 0)
-            const isNearExpiry = diffDays <= 90;
-            const isExpired = diffDays < 0; let label = '';
-            if (isExpired) { label = `منتهي الصلاحية منذ ${Math.abs(diffDays)} يوم (${p.expiryDate})`;
-            } else if (isNearExpiry) { label = `قارب على الانتهاء: باقي ${diffDays} يوم (${p.expiryDate})`;
-            } else { label = `تاريخ الصلاحية: ${p.expiryDate} (متبقي ${diffDays} يوم)`;
-            } return { hasExpiry: true,
+            
+            // <= 93 days (3 months / 90 days threshold) or already expired
+            const isNearExpiry = diffDays <= 93;
+            const isExpired = diffDays < 0;
+            let label = '';
+            if (isExpired) {
+                label = `منتهي الصلاحية منذ ${Math.abs(diffDays)} يوم (${rawDate})`;
+            } else if (isNearExpiry) {
+                const approxMonths = Math.max(1, Math.ceil(diffDays / 30));
+                label = `قارب على الانتهاء: متبقي ${diffDays} يوم (~${approxMonths} أشهر) (${rawDate})`;
+            } else {
+                label = `تاريخ الصلاحية: ${rawDate} (متبقي ${diffDays} يوم)`;
+            }
+            return {
+                hasExpiry: true,
                 isNearExpiry: isNearExpiry,
-                isExpired: isExpired, diffDays: diffDays,
+                isExpired: isExpired,
+                diffDays: diffDays,
                 daysLeft: Math.max(0, diffDays),
-                label: label }; } catch (e) {
+                label: label
+            };
+        } catch (e) {
             return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
-        } } window.getProductExpiryInfo = getProductExpiryInfo;
+        }
+    }
+    window.getProductExpiryInfo = getProductExpiryInfo;
     function setStockFilter(filter) { appState.productStockFilter = filter || 'all';
         const tabAll = document.getElementById('stockTabAll');
         const tab1 = document.getElementById('stockTab1');
@@ -7207,14 +7595,25 @@ window.setElemRequired = setElemRequired;
            const stockBadge = isStock2 ? `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200"><svg class="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 21h18M3 7v14M21 7v14M6 11h4M6 15h4M14 11h4M14 15h4M9 3l3 4 3-4"></path></svg><span>Stock 2</span></span>`
                : `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200"><svg class="w-3 h-3 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg><span>Stock 1</span></span>`;
            const expInfo = getProductExpiryInfo(p);
-           // Completely red icon / badge when nearing expiry (<= 3 months / 90 days or expired)
-           let expiryBadgeHtml = ''; if (expInfo.isNearExpiry) {
-               expiryBadgeHtml = `
-               <span class="inline-flex items-center gap-1 bg-slate-800 text-white px-2 py-0.5 rounded-md text-[10px] font-bold shadow-xs shrink-0" title="${expInfo.label}">
-                   <svg class="w-3 h-3 fill-white text-white shrink-0" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                   <span>${expInfo.isExpired ? 'منتهي الصلاحية' : `قارب على الانتهاء (${expInfo.daysLeft} يوم)`}</span>
-               </span>
-               `; }
+           let expiryBadgeHtml = '';
+           if (expInfo.isNearExpiry) {
+               if (expInfo.isExpired) {
+                   expiryBadgeHtml = `
+                   <span class="inline-flex items-center gap-1 bg-red-600 text-white px-2 py-0.5 rounded-md text-[10px] font-bold shadow-xs shrink-0" title="${expInfo.label}">
+                       <svg class="w-3 h-3 fill-white text-white shrink-0" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                       <span>منتهي الصلاحية</span>
+                   </span>
+                   `;
+               } else {
+                   const approxM = Math.max(1, Math.ceil(expInfo.daysLeft / 30));
+                   expiryBadgeHtml = `
+                   <span class="inline-flex items-center gap-1 bg-amber-500 text-white px-2 py-0.5 rounded-md text-[10px] font-bold shadow-xs shrink-0" title="${expInfo.label}">
+                       <svg class="w-3 h-3 fill-white text-white shrink-0" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                       <span>قارب على الانتهاء (${expInfo.daysLeft} يوم ~${approxM} شهر)</span>
+                   </span>
+                   `;
+               }
+           }
            const currentStock = Number(p.stock || 0);
            const isOutOfStock = currentStock <= 0;
            const isLowStock = currentStock < 5;
@@ -7300,7 +7699,9 @@ window.setElemRequired = setElemRequired;
             if (sale.prodId && appState.products) {
                 const prod = appState.products.find(p => p.id === sale.prodId);
                 if (prod) {
-                    prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
+                    const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(prod.weight) : null;
+                    const stockToRestore = Number(sale.stockDeduction) || ((weightVal && weightVal > 0) ? (Number(sale.qty || 1) * weightVal) : Number(sale.qty || 1));
+                    prod.stock = Number(prod.stock || 0) + stockToRestore;
                     if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                 }
             }
@@ -9876,7 +10277,7 @@ window.setElemRequired = setElemRequired;
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
