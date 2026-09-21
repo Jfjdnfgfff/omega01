@@ -249,69 +249,143 @@
     };
     return JSON.parse(JSON.stringify(payload));
   }
-  // Push State to Firebase Realtime Database with SDK & direct REST sync to all JSON paths
+  // Dedicated Section Update & Push Utility Functions using update / push / PATCH
+  window.updateFirebaseSection = async function(sectionPath, sectionData) {
+    let sdkOk = false;
+    let restOk = false;
+    if (window.firebaseDB && (window.firebaseUpdate || window.firebaseSet) && window.firebaseRef) {
+      try {
+        const updateFn = window.firebaseUpdate || window.firebaseSet;
+        await updateFn(window.firebaseRef(window.firebaseDB, sectionPath), sectionData);
+        sdkOk = true;
+      } catch (err) {
+        console.warn(`SDK update error for ${sectionPath}:`, err);
+      }
+    }
+    try {
+      const baseUrl = getRTDBUrl();
+      const res = await fetch(`${baseUrl}/${sectionPath}.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sectionData)
+      });
+      if (res.ok) restOk = true;
+    } catch (e) {
+      console.warn(`REST PATCH error for ${sectionPath}:`, e);
+    }
+    return sdkOk || restOk;
+  };
+
+  window.pushToFirebaseSection = async function(sectionPath, itemData) {
+    let sdkOk = false;
+    let restOk = false;
+    if (window.firebaseDB && window.firebasePush && window.firebaseRef) {
+      try {
+        await window.firebasePush(window.firebaseRef(window.firebaseDB, sectionPath), itemData);
+        sdkOk = true;
+      } catch (err) {
+        console.warn(`SDK push error for ${sectionPath}:`, err);
+      }
+    }
+    try {
+      const baseUrl = getRTDBUrl();
+      const res = await fetch(`${baseUrl}/${sectionPath}.json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(itemData)
+      });
+      if (res.ok) restOk = true;
+    } catch (e) {
+      console.warn(`REST POST error for ${sectionPath}:`, e);
+    }
+    return sdkOk || restOk;
+  };
+
+  // Push State to Firebase Realtime Database using UPDATE & PATCH (Dedicated section paths)
   window.pushFullStateToFirebase = async function(customState) {
     const payload = getCleanSyncPayload(customState);
     let rtdbSuccess = false; let restSuccess = false;
     let lastErrMsg = '';
-    // 1. Primary: Realtime Database SDK - save root and dedicated nodes
-    if (window.firebaseDB && window.firebaseSet && window.firebaseRef) {
-      try { await Promise.all([ window.firebaseSet(window.firebaseRef(window.firebaseDB, 'appState'), payload.appState),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'customers'), payload.customers),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'products'), payload.products),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'coachAbsences'), payload.coachAbsences),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'absences'), payload.absences),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'packages'), payload.packages),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'sales'), payload.sales),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'expenses'), payload.expenses),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'caisseLogs'), payload.caisseLogs),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'caisse'), payload.caisse),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'treasury'), payload.treasury),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'credits'), payload.credits),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'staffPayouts'), payload.staffPayouts),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'suppliers'), payload.suppliers),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'quickSessions'), payload.quickSessions),
-          window.firebaseSet(window.firebaseRef(window.firebaseDB, 'lastUpdated'), payload.lastUpdated)
-        ]); rtdbSuccess = true; } catch (err) {
-        console.warn('Realtime Database SDK write note:', err?.message || err);
+    // 1. Primary: Realtime Database SDK - perform atomic UPDATE on root and section paths
+    if (window.firebaseDB && window.firebaseRef) {
+      const updateFn = window.firebaseUpdate || window.firebaseSet;
+      try {
+        const rootUpdates = {
+          'appState': payload.appState,
+          'customers': payload.customers,
+          'products': payload.products,
+          'coachAbsences': payload.coachAbsences,
+          'absences': payload.absences,
+          'packages': payload.packages,
+          'sales': payload.sales,
+          'expenses': payload.expenses,
+          'caisseLogs': payload.caisseLogs,
+          'caisse': payload.caisse,
+          'treasury': payload.treasury,
+          'credits': payload.credits,
+          'staffPayouts': payload.staffPayouts,
+          'suppliers': payload.suppliers,
+          'supplierTransactions': payload.supplierTransactions,
+          'quickSessions': payload.quickSessions,
+          'lastUpdated': payload.lastUpdated
+        };
+        await updateFn(window.firebaseRef(window.firebaseDB), rootUpdates);
+        rtdbSuccess = true;
+      } catch (err) {
+        console.warn('Realtime Database SDK update note:', err?.message || err);
         lastErrMsg = err?.message || String(err);
-      } }
-    // 2. Direct Realtime Database REST API (Ultra-fast & populates all .json paths)
-    try { const baseUrl = getRTDBUrl(); const fetchOpts = (bodyData, method = 'PUT') => ({
-        method, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyData) }); const restPromises = [
-        // Root .json path (stores entire database)
-        fetch(`${baseUrl}/.json`, fetchOpts(payload, 'PATCH')),
-        // Specific .json paths for each entity
-        fetch(`${baseUrl}/appState.json`, fetchOpts(payload.appState)),
-        fetch(`${baseUrl}/customers.json`, fetchOpts(payload.customers)),
-        fetch(`${baseUrl}/products.json`, fetchOpts(payload.products)),
-        fetch(`${baseUrl}/coachAbsences.json`, fetchOpts(payload.coachAbsences)),
-        fetch(`${baseUrl}/absences.json`, fetchOpts(payload.absences)),
-        fetch(`${baseUrl}/packages.json`, fetchOpts(payload.packages)),
-        fetch(`${baseUrl}/sales.json`, fetchOpts(payload.sales)),
-        fetch(`${baseUrl}/expenses.json`, fetchOpts(payload.expenses)),
-        fetch(`${baseUrl}/caisseLogs.json`, fetchOpts(payload.caisseLogs)),
-        fetch(`${baseUrl}/caisse.json`, fetchOpts(payload.caisse)),
-        fetch(`${baseUrl}/treasury.json`, fetchOpts(payload.treasury)),
-        fetch(`${baseUrl}/credits.json`, fetchOpts(payload.credits)),
-        fetch(`${baseUrl}/staffPayouts.json`, fetchOpts(payload.staffPayouts)),
-        fetch(`${baseUrl}/suppliers.json`, fetchOpts(payload.suppliers)),
-        fetch(`${baseUrl}/quickSessions.json`, fetchOpts(payload.quickSessions))
-      ]; const responses = await Promise.allSettled(restPromises);
+      }
+    }
+    // 2. Direct Realtime Database REST API using PATCH (atomic update for all dedicated section paths)
+    try {
+      const baseUrl = getRTDBUrl();
+      const patchOpts = (bodyData) => ({
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyData)
+      });
+      const restPromises = [
+        fetch(`${baseUrl}/.json`, patchOpts(payload)),
+        fetch(`${baseUrl}/appState.json`, patchOpts(payload.appState)),
+        fetch(`${baseUrl}/customers.json`, patchOpts(payload.customers)),
+        fetch(`${baseUrl}/products.json`, patchOpts(payload.products)),
+        fetch(`${baseUrl}/coachAbsences.json`, patchOpts(payload.coachAbsences)),
+        fetch(`${baseUrl}/absences.json`, patchOpts(payload.absences)),
+        fetch(`${baseUrl}/packages.json`, patchOpts(payload.packages)),
+        fetch(`${baseUrl}/sales.json`, patchOpts(payload.sales)),
+        fetch(`${baseUrl}/expenses.json`, patchOpts(payload.expenses)),
+        fetch(`${baseUrl}/caisseLogs.json`, patchOpts(payload.caisseLogs)),
+        fetch(`${baseUrl}/caisse.json`, patchOpts(payload.caisse)),
+        fetch(`${baseUrl}/treasury.json`, patchOpts(payload.treasury)),
+        fetch(`${baseUrl}/credits.json`, patchOpts(payload.credits)),
+        fetch(`${baseUrl}/staffPayouts.json`, patchOpts(payload.staffPayouts)),
+        fetch(`${baseUrl}/suppliers.json`, patchOpts(payload.suppliers)),
+        fetch(`${baseUrl}/supplierTransactions.json`, patchOpts(payload.supplierTransactions)),
+        fetch(`${baseUrl}/quickSessions.json`, patchOpts(payload.quickSessions))
+      ];
+      const responses = await Promise.allSettled(restPromises);
       const successfulSaves = responses.filter(r => r.status === 'fulfilled' && r.value.ok);
       if (successfulSaves.length > 0) {
-        restSuccess = true; } } catch (fetchErr) {
-      console.warn('REST fallback note:', fetchErr);
-    } if (rtdbSuccess || restSuccess) { window.firebaseSyncState.lastSync = new Date();
+        restSuccess = true;
+      }
+    } catch (fetchErr) {
+      console.warn('REST PATCH fallback note:', fetchErr);
+    }
+    if (rtdbSuccess || restSuccess) {
+      window.firebaseSyncState.lastSync = new Date();
       window.firebaseSyncState.lastError = null;
       updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
-      return { success: true }; } else { window.firebaseSyncState.lastError = lastErrMsg;
+      return { success: true };
+    } else {
+      window.firebaseSyncState.lastError = lastErrMsg;
       if (lastErrMsg.toLowerCase().includes('permission') || lastErrMsg.toLowerCase().includes('denied')) {
         updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'تم رفض الكتابة في Realtime Database (Permission Denied). يرجى فتح Firebase Console وتحديث Rules إلى .read: true, .write: true.');
-      } else { updateFirebaseUIBadge('error', 'Firebase: غير متصل', lastErrMsg || 'تعذر الاتصال بقاعدة البيانات');
-      } return { success: false, error: lastErrMsg };
-    } };
+      } else {
+        updateFirebaseUIBadge('error', 'Firebase: غير متصل', lastErrMsg || 'تعذر الاتصال بقاعدة البيانات');
+      }
+      return { success: false, error: lastErrMsg };
+    }
+  };
   // Immediate Initial Fast Data Load from Realtime Database upon page entry
   // One shared download of the root data (startup used to download the whole database 3 times + once more via the live listener)
   let rootShared = null, rootSharedAt = 0, lastRootApplied = null, lastRootStr = null;
