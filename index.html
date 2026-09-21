@@ -69,6 +69,9 @@
             <button id="fullReportBtn" onclick="handleNavButtonClick(event, () => openFullReportModal())" title="التقرير الشامل وتصدير PDF" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
               <span>التقرير PDF</span> </button>
+            <button onclick="handleNavButtonClick(event, () => (window.openActivityLogModal ? window.openActivityLogModal() : (typeof openActivityLogModal === 'function' && openActivityLogModal())))" title="سجل العمليات والنشاطات الشامل" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
+              <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              <span>سجل العمليات</span> </button>
             <button onclick="handleNavButtonClick(event, () => clearAllData())" title="مسح جميع البيانات" class="flex items-center justify-center text-slate-400 bg-white hover:bg-blue-50 hover:text-blue-600 border border-slate-200 hover:border-blue-300 transition-all w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-lg sm:rounded-xl shadow-2xs shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
             </button>
@@ -2459,5 +2462,55 @@
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                   <span>طباعة كشف هذا المورد</span>
               </button> </div> </div>
-  </div>   <script type="module" src="/src/main.js"></script>
+  </div>
+
+  <!-- Comprehensive Activity History Log Modal -->
+  <div id="activityLogModal" class="modal-overlay" style="z-index: 125;" onclick="handleOverlayClick(event, 'activityLogModal')">
+      <div class="modal-content relative w-full max-w-3xl bg-white p-5 sm:p-7 rounded-[2rem] shadow-2xl space-y-4 border border-slate-100">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+              <button type="button" onclick="closeModal('activityLogModal')" class="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+              <div class="text-right flex items-center gap-3">
+                  <div>
+                      <h2 class="text-xl sm:text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2 justify-end">
+                          <span>سجل العمليات والنشاطات</span>
+                          <span id="activityLogTotalCount" class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">0 عملية</span>
+                      </h2>
+                      <p class="text-xs text-slate-500 mt-0.5 font-medium">سجل زمني حي لجميع التحركات والمبيعات والمصاريف واشتراكات العمالة</p>
+                  </div>
+                  <div class="w-11 h-11 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 shadow-2xs">
+                      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+                  </div>
+              </div>
+          </div>
+
+          <!-- Filters & Controls -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 bg-slate-50/90 p-3 rounded-2xl border border-slate-200/80">
+              <div class="sm:col-span-2 relative">
+                  <input type="text" id="activityLogSearchInput" oninput="window.renderActivityLogModal && window.renderActivityLogModal()" placeholder="بحث في سجل العمليات (اسم، بيان، منتج...)" autocomplete="off" class="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-500 transition-all pl-8">
+                  <svg class="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+              </div>
+              <div>
+                  <select id="activityLogCategoryFilter" onchange="window.renderActivityLogModal && window.renderActivityLogModal()" class="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-500 transition-all cursor-pointer">
+                      <option value="all">جميع الأقسام (الكل)</option>
+                      <option value="customer">المشتركين والاشتراكات</option>
+                      <option value="sale">مبيعات المنتجات</option>
+                      <option value="expense">المصاريف والتشغيل</option>
+                      <option value="credit">الكريدي والديون</option>
+                      <option value="payout">خلاص العمالة والمدربين</option>
+                      <option value="supplier">حسابات الموردين</option>
+                      <option value="caisse">جرد وإغلاق الصندوق</option>
+                  </select>
+              </div>
+          </div>
+
+          <!-- Timeline Activity List -->
+          <div id="activityLogList" class="space-y-2.5 max-h-[58vh] overflow-y-auto pr-1 hide-scrollbar">
+              <!-- Dynamically rendered -->
+          </div>
+      </div>
+  </div>
+
+   <script type="module" src="/src/main.js"></script>
 </body> </html>

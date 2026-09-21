@@ -1,3 +1,42 @@
+
+// Safe DOM helpers to prevent null property errors
+function getElem(id) {
+    if (!id) return null;
+    if (typeof id === "object" && id.nodeType) return id;
+    return document.getElementById(String(id));
+}
+function getElemVal(id, fallback = "") {
+    const el = getElem(id);
+    return el ? (el.value !== undefined ? el.value : "") : fallback;
+}
+function setElemValue(id, val) {
+    const el = getElem(id);
+    if (el) el.value = (val !== undefined && val !== null) ? val : "";
+}
+function setElemHTML(id, html) {
+    const el = getElem(id);
+    if (el) el.innerHTML = (html !== undefined && html !== null) ? html : "";
+}
+function setElemText(id, txt) {
+    const el = getElem(id);
+    if (el) el.innerText = (txt !== undefined && txt !== null) ? txt : "";
+}
+function setElemDisplay(id, display) {
+    const el = getElem(id);
+    if (el) el.style.display = display;
+}
+function setElemRequired(id, req) {
+    const el = getElem(id);
+    if (el) el.required = !!req;
+}
+window.getElem = getElem;
+window.getElemVal = getElemVal;
+window.setElemValue = setElemValue;
+window.setElemHTML = setElemHTML;
+window.setElemText = setElemText;
+window.setElemDisplay = setElemDisplay;
+window.setElemRequired = setElemRequired;
+
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
   import { getDatabase, ref, set, update, push, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
@@ -1494,8 +1533,8 @@
         input.type = input.type === 'password' ? 'text' : 'password';
     } async function handleLogin(e) { e.preventDefault();
         const errorDiv = document.getElementById('loginError');
-        const emailVal = document.getElementById('loginEmail')?.value || '';
-        const passVal = document.getElementById('loginPassword')?.value || '';
+        const emailVal = getElemVal('loginEmail') || '';
+        const passVal = getElemVal('loginPassword') || '';
         // 1. Check lockout status (API/Device Level simulation)
         const lockoutStatus = checkLoginLockout();
         if (lockoutStatus.isLocked) { const msg = `تم حظر هذا الجهاز من الوصول للـ API لمدة 15 دقيقة بسبب تجاوز المحاولات. يتبقى ${lockoutStatus.mins} دقيقة و ${lockoutStatus.secs} ثانية.`;
@@ -1522,9 +1561,9 @@
             } return; }
         // Successful login
         resetLoginFailures(); if (errorDiv) errorDiv.classList.add('hidden');
-        document.getElementById('loginView').style.display = 'none';
-        document.getElementById('appContainer').classList.remove('hidden');
-        document.getElementById('appContainer').classList.add('flex');
+        setElemDisplay('loginView', 'none');
+        document.getElementById('appContainer')?.classList.remove('hidden');
+        document.getElementById('appContainer')?.classList.add('flex');
         showSuccessToast('تم تسجيل الدخول بنجاح');
     } function handleLogout() {} function clearAllData() {
         if (confirm("هل أنت متأكد أنك تريد مسح جميع البيانات؟")) {
@@ -1535,6 +1574,7 @@
             window.appState.products = [];
             window.appState.sales = []; window.appState.staffPayouts = [];
             window.appState.credits = []; window.appState.suppliers = [];
+            window.appState.activityLogs = [];
             saveState(); localStorage.clear();
             showSuccessToast("تم مسح جميع البيانات بنجاح");
         } } const defaultPackages = []; let initialLocalState = {};
@@ -1553,6 +1593,7 @@
     window.appState.suppliers = ensureSrcArr('suppliers');
     window.appState.quickSessions = ensureSrcArr('quickSessions');
     window.appState.caisseLogs = ensureSrcArr('caisseLogs');
+    window.appState.activityLogs = ensureSrcArr('activityLogs');
     window.appState.selectedCaisseDate = baseSource.selectedCaisseDate || (typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0]);
     window.appState.productStockFilter = baseSource.productStockFilter || 'all';
     window.appState.filter = baseSource.filter || 'all';
@@ -2048,7 +2089,7 @@
     window.handleEditImageSelect = function(input) {
         if (input.files && input.files[0]) {
             compressAndConvertImage(input.files[0], function(base64Data, safeFileName) {
-                if (base64Data) { document.getElementById('editCustImageUrl').value = base64Data;
+                if (base64Data) { setElemValue('editCustImageUrl', base64Data);
                     const imgPreview = document.getElementById('editCustImagePreview');
                     const letterSpan = document.getElementById('editCustAvatarLetter');
                     const removeBtn = document.getElementById('removeEditImageBtn');
@@ -2058,7 +2099,7 @@
                     if (removeBtn) removeBtn.classList.remove('hidden');
                 } }, { prefix: 'member_edit', checkPortrait: true, maxDim: 400 });
         } }; window.removeEditImage = function() {
-        document.getElementById('editCustImageUrl').value = '';
+        setElemValue('editCustImageUrl', '');
         const imgPreview = document.getElementById('editCustImagePreview');
         const letterSpan = document.getElementById('editCustAvatarLetter');
         const removeBtn = document.getElementById('removeEditImageBtn');
@@ -2070,7 +2111,7 @@
     }; window.handleAddImageSelect = function(input) {
         if (input.files && input.files[0]) {
             compressAndConvertImage(input.files[0], function(base64Data, safeFileName) {
-                if (base64Data) { document.getElementById('addCustImageUrl').value = base64Data;
+                if (base64Data) { setElemValue('addCustImageUrl', base64Data);
                     const imgPreview = document.getElementById('addCustImagePreview');
                     const icon = document.getElementById('addCustAvatarIcon');
                     const fileNameDisplay = document.getElementById('fileNameDisplay');
@@ -2082,7 +2123,7 @@
                     if (removeBtn) removeBtn.classList.remove('hidden');
                 } }, { prefix: 'member_face', checkPortrait: true, maxDim: 400 });
         } }; window.removeAddImage = function() {
-        document.getElementById('addCustImageUrl').value = '';
+        setElemValue('addCustImageUrl', '');
         const imgPreview = document.getElementById('addCustImagePreview');
         const icon = document.getElementById('addCustAvatarIcon');
         const fileNameDisplay = document.getElementById('fileNameDisplay');
@@ -2237,11 +2278,11 @@
         if (e && e.stopPropagation) e.stopPropagation();
         try { const clientsData = window.quickSessClientsData || [{ activity: 'musculation', price: '' }];
             const clientCount = clientsData.length;
-            const sessionCount = Math.max(1, parseInt(document.getElementById('quickSessCount')?.value || 1));
+            const sessionCount = Math.max(1, parseInt(getElemVal('quickSessCount') || 1));
             let totalClientsPrice = 0;
             clientsData.forEach(c => {
                 totalClientsPrice += Number(c.price || 0);
-            }); const overallPriceInput = document.getElementById('quickSessPrice')?.value;
+            }); const overallPriceInput = getElemVal('quickSessPrice');
             const price = overallPriceInput !== '' && overallPriceInput !== null && overallPriceInput !== undefined
                 ? Math.max(0, parseInt(overallPriceInput))
                 : totalClientsPrice; if (!Array.isArray(appState.quickSessions)) appState.quickSessions = [];
@@ -2297,16 +2338,16 @@
                 return false; } if (containsDangerousCode(custName)) {
                 showErrorToast('تم رفض الإدخال: اسم المشترك يحتوي على أسطر برمجة أو كود غير مسموح به.');
                 return false; } custName = sanitizeInputText(custName, 60);
-            const custPhoneRaw = document.getElementById('custPhoneView')?.value || '';
+            const custPhoneRaw = getElemVal('custPhoneView') || '';
             if (containsDangerousCode(custPhoneRaw)) {
                 showErrorToast('تم رفض الإدخال: رقم الهاتف يحتوي على رموز أو أسطر برمجية.');
                 return false; } const custPhone = sanitizeInputText(custPhoneRaw, 20);
-            const custDob = document.getElementById('custDobView')?.value || '';
+            const custDob = getElemVal('custDobView') || '';
             const dobValidation = validateCustomerDOB(custDob);
             if (!dobValidation.valid) {
                 showErrorToast(dobValidation.error);
-                return false; } const custWeight = parseFloat(document.getElementById('custWeightView')?.value) || null;
-            const custGender = document.getElementById('custGenderView')?.value || 'male';
+                return false; } const custWeight = parseFloat(getElemVal('custWeightView')) || null;
+            const custGender = getElemVal('custGenderView') || 'male';
             if (custWeight !== null && (custWeight < 20 || custWeight > 300)) {
                 showErrorToast('يرجى إدخال وزن منطقي بين 20 و 300 كغ.');
                 return false; } const packageSelect = document.getElementById('packageIdView');
@@ -2319,19 +2360,19 @@
                 packageId = pkg ? pkg.id : 'pkg_1';
             } const priceInput = document.getElementById('custPriceView');
             const custPrice = priceInput && priceInput.value !== '' ? parseInt(priceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
-            const subType = document.getElementById('addCustSubscriptionType')?.value || (pkg && pkg.type === 'session' ? 'session' : 'time');
-            const totalSessions = subType === 'session' ? parseInt(document.getElementById('addCustTotalSessions')?.value || (pkg?.sessionsCount || 10)) : null;
-            const remainingSessions = subType === 'session' ? parseInt(document.getElementById('addCustRemainingSessions')?.value || totalSessions || 10) : null;
-            const startDateInput = document.getElementById('addCustStartDate')?.value;
-            const endDateInput = document.getElementById('addCustEndDate')?.value;
+            const subType = getElemVal('addCustSubscriptionType') || (pkg && pkg.type === 'session' ? 'session' : 'time');
+            const totalSessions = subType === 'session' ? parseInt(getElemVal('addCustTotalSessions') || (pkg?.sessionsCount || 10)) : null;
+            const remainingSessions = subType === 'session' ? parseInt(getElemVal('addCustRemainingSessions') || totalSessions || 10) : null;
+            const startDateInput = getElemVal('addCustStartDate');
+            const endDateInput = getElemVal('addCustEndDate');
             let startDate = startDateInput ? new Date(startDateInput) : new Date();
             let endDate = endDateInput ? new Date(endDateInput) : null;
             if (!endDate) { const duration = pkg ? parseInt(pkg.durationDays || pkg.duration || 30) : 30;
                 endDate = new Date(startDate);
                 endDate.setDate(startDate.getDate() + duration);
-            } const paymentStatus = document.getElementById('paymentStatusView')?.value || 'paid';
-            const debtAmount = paymentStatus === 'credit' ? parseInt(document.getElementById('debtAmountView')?.value || 0) : 0;
-            const imageUrl = document.getElementById('addCustImageUrl')?.value || null;
+            } const paymentStatus = getElemVal('paymentStatusView') || 'paid';
+            const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('debtAmountView') || 0) : 0;
+            const imageUrl = getElemVal('addCustImageUrl') || null;
             if (!Array.isArray(appState.customers)) {
                 appState.customers = appState.customers ? Object.values(appState.customers) : [];
             }
@@ -2350,6 +2391,7 @@
                 status: 'active', startDate: startDate.toISOString(),
                 endDate: endDate.toISOString() };
             appState.customers.unshift(newCustomer);
+            if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'}`, custPrice);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', newCustomer);
             }
@@ -2392,7 +2434,7 @@
             remInput.value = Math.max(0, rem);
             totalInput.value = Math.max(1, total);
         } }; window.handleEditPackageChange = function() {
-        const pkgId = document.getElementById('editPackageId')?.value;
+        const pkgId = getElemVal('editPackageId');
         const pkg = appState.packages.find(p => p.id === pkgId);
         if (pkg) { const priceInput = document.getElementById('editCustPrice');
             if (priceInput) priceInput.value = pkg.price || 0;
@@ -2407,12 +2449,12 @@
         } };    function openEditModal(customerId) {
         const customer = appState.customers.find(c => String(c && c.id) === String(customerId));
         if(!customer) return;
-        if (document.getElementById('editCustId')) document.getElementById('editCustId').value = customer.id;
-        if (document.getElementById('editCustName')) document.getElementById('editCustName').value = customer.name || '';
-        if (document.getElementById('editCustPhone')) document.getElementById('editCustPhone').value = getDisplayPhone(customer.phone);
-        if (document.getElementById('editCustDob')) document.getElementById('editCustDob').value = customer.dob || '';
-        if (document.getElementById('editCustGender')) document.getElementById('editCustGender').value = customer.gender || 'male';
-        if (document.getElementById('editCustWeight')) document.getElementById('editCustWeight').value = customer.weight || '';
+        if (document.getElementById('editCustId')) setElemValue('editCustId', customer.id);
+        if (document.getElementById('editCustName')) setElemValue('editCustName', customer.name || '');
+        if (document.getElementById('editCustPhone')) setElemValue('editCustPhone', getDisplayPhone(customer.phone));
+        if (document.getElementById('editCustDob')) setElemValue('editCustDob', customer.dob || '');
+        if (document.getElementById('editCustGender')) setElemValue('editCustGender', customer.gender || 'male');
+        if (document.getElementById('editCustWeight')) setElemValue('editCustWeight', customer.weight || '');
         const pkgSelect = document.getElementById('editPackageId');
         if (pkgSelect) {
             pkgSelect.innerHTML = appState.packages.map(p => {
@@ -2435,14 +2477,14 @@
         const remInput = document.getElementById('editRemainingSessions');
         if (totalInput) totalInput.value = customer.totalSessions || customer.remainingSessions || 10;
         if (remInput) remInput.value = customer.remainingSessions !== undefined ? customer.remainingSessions : 10;
-        if (document.getElementById('editExtraDays')) document.getElementById('editExtraDays').value = 0;
-        if (document.getElementById('editPaymentStatus')) document.getElementById('editPaymentStatus').value = customer.paymentStatus || 'paid';
-        if (document.getElementById('editDebtAmount')) document.getElementById('editDebtAmount').value = customer.debtAmount || '';
+        if (document.getElementById('editExtraDays')) setElemValue('editExtraDays', 0);
+        if (document.getElementById('editPaymentStatus')) setElemValue('editPaymentStatus', customer.paymentStatus || 'paid');
+        if (document.getElementById('editDebtAmount')) setElemValue('editDebtAmount', customer.debtAmount || '');
         if (customer.startDate && document.getElementById('editStartDate')) { 
-            document.getElementById('editStartDate').value = new Date(customer.startDate).toISOString().split('T')[0];
+            setElemValue('editStartDate', new Date(customer.startDate).toISOString().split('T')[0]);
         } 
         if (customer.endDate && document.getElementById('editEndDate')) { 
-            document.getElementById('editEndDate').value = new Date(customer.endDate).toISOString().split('T')[0];
+            setElemValue('editEndDate', new Date(customer.endDate).toISOString().split('T')[0]);
         }
         // Image setup for edit modal
         const imgPreview = document.getElementById('editCustImagePreview');
@@ -2472,53 +2514,53 @@
         }
     }
     document.getElementById('editCustomerForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const customer = appState.customers.find(c => c.id === document.getElementById('editCustId').value);
-        if(!customer) return; let custName = document.getElementById('editCustName').value.trim();
+        e.preventDefault(); const customer = appState.customers.find(c => c.id === getElemVal('editCustId'));
+        if(!customer) return; let custName = getElemVal('editCustName').trim();
         if (!custName) { showErrorToast('يرجى إدخال اسم المشترك');
             return; } if (containsDangerousCode(custName)) {
             showErrorToast('تم رفض الإدخال: اسم المشترك يحتوي على أسطر برمجة أو كود غير مسموح به.');
             return; } custName = sanitizeInputText(custName, 60);
-        const custPhoneRaw = document.getElementById('editCustPhone').value;
+        const custPhoneRaw = getElemVal('editCustPhone');
         if (containsDangerousCode(custPhoneRaw)) {
             showErrorToast('تم رفض الإدخال: رقم الهاتف يحتوي على رموز أو أسطر برمجية.');
             return; } const custPhone = sanitizeInputText(custPhoneRaw, 20);
-        const custDob = document.getElementById('editCustDob').value;
+        const custDob = getElemVal('editCustDob');
         const dobValidation = validateCustomerDOB(custDob);
         if (!dobValidation.valid) {
             showErrorToast(dobValidation.error);
-            return; } const custWeight = parseFloat(document.getElementById('editCustWeight').value) || null;
-        const custGender = document.getElementById('editCustGender').value || 'male';
+            return; } const custWeight = parseFloat(getElemVal('editCustWeight')) || null;
+        const custGender = getElemVal('editCustGender') || 'male';
         if (custWeight !== null && (custWeight < 20 || custWeight > 300)) {
             showErrorToast('يرجى إدخال وزن منطقي بين 20 و 300 كغ.');
             return; } customer.name = custName;
         customer.phone = cleanPhone(custPhone);
         customer.dob = custDob; customer.gender = custGender;
         customer.age = dobValidation.age;
-        customer.weight = custWeight; const editSubType = document.getElementById('editSubscriptionType')?.value || 'time';
+        customer.weight = custWeight; const editSubType = getElemVal('editSubscriptionType') || 'time';
         customer.subscriptionType = editSubType;
         if (editSubType === 'session') {
-            customer.totalSessions = parseInt(document.getElementById('editTotalSessions')?.value || 10);
-            customer.remainingSessions = parseInt(document.getElementById('editRemainingSessions')?.value || 0);
+            customer.totalSessions = parseInt(getElemVal('editTotalSessions') || 10);
+            customer.remainingSessions = parseInt(getElemVal('editRemainingSessions') || 0);
             if (typeof customer.attendedSessions !== 'number') {
                 customer.attendedSessions = Math.max(0, (customer.totalSessions || 0) - (customer.remainingSessions || 0));
-            } } const editStartDateVal = document.getElementById('editStartDate').value;
-        const editEndDateVal = document.getElementById('editEndDate').value;
+            } } const editStartDateVal = getElemVal('editStartDate');
+        const editEndDateVal = getElemVal('editEndDate');
         if (editStartDateVal) customer.startDate = new Date(editStartDateVal).toISOString();
         if (editEndDateVal) customer.endDate = new Date(editEndDateVal).toISOString();
-        const extraDays = parseInt(document.getElementById('editExtraDays').value) || 0;
+        const extraDays = parseInt(getElemVal('editExtraDays')) || 0;
         if (extraDays > 0 && editSubType !== 'session') {
             const currentEnd = new Date(customer.endDate || new Date());
             if (!isNaN(currentEnd.getTime())) {
                 currentEnd.setDate(currentEnd.getDate() + extraDays);
                 customer.endDate = currentEnd.toISOString();
-            } } customer.packageId = document.getElementById('editPackageId').value;
+            } } customer.packageId = getElemVal('editPackageId');
         const pkg = appState.packages.find(p => p.id === customer.packageId);
         const editPriceInput = document.getElementById('editCustPrice');
         customer.price = editPriceInput && editPriceInput.value !== '' ? parseInt(editPriceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
-        customer.paymentStatus = document.getElementById('editPaymentStatus').value;
+        customer.paymentStatus = getElemVal('editPaymentStatus');
         const oldDebt = customer.debtAmount || 0;
-        customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(document.getElementById('editDebtAmount').value || 0) : 0;
-        customer.imageUrl = document.getElementById('editCustImageUrl')?.value || null;
+        customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(getElemVal('editDebtAmount') || 0) : 0;
+        customer.imageUrl = getElemVal('editCustImageUrl') || null;
         // Sync with Credits section
         if (customer.debtAmount > 0) { if (!appState.credits) appState.credits = [];
             const autoId = 'cr_auto_' + customer.id;
@@ -2675,7 +2717,7 @@
         const container = document.getElementById('expensesListModal');
         if (!container) return; if (!appState.expenses || appState.expenses.length === 0) {
             container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد مصاريف مسجلة</div>';
-            return; } const filterCat = document.getElementById('filterExpenseCategoryModal')?.value || 'all';
+            return; } const filterCat = getElemVal('filterExpenseCategoryModal') || 'all';
         let filtered = [...appState.expenses];
         if (filterCat !== 'all') { filtered = filtered.filter(ex => getExpenseCategory(ex) === filterCat);
         } if (filtered.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد مصاريف مطابقة لهذا التصنيف</div>';
@@ -2858,6 +2900,7 @@
             desc: desc, amount: amount, category: category,
             date: isoDate };
         appState.expenses.push(newExp);
+        if (typeof logActivity === 'function') logActivity('expense', 'تسجيل مصروف جديد', `البيان: ${desc} - الفئة: ${category}`, amount);
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('expenses', newExp);
         }
@@ -2875,6 +2918,9 @@
         promptWithPassword({ title: 'حذف مصروف', prompt: 'أدخل كلمة المرور لتأكيد حذف المصروف', buttonText: 'تأكيد الحذف' }, () => {
             showAppConfirm('هل أنت متأكد من حذف هذا المصروف؟', function() {
                 if (!Array.isArray(appState.expenses)) return;
+                const deletedExp = appState.expenses.find(ex => String(ex && ex.id) === String(id));
+                const expDesc = deletedExp ? deletedExp.desc : id;
+                if (typeof logActivity === 'function') logActivity('expense', 'حذف مصروف', `حذف المصروف: ${expDesc}`);
                 window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
                 if (window.deleteFirebaseSectionItem) {
                     window.deleteFirebaseSectionItem('expenses', id);
@@ -2890,12 +2936,12 @@
         if (pkgTypeInput) pkgTypeInput.value = 'time';
     } window.setPackageTypeForm = setPackageTypeForm;
     document.getElementById('addPackageForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); let pkgName = document.getElementById('pkgName').value.trim();
+        e.preventDefault(); let pkgName = getElemVal('pkgName').trim();
         if (containsDangerousCode(pkgName)) {
             showErrorToast('تم رفض الإدخال: اسم الباقة غير مسموح به.');
             return; } pkgName = sanitizeInputText(pkgName, 60);
-        const price = parseInt(document.getElementById('pkgPrice').value) || 0;
-        const duration = parseInt(document.getElementById('pkgDuration')?.value || 30);
+        const price = parseInt(getElemVal('pkgPrice')) || 0;
+        const duration = parseInt(getElemVal('pkgDuration') || 30);
         const newPkg = { id: Date.now().toString(),
             name: pkgName, price: price, type: 'time',
             durationDays: duration }; if (!Array.isArray(appState.packages)) appState.packages = [];
@@ -2938,30 +2984,30 @@
             } if (submitBtn && !isEditing) {
                 submitBtn.textContent = (loc === 'stock2') ? 'إضافة المنتج إلى Stock 2 (المستودع)' : 'إضافة المنتج إلى Stock 1 (صالة البيع)';
             } } } window.handleProdStockLocationChange = handleProdStockLocationChange;
-    function updateDualStockTotal() { const s1 = parseFloat(document.getElementById('prodStock1')?.value) || 0;
-        const s2 = parseFloat(document.getElementById('prodStock2')?.value) || 0;
+    function updateDualStockTotal() { const s1 = parseFloat(getElemVal('prodStock1')) || 0;
+        const s2 = parseFloat(getElemVal('prodStock2')) || 0;
         const total = s1 + s2; const badge = document.getElementById('bothStockTotalBadge');
         if (badge) { badge.textContent = `المجموع: ${total} قطعة (Stock 1: ${s1} + Stock 2: ${s2})`;
         } } window.updateDualStockTotal = updateDualStockTotal;
     document.getElementById('addProductForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const formEl = this;
         const editingId = formEl.dataset.editId;
-        const brandVal = document.getElementById('prodBrand') ? document.getElementById('prodBrand').value : '';
-        const imgUrlVal = document.getElementById('prodImageUrl') ? document.getElementById('prodImageUrl').value : '';
-        let prodName = document.getElementById('prodName').value.trim();
-        let prodBarcode = document.getElementById('prodBarcode').value.trim();
+        const brandVal = document.getElementById('prodBrand') ? getElemVal('prodBrand') : '';
+        const imgUrlVal = document.getElementById('prodImageUrl') ? getElemVal('prodImageUrl') : '';
+        let prodName = getElemVal('prodName').trim();
+        let prodBarcode = getElemVal('prodBarcode').trim();
         if (containsDangerousCode(prodName) || containsDangerousCode(prodBarcode) || containsDangerousCode(brandVal)) {
             showErrorToast('تم رفض الإدخال: بيانات المنتج تحتوي على أكواد غير مسموح بها.');
             return; } prodName = sanitizeInputText(prodName, 80);
         prodBarcode = sanitizeInputText(prodBarcode, 40);
-        const wType = document.getElementById('prodWeightType') ? document.getElementById('prodWeightType').value : '';
-        const wVal = document.getElementById('prodWeight').value;
+        const wType = document.getElementById('prodWeightType') ? getElemVal('prodWeightType') : '';
+        const wVal = getElemVal('prodWeight');
         const finalWeight = (wType && wVal) ? (wType + ' - ' + wVal) : (wVal || wType || '');
-        const stockLocationVal = document.getElementById('prodStockLocation') ? document.getElementById('prodStockLocation').value : 'both';
-        const costVal = parseInt(document.getElementById('prodCost').value) || 0;
-        const priceVal = parseInt(document.getElementById('prodPrice').value) || 0;
-        const expiryDateVal = document.getElementById('prodExpiryDate') ? document.getElementById('prodExpiryDate').value : '';
-        const categoryVal = document.getElementById('prodCategory')?.value || (typeof getProductCategory === 'function' ? getProductCategory({ name: prodName, weight: finalWeight }) : 'other');
+        const stockLocationVal = document.getElementById('prodStockLocation') ? getElemVal('prodStockLocation') : 'both';
+        const costVal = parseInt(getElemVal('prodCost')) || 0;
+        const priceVal = parseInt(getElemVal('prodPrice')) || 0;
+        const expiryDateVal = document.getElementById('prodExpiryDate') ? getElemVal('prodExpiryDate') : '';
+        const categoryVal = getElemVal('prodCategory') || (typeof getProductCategory === 'function' ? getProductCategory({ name: prodName, weight: finalWeight }) : 'other');
         // Verify password before adding or updating product
         promptWithPassword({ title: editingId ? 'تعديل منتج' : 'إضافة منتج جديد',
             prompt: editingId ? 'أدخل كلمة المرور لحفظ تعديلات المنتج' : 'أدخل كلمة المرور لإضافة المنتج إلى المخزون',
@@ -2973,8 +3019,8 @@
                     p.brand = brandVal; p.imageUrl = imgUrlVal;
                     p.expiryDate = expiryDateVal;
                     p.category = categoryVal; if (stockLocationVal === 'both') {
-                        const q1 = parseFloat(document.getElementById('prodStock1')?.value) || 0;
-                        const q2 = parseFloat(document.getElementById('prodStock2')?.value) || 0;
+                        const q1 = parseFloat(getElemVal('prodStock1')) || 0;
+                        const q2 = parseFloat(getElemVal('prodStock2')) || 0;
                         if (p.stockLocation === 'stock2') {
                             p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => x.id !== p.id && x.barcode === prodBarcode && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
                             if (p1) { p1.stock = q1;
@@ -3014,7 +3060,7 @@
                                     category: categoryVal
                                 }); } } } else {
                         p.stockLocation = stockLocationVal;
-                        p.stock = parseFloat(document.getElementById('prodStock')?.value) || 0;
+                        p.stock = parseFloat(getElemVal('prodStock')) || 0;
                     } if (p && window.saveFirebaseSectionItem) {
                         window.saveFirebaseSectionItem('products', p);
                     } } delete formEl.dataset.editId;
@@ -3026,8 +3072,8 @@
             } else {
                 // Adding NEW Product
                 if (stockLocationVal === 'both') {
-                    const q1 = parseFloat(document.getElementById('prodStock1')?.value) || 0;
-                    const q2 = parseFloat(document.getElementById('prodStock2')?.value) || 0;
+                    const q1 = parseFloat(getElemVal('prodStock1')) || 0;
+                    const q2 = parseFloat(getElemVal('prodStock2')) || 0;
                     if (q1 <= 0 && q2 <= 0) {
                         showErrorToast('يرجى تحديد عدد أكبر من 0 في Stock 1 أو Stock 2 على الأقل');
                         return; } if (q1 > 0) {
@@ -3075,7 +3121,7 @@
                         } } showSuccessToast(`تم إضافة المنتج بنجاح: (${q1}) في Stock 1 و (${q2}) في Stock 2`);
                 } else {
                     // Single stock location
-                    const singleQty = parseFloat(document.getElementById('prodStock')?.value) || 0;
+                    const singleQty = parseFloat(getElemVal('prodStock')) || 0;
                     let existing = prodBarcode ? appState.products.find(p => p.barcode === prodBarcode && (stockLocationVal === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')))
                         : null; if (existing) {
                         existing.stock = Number(existing.stock || 0) + singleQty;
@@ -3106,42 +3152,42 @@
                         } }
                     showSuccessToast(`تم إضافة المنتج إلى ${stockLocationVal === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)'} بنجاح`);
                 } } saveState(); formEl.reset();
-            if (document.getElementById('prodStock1')) document.getElementById('prodStock1').value = '';
-            if (document.getElementById('prodStock2')) document.getElementById('prodStock2').value = '';
-            if (document.getElementById('prodStock')) document.getElementById('prodStock').value = '';
-            if (document.getElementById('prodExpiryDate')) document.getElementById('prodExpiryDate').value = '';
-            if (document.getElementById('prodStockLocation')) document.getElementById('prodStockLocation').value = 'both';
+            if (document.getElementById('prodStock1')) setElemValue('prodStock1', '');
+            if (document.getElementById('prodStock2')) setElemValue('prodStock2', '');
+            if (document.getElementById('prodStock')) setElemValue('prodStock', '');
+            if (document.getElementById('prodExpiryDate')) setElemValue('prodExpiryDate', '');
+            if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
             handleProdStockLocationChange(); if (typeof removeProductImage === 'function') {
                 removeProductImage(); } }); });
     function editProduct(id) { const p = appState.products.find(p => p.id === id);
-        if(!p) return; document.getElementById('prodBarcode').value = p.barcode || '';
-        document.getElementById('prodName').value = p.name || '';
+        if(!p) return; setElemValue('prodBarcode', p.barcode || '');
+        setElemValue('prodName', p.name || '');
         let pWeight = p.weight || ''; let wType = '';
         let wVal = pWeight; if (pWeight.includes(' - ')) {
             let parts = pWeight.split(' - ');
             wType = parts[0]; wVal = parts.slice(1).join(' - ');
-        } if (document.getElementById('prodWeightType')) document.getElementById('prodWeightType').value = wType;
-        document.getElementById('prodWeight').value = wVal;
-        document.getElementById('prodCost').value = p.cost || 0;
-        document.getElementById('prodPrice').value = p.price || 0;
+        } if (document.getElementById('prodWeightType')) setElemValue('prodWeightType', wType);
+        setElemValue('prodWeight', wVal);
+        setElemValue('prodCost', p.cost || 0);
+        setElemValue('prodPrice', p.price || 0);
         // Check if counterpart product exists in the other stock
         const counterpart = p.barcode ? appState.products.find(x => x.id !== p.id && x.barcode === p.barcode) : null;
-        if (counterpart) { if (document.getElementById('prodStockLocation')) document.getElementById('prodStockLocation').value = 'both';
+        if (counterpart) { if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
             handleProdStockLocationChange();
             const s1Val = (p.stockLocation === 'stock2') ? counterpart.stock : p.stock;
             const s2Val = (p.stockLocation === 'stock2') ? p.stock : counterpart.stock;
-            if (document.getElementById('prodStock1')) document.getElementById('prodStock1').value = s1Val || 0;
-            if (document.getElementById('prodStock2')) document.getElementById('prodStock2').value = s2Val || 0;
-            updateDualStockTotal(); } else { if (document.getElementById('prodStockLocation')) document.getElementById('prodStockLocation').value = p.stockLocation || 'stock1';
-            handleProdStockLocationChange(); if (document.getElementById('prodStock')) document.getElementById('prodStock').value = p.stock || 0;
-            if (document.getElementById('prodStock1')) document.getElementById('prodStock1').value = (p.stockLocation === 'stock2') ? 0 : (p.stock || 0);
-            if (document.getElementById('prodStock2')) document.getElementById('prodStock2').value = (p.stockLocation === 'stock2') ? (p.stock || 0) : 0;
-            updateDualStockTotal(); } if (document.getElementById('prodBrand')) document.getElementById('prodBrand').value = p.brand || '';
-        if (document.getElementById('prodExpiryDate')) document.getElementById('prodExpiryDate').value = p.expiryDate || '';
+            if (document.getElementById('prodStock1')) setElemValue('prodStock1', s1Val || 0);
+            if (document.getElementById('prodStock2')) setElemValue('prodStock2', s2Val || 0);
+            updateDualStockTotal(); } else { if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', p.stockLocation || 'stock1');
+            handleProdStockLocationChange(); if (document.getElementById('prodStock')) setElemValue('prodStock', p.stock || 0);
+            if (document.getElementById('prodStock1')) setElemValue('prodStock1', (p.stockLocation === 'stock2') ? 0 : (p.stock || 0));
+            if (document.getElementById('prodStock2')) setElemValue('prodStock2', (p.stockLocation === 'stock2') ? (p.stock || 0) : 0);
+            updateDualStockTotal(); } if (document.getElementById('prodBrand')) setElemValue('prodBrand', p.brand || '');
+        if (document.getElementById('prodExpiryDate')) setElemValue('prodExpiryDate', p.expiryDate || '');
         if (document.getElementById('prodCategory')) {
-            document.getElementById('prodCategory').value = p.category || (typeof getProductCategory === 'function' ? getProductCategory(p) : 'other');
+            setElemValue('prodCategory', p.category || (typeof getProductCategory === 'function' ? getProductCategory(p) : 'other'));
         } if (document.getElementById('prodImageUrl')) {
-            document.getElementById('prodImageUrl').value = p.imageUrl || '';
+            setElemValue('prodImageUrl', p.imageUrl || '');
             const imgPreview = document.getElementById('prodImagePreview');
             const placeholder = document.getElementById('prodImagePlaceholder');
             const removeBtn = document.getElementById('removeProdImageBtn');
@@ -3163,7 +3209,7 @@
         submitBtn.textContent = 'حفظ التعديلات';
         submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
         submitBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
-        document.getElementById('prodName').focus();
+        document.getElementById('prodName')?.focus();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     } window.editProduct = editProduct;
     // Stock Transfer Functions
@@ -3175,7 +3221,7 @@
             populateTransferProducts(defaultProdId);
         }); } window.openStockTransferModal = openStockTransferModal;
     function populateTransferProducts(defaultProdId) {
-        const fromLoc = document.getElementById('transferFromStock')?.value || 'stock2';
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
         const toSelect = document.getElementById('transferToStock');
         if (toSelect) { toSelect.value = (fromLoc === 'stock2') ? 'stock1' : 'stock2';
         } const prods = (appState.products || []).filter(p => {
@@ -3205,10 +3251,10 @@
         if (p) { input.value = p.stock; } }
     window.setTransferMaxQty = setTransferMaxQty;
     function handleStockTransfer(e) { if (e) e.preventDefault();
-        const fromLoc = document.getElementById('transferFromStock')?.value || 'stock2';
-        const toLoc = document.getElementById('transferToStock')?.value || 'stock1';
-        const prodId = document.getElementById('transferProductSelect')?.value;
-        const qty = parseFloat(document.getElementById('transferQtyInput')?.value);
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
+        const toLoc = getElemVal('transferToStock') || 'stock1';
+        const prodId = getElemVal('transferProductSelect');
+        const qty = parseFloat(getElemVal('transferQtyInput'));
         if (!prodId) { showErrorToast('يرجى اختيار المنتج المراد تحويله');
             return; } if (isNaN(qty) || qty <= 0) {
             showErrorToast('يرجى إدخال كمية صحيحة للتحويل');
@@ -3356,21 +3402,21 @@
                 } } catch (e) { console.warn('Firebase search note:', e?.message || e);
             } } if (!product && localCandidate) {
             product = localCandidate; } if (product) {
-            if (document.getElementById('prodName')) document.getElementById('prodName').value = product.name || '';
+            if (document.getElementById('prodName')) setElemValue('prodName', product.name || '');
             let pWeight = product.weight || '';
             let wType = ''; let wVal = pWeight;
             if (pWeight.includes(' - ')) { let parts = pWeight.split(' - ');
                 wType = parts[0]; wVal = parts.slice(1).join(' - ');
-            } if (document.getElementById('prodWeightType')) document.getElementById('prodWeightType').value = wType;
-            if (document.getElementById('prodWeight')) document.getElementById('prodWeight').value = wVal;
-            if (document.getElementById('prodCost')) document.getElementById('prodCost').value = product.cost || '';
-            if (document.getElementById('prodPrice')) document.getElementById('prodPrice').value = product.price || '';
+            } if (document.getElementById('prodWeightType')) setElemValue('prodWeightType', wType);
+            if (document.getElementById('prodWeight')) setElemValue('prodWeight', wVal);
+            if (document.getElementById('prodCost')) setElemValue('prodCost', product.cost || '');
+            if (document.getElementById('prodPrice')) setElemValue('prodPrice', product.price || '');
             if (document.getElementById('prodBrand')) {
-                document.getElementById('prodBrand').value = product.brand || '';
+                setElemValue('prodBrand', product.brand || '');
             } if (document.getElementById('prodExpiryDate') && product.expiryDate) {
-                document.getElementById('prodExpiryDate').value = product.expiryDate;
+                setElemValue('prodExpiryDate', product.expiryDate);
             } if (document.getElementById('prodImageUrl')) {
-                document.getElementById('prodImageUrl').value = product.imageUrl || '';
+                setElemValue('prodImageUrl', product.imageUrl || '');
                 const imgPreview = document.getElementById('prodImagePreview');
                 if (imgPreview) { if (product.imageUrl) {
                         imgPreview.src = product.imageUrl;
@@ -3381,9 +3427,9 @@
             // Check local stock quantities
             const local1 = (appState.products || []).find(p => String(p.barcode || '').trim().toLowerCase() === normalizedBarcode && (!p.stockLocation || p.stockLocation === 'stock1'));
             const local2 = (appState.products || []).find(p => String(p.barcode || '').trim().toLowerCase() === normalizedBarcode && p.stockLocation === 'stock2');
-            if (local1 || local2) { if (document.getElementById('prodStock1')) document.getElementById('prodStock1').value = local1 ? local1.stock : 0;
-                if (document.getElementById('prodStock2')) document.getElementById('prodStock2').value = local2 ? local2.stock : 0;
-                if (document.getElementById('prodStock')) document.getElementById('prodStock').value = local1 ? local1.stock : (local2 ? local2.stock : 0);
+            if (local1 || local2) { if (document.getElementById('prodStock1')) setElemValue('prodStock1', local1 ? local1.stock : 0);
+                if (document.getElementById('prodStock2')) setElemValue('prodStock2', local2 ? local2.stock : 0);
+                if (document.getElementById('prodStock')) setElemValue('prodStock', local1 ? local1.stock : (local2 ? local2.stock : 0));
                 if (typeof updateDualStockTotal === 'function') updateDualStockTotal();
             } showSuccessToast('تم جلب بيانات المنتج بنجاح');
         } else { showErrorToast('المنتج غير مسجل — يمكنك إدخال بياناته الآن');
@@ -3422,11 +3468,11 @@
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
-    function updateStockInfoDisplay() { const prodId = document.getElementById('sellProdId')?.value;
+    function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
         const stockInfo = document.getElementById('stockInfo');
         if (!stockInfo) return; const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
         if (!product) { stockInfo.classList.add('hidden');
-            return; } const qty = parseFloat(document.getElementById('sellProdQty')?.value) || 0;
+            return; } const qty = parseFloat(getElemVal('sellProdQty')) || 0;
         const currentStock = Number(product.stock || 0);
         const rem = currentStock - qty; const isStock2 = product.stockLocation === 'stock2';
         stockInfo.classList.remove('hidden'); if (isStock2) {
@@ -3455,8 +3501,8 @@
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
     document.getElementById('sellProdQty')?.addEventListener('input', updateStockInfoDisplay);
     document.getElementById('sellProductForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const prodId = document.getElementById('sellProdId').value;
-        const qty = parseFloat(document.getElementById('sellProdQty').value);
+        e.preventDefault(); const prodId = getElemVal('sellProdId');
+        const qty = parseFloat(getElemVal('sellProdQty'));
         const product = appState.products.find(p => p.id === prodId);
         if (!product) { showErrorToast('يرجى اختيار المنتج أولاً');
             return; } if (product.stockLocation === 'stock2') {
@@ -3475,7 +3521,7 @@
         let saleLabel = product.name; product.stock = Number(product.stock || 0) - finalQty;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
-        const dateVal = document.getElementById('sellDate')?.value || '';
+        const dateVal = getElemVal('sellDate') || '';
         let dateStr; if (dateVal) { const now = new Date();
             const parts = dateVal.split('-'); if (parts.length === 3) {
                 const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), now.getHours(), now.getMinutes(), now.getSeconds());
@@ -3501,6 +3547,7 @@
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
+        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${finalQty} - المكان: ${stockLocName}`, total);
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
@@ -3511,6 +3558,9 @@
         promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
             showAppConfirm('هل أنت متأكد من حذف هذا المشترك نهائياً؟', function() {
                 if (!Array.isArray(appState.customers)) return;
+                const deletedCust = appState.customers.find(c => String(c && c.id) === String(id));
+                const custNameStr = deletedCust ? deletedCust.name : id;
+                if (typeof logActivity === 'function') logActivity('customer', 'حذف مشترك', `حذف المشترك: ${custNameStr}`);
                 window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
                 if (window.deleteFirebaseSectionItem) {
                     window.deleteFirebaseSectionItem('customers', id);
@@ -3651,13 +3701,13 @@
         } const submitBtnText = document.getElementById('staffPayoutSubmitBtnText');
         if (submitBtnText) submitBtnText.textContent = "تسجيل الدفعة والدخول";
     }; document.getElementById('addStaffPayoutForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const editingId = document.getElementById('editingStaffPayoutId')?.value || '';
-        let name = document.getElementById('staffName').value.trim();
-        const rawAmount = String(document.getElementById('staffAmount').value).replace(/,/g, '').trim();
+        e.preventDefault(); const editingId = getElemVal('editingStaffPayoutId') || '';
+        let name = getElemVal('staffName').trim();
+        const rawAmount = String(getElemVal('staffAmount')).replace(/,/g, '').trim();
         const amount = parseFloat(rawAmount);
-        const type = document.getElementById('staffPayoutType').value;
-        const dateStr = document.getElementById('staffPayoutDate').value;
-        let notes = document.getElementById('staffNotes') ? document.getElementById('staffNotes').value.trim() : '';
+        const type = getElemVal('staffPayoutType');
+        const dateStr = getElemVal('staffPayoutDate');
+        let notes = document.getElementById('staffNotes') ? getElemVal('staffNotes').trim() : '';
         // Only block real script tags and dangerous html
         const isMalicious = (str) => /<\s*script\b|<\s*iframe\b|javascript\s*:|data\s*:\s*text\/html/i.test(str);
         if (isMalicious(name) || isMalicious(notes)) {
@@ -3757,13 +3807,13 @@
             if (itemsInput) itemsInput.placeholder = "اكتب تفاصيل السلع المشتراة (مثال: 10 بروتين واي، 5 كرياتين...)";
         } } window.autoFillSupplierInfo = autoFillSupplierInfo;
     document.getElementById('addSupplierForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); let name = document.getElementById('supplierName').value.trim();
-        let info = document.getElementById('supplierInfo').value.trim();
-        let items = document.getElementById('supplierItems').value.trim();
-        const paid = parseFloat(document.getElementById('supplierPaid').value) || 0;
-        let debt = parseFloat(document.getElementById('supplierDebt').value);
-        if (isNaN(debt)) debt = 0; const dateStr = document.getElementById('supplierDate').value;
-        const notes = document.getElementById('supplierNotes') ? document.getElementById('supplierNotes').value.trim() : '';
+        e.preventDefault(); let name = getElemVal('supplierName').trim();
+        let info = getElemVal('supplierInfo').trim();
+        let items = getElemVal('supplierItems').trim();
+        const paid = parseFloat(getElemVal('supplierPaid')) || 0;
+        let debt = parseFloat(getElemVal('supplierDebt'));
+        if (isNaN(debt)) debt = 0; const dateStr = getElemVal('supplierDate');
+        const notes = document.getElementById('supplierNotes') ? getElemVal('supplierNotes').trim() : '';
         if (containsDangerousCode(name) || containsDangerousCode(info) || containsDangerousCode(items) || containsDangerousCode(notes)) {
             showErrorToast('تحذير أمني: تم اكتشاف محتوى غير مسموح به في المدخلات.');
             return; } name = sanitizeInputText(name, 80);
@@ -3853,27 +3903,27 @@
         }); } window.deleteSupplier = deleteSupplier;
     function openEditSupplierModal(id) { if (!appState.suppliers) return;
         const sup = appState.suppliers.find(s => String(s.id) === String(id));
-        if (!sup) return; document.getElementById('editSupplierId').value = sup.id;
-        document.getElementById('editSupplierName').value = sup.name || '';
-        document.getElementById('editSupplierInfo').value = sup.info || '';
-        document.getElementById('editSupplierItems').value = sup.items || '';
-        document.getElementById('editSupplierPaid').value = sup.paid !== undefined ? sup.paid : 0;
-        document.getElementById('editSupplierDebt').value = sup.debt !== undefined ? sup.debt : 0;
+        if (!sup) return; setElemValue('editSupplierId', sup.id);
+        setElemValue('editSupplierName', sup.name || '');
+        setElemValue('editSupplierInfo', sup.info || '');
+        setElemValue('editSupplierItems', sup.items || '');
+        setElemValue('editSupplierPaid', sup.paid !== undefined ? sup.paid : 0);
+        setElemValue('editSupplierDebt', sup.debt !== undefined ? sup.debt : 0);
         const d = new Date(sup.date); const dateStr = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
-        document.getElementById('editSupplierDate').value = dateStr;
-        document.getElementById('editSupplierNotes').value = sup.notes || '';
+        setElemValue('editSupplierDate', dateStr);
+        setElemValue('editSupplierNotes', sup.notes || '');
         openModal('editSupplierModal'); } window.openEditSupplierModal = openEditSupplierModal;
     function handleEditSupplierSubmit(e) { if (e && e.preventDefault) e.preventDefault();
-        const id = document.getElementById('editSupplierId').value;
+        const id = getElemVal('editSupplierId');
         if (!appState.suppliers) return false;
         const index = appState.suppliers.findIndex(s => String(s.id) === String(id));
-        if (index === -1) return false; let name = document.getElementById('editSupplierName').value.trim();
-        let info = document.getElementById('editSupplierInfo').value.trim();
-        let items = document.getElementById('editSupplierItems').value.trim();
-        const paid = parseFloat(document.getElementById('editSupplierPaid').value) || 0;
-        const debt = parseFloat(document.getElementById('editSupplierDebt').value) || 0;
-        const dateVal = document.getElementById('editSupplierDate').value;
-        let notes = document.getElementById('editSupplierNotes') ? document.getElementById('editSupplierNotes').value.trim() : '';
+        if (index === -1) return false; let name = getElemVal('editSupplierName').trim();
+        let info = getElemVal('editSupplierInfo').trim();
+        let items = getElemVal('editSupplierItems').trim();
+        const paid = parseFloat(getElemVal('editSupplierPaid')) || 0;
+        const debt = parseFloat(getElemVal('editSupplierDebt')) || 0;
+        const dateVal = getElemVal('editSupplierDate');
+        let notes = document.getElementById('editSupplierNotes') ? getElemVal('editSupplierNotes').trim() : '';
         if (containsDangerousCode(name) || containsDangerousCode(info) || containsDangerousCode(items) || containsDangerousCode(notes)) {
             showErrorToast('تحذير أمني: تم اكتشاف محتوى غير مسموح به في المدخلات.');
             return false; } name = sanitizeInputText(name, 80);
@@ -4323,7 +4373,7 @@
                 <div>
                     <div class="flex justify-between items-center mb-1 gap-1">
                         <label class="block text-[11px] font-bold text-slate-700 whitespace-nowrap">التاريخ:</label>
-                        <button type="button" onclick="document.getElementById('reportFilterDate').value=''; updateFullReportSalesSection();" class="text-[10px] text-blue-700 hover:text-blue-900 font-bold underline">الكل</button>
+                        <button type="button" onclick="setElemValue('reportFilterDate', ''); updateFullReportSalesSection();" class="text-[10px] text-blue-700 hover:text-blue-900 font-bold underline">الكل</button>
                     </div>
                     <input type="date" id="reportFilterDate" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-2 py-2 text-xs bg-white font-semibold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
                 </div>
@@ -4492,7 +4542,7 @@
     } window.deleteAllCredits = deleteAllCredits;
     function renderCreditsList() { const container = document.getElementById('creditsList');
         if (!container) return; if (!Array.isArray(appState.credits)) appState.credits = [];
-        const searchQuery = (document.getElementById('creditSearchInput')?.value || '').trim().toLowerCase();
+        const searchQuery = (getElemVal('creditSearchInput') || '').trim().toLowerCase();
         let filtered = appState.credits; if (searchQuery) {
             filtered = filtered.filter(cr => {
                 if (!cr) return false; const name = (cr.name || '').toLowerCase();
@@ -4624,6 +4674,8 @@
     function settleCredit(id) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
         showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
+            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
+            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit ? targetCredit.name : targetId}`, targetCredit ? targetCredit.amount : 0);
             window.appState.credits = appState.credits.filter(c => String(c && c.id).trim() !== targetId);
             if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('credits', targetId);
             saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
@@ -4631,13 +4683,13 @@
         }, { title: 'تسديد الكريدي', confirmText: 'نعم، تم التسديد',
             isDanger: false }); } function handleAddCreditSubmit(e) {
         if (e && e.preventDefault) e.preventDefault();
-        let name = document.getElementById('creditName').value.trim();
-        let nickname = document.getElementById('creditNickname').value.trim();
-        let phone = document.getElementById('creditPhone').value.trim();
-        let desc = document.getElementById('creditDesc').value.trim();
-        const amountVal = document.getElementById('creditAmount').value;
+        let name = getElemVal('creditName').trim();
+        let nickname = getElemVal('creditNickname').trim();
+        let phone = getElemVal('creditPhone').trim();
+        let desc = getElemVal('creditDesc').trim();
+        const amountVal = getElemVal('creditAmount');
         const amount = parseInt(amountVal);
-        const dateVal = document.getElementById('creditDate').value;
+        const dateVal = getElemVal('creditDate');
         if (containsDangerousCode(name) || containsDangerousCode(nickname) || containsDangerousCode(desc)) {
             showErrorToast('تحذير أمني: تم اكتشاف محتوى غير مسموح به في المدخلات.');
             return false; } name = sanitizeInputText(name, 50);
@@ -4657,33 +4709,33 @@
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('credits', newCredit);
         }
-        saveState(); document.getElementById('addCreditForm').reset();
+        saveState(); document.getElementById('addCreditForm')?.reset();
         closeModal('addCreditModal');
         showSuccessToast('تم تسجيل الكريدي بنجاح');
         renderCreditsList(); render(); // Update dashboard totals
         return false; } function openEditCreditModal(id) {
         if (!Array.isArray(appState.credits)) return;
         const cr = appState.credits.find(c => String(c && c.id) === String(id));
-        if (!cr) return; document.getElementById('editCreditId').value = cr.id || '';
-        document.getElementById('editCreditName').value = cr.name || '';
-        document.getElementById('editCreditNickname').value = cr.nickname || '';
-        document.getElementById('editCreditPhone').value = cr.phone || '';
-        document.getElementById('editCreditDesc').value = cr.desc || '';
-        document.getElementById('editCreditAmount').value = cr.amount || '';
+        if (!cr) return; setElemValue('editCreditId', cr.id || '');
+        setElemValue('editCreditName', cr.name || '');
+        setElemValue('editCreditNickname', cr.nickname || '');
+        setElemValue('editCreditPhone', cr.phone || '');
+        setElemValue('editCreditDesc', cr.desc || '');
+        setElemValue('editCreditAmount', cr.amount || '');
         const d = new Date(cr.date); const dateStr = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : '';
-        document.getElementById('editCreditDate').value = dateStr;
+        setElemValue('editCreditDate', dateStr);
         openModal('editCreditModal'); } function handleEditCreditSubmit(e) {
         if (e && e.preventDefault) e.preventDefault();
         if (!Array.isArray(appState.credits)) return false;
-        const id = document.getElementById('editCreditId').value;
+        const id = getElemVal('editCreditId');
         const index = appState.credits.findIndex(c => String(c && c.id) === String(id));
-        if (index === -1) return false; let name = document.getElementById('editCreditName').value.trim();
-        let nickname = document.getElementById('editCreditNickname').value.trim();
-        let phone = document.getElementById('editCreditPhone').value.trim();
-        let desc = document.getElementById('editCreditDesc').value.trim();
-        const amountVal = document.getElementById('editCreditAmount').value;
+        if (index === -1) return false; let name = getElemVal('editCreditName').trim();
+        let nickname = getElemVal('editCreditNickname').trim();
+        let phone = getElemVal('editCreditPhone').trim();
+        let desc = getElemVal('editCreditDesc').trim();
+        const amountVal = getElemVal('editCreditAmount');
         const amount = parseInt(amountVal);
-        const dateVal = document.getElementById('editCreditDate').value;
+        const dateVal = getElemVal('editCreditDate');
         if (containsDangerousCode(name) || containsDangerousCode(nickname) || containsDangerousCode(desc)) {
             showErrorToast('تحذير أمني: تم اكتشاف محتوى غير مسموح به في المدخلات.');
             return false; } name = sanitizeInputText(name, 50);
@@ -4712,6 +4764,8 @@
         promptWithPassword({ title: 'حذف الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا الكريدي', buttonText: 'تأكيد الحذف' }, () => {
             showAppConfirm('هل أنت متأكد من حذف هذا الكريدي نهائياً؟', function() {
                 if (!Array.isArray(appState.credits)) appState.credits = [];
+                const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
+                if (typeof logActivity === 'function') logActivity('credit', 'حذف كريدي', `حذف سجل الكريدي الخاص بـ: ${targetCredit ? targetCredit.name : targetId}`);
                 // Delete matching credit
                 appState.credits = appState.credits.filter(c => {
                     if (!c) return false; return String(c.id).trim() !== targetId;
@@ -5289,9 +5343,9 @@
         printWindow.document.close(); };
     function renderStaffPayouts() { return; } window.renderStaffPayouts = renderStaffPayouts;
     document.getElementById('coachAbsenceForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const numDays = parseInt(document.getElementById('absenceDays').value);
+        e.preventDefault(); const numDays = parseInt(getElemVal('absenceDays'));
         if (isNaN(numDays) || numDays <= 0) return;
-        const dateRaw = document.getElementById('absenceDate').value;
+        const dateRaw = getElemVal('absenceDate');
         let formattedDate = dateRaw; if (dateRaw) {
             const parts = dateRaw.split('-'); if (parts.length === 3) {
                 formattedDate = `${parts[0]}/${parseInt(parts[1])}/${parseInt(parts[2])}`;
@@ -5331,7 +5385,7 @@
             case 'welcome': return `مرحباً بك ${name} في صالة OMEGA GYM!  تم تفعيل اشتراكك بنجاح. نتمنى لك حصصاً رياضية ممتعة ونتائج ممتازة معنا. بالتوفيق! `;
             case 'general': default: return `السلام عليكم ${name}، صالة OMEGA GYM تتمنى لك يوماً سعيداً ونشيطاً! نذكرك بحصتك التدريبية اليوم للحفاظ على لياقتك وتحقيق أهدافك. `;
         } } window.getMsgTextForTemplate = getMsgTextForTemplate;
-    function setMsgTemplate(type) { const custId = document.getElementById('msgCustId')?.value;
+    function setMsgTemplate(type) { const custId = getElemVal('msgCustId');
         const c = appState.customers.find(cust => cust.id === custId);
         if (c) { const txt = getMsgTextForTemplate(type, c);
             const contentArea = document.getElementById('msgContent');
@@ -5370,8 +5424,8 @@
     window.openMessageModal = openMessageModal;
 
     function sendMessage(method) {
-        const rawPhone = document.getElementById('msgPhone')?.value || '';
-        const rawContent = document.getElementById('msgContent')?.value || '';
+        const rawPhone = getElemVal('msgPhone') || '';
+        const rawContent = getElemVal('msgContent') || '';
 
         if (!rawPhone) {
             if (typeof showErrorToast === 'function') showErrorToast('يرجى التأكد من وجود رقم هاتف للمشترك');
@@ -5506,7 +5560,7 @@
     window.handleSearchView = function() {
         if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
         _customerSearchDebounceTimer = setTimeout(() => {
-            const val = document.getElementById('searchInputView')?.value || '';
+            const val = getElemVal('searchInputView') || '';
             appState.searchQuery = val;
             appState.customerPage = 1;
             renderCustomers();
@@ -5514,19 +5568,19 @@
         }, 150);
     };
     window.toggleDebtFieldView = function() {
-       const status = document.getElementById('paymentStatusView')?.value;
+       const status = getElemVal('paymentStatusView');
        const field = document.getElementById('debtAmountContainerView');
        if(!field) return; if (status === 'credit') {
            field.style.display = 'block';
-           document.getElementById('debtAmountView').required = true;
+           setElemRequired('debtAmountView', true);
        } else { field.style.display = 'none';
-           document.getElementById('debtAmountView').required = false;
-           document.getElementById('debtAmountView').value = '';
+           setElemRequired('debtAmountView', false);
+           setElemValue('debtAmountView', '');
        } };
     function handleSearch() {
         if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
         _customerSearchDebounceTimer = setTimeout(() => {
-            const val = document.getElementById('searchInput')?.value || '';
+            const val = getElemVal('searchInput') || '';
             appState.searchQuery = val;
             appState.customerPage = 1;
             renderCustomers();
@@ -5780,7 +5834,7 @@
     let barcodeCurrentZoom = 1; let barcodeTorchOn = false;
     let barcodeSelectedDeviceId = null; let barcodeFacingMode = 'environment';
     function openBarcodeCamera(context = 'sales') {
-        scanContext = context; document.getElementById('barcodeModal').classList.add('active');
+        scanContext = context; document.getElementById('barcodeModal')?.classList.add('active');
         startBarcodeScanner(); } async function startBarcodeScanner() {
         const reader = document.getElementById('barcodeReader');
         const title = document.getElementById('barcodeModalTitle');
@@ -5891,7 +5945,7 @@
                             const startZoom = Math.min(barcodeZoomCaps.max, Math.max(barcodeZoomCaps.min, barcodeZoomCaps.min + (barcodeZoomCaps.max - barcodeZoomCaps.min) * 0.25));
                             await setBarcodeZoom(startZoom);
                         } else { barcodeZoomCaps = null;
-                            document.getElementById('barcodeZoomLabel').classList.add('hidden');
+                            document.getElementById('barcodeZoomLabel')?.classList.add('hidden');
                         }
                         // Show the torch button only if the device actually supports it.
                         const torchBtn = document.getElementById('barcodeTorchBtn');
@@ -6166,6 +6220,7 @@
                         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                     }
                 }
+                if (typeof logActivity === 'function') logActivity('sale', 'إلغاء عملية بيع', `إلغاء البيع واسترجاع الكمية: ${sale ? sale.prodName || sale.name : saleId}`);
                 appState.sales.splice(idx, 1);
                 if (window.deleteFirebaseSectionItem) {
                     window.deleteFirebaseSectionItem('sales', saleId);
@@ -6431,9 +6486,6 @@
 
                 <!-- Action Buttons -->
                 <div class="flex items-center gap-2 pt-2">
-                    <button onclick="deleteCustomer('${c.id}')" class="w-11 h-11 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 flex items-center justify-center transition-colors shrink-0" title="حذف المشترك">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
                     <button onclick="openEditModal('${c.id}')" class="w-11 h-11 rounded-2xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors shrink-0" title="تعديل المشترك">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                     </button>
@@ -6586,32 +6638,32 @@
         const totalOverallCosts = totalExpenses + totalStaffPayouts + totalProductCost;
         const totalOverallNetProfit = totalRevenue - totalOverallCosts;
         const monthlyNetProfitValue = (monthlySubIncome + monthlySales) - (monthlyExpenses + monthlyStaffPayouts + (monthlySales - monthlyProductProfit));
-        document.getElementById('totalIncome').innerHTML = formatMoney(totalRevenue);
+        setElemHTML('totalIncome', formatMoney(totalRevenue));
         if (document.getElementById('monthlyNetProfit')) {
-            document.getElementById('monthlyNetProfit').innerHTML = formatMoney(monthlyNetProfitValue);
+            setElemHTML('monthlyNetProfit', formatMoney(monthlyNetProfitValue));
         } if (document.getElementById('totalYearlyIncome')) {
-            document.getElementById('totalYearlyIncome').innerHTML = formatMoney(yearlySubIncome + yearlySales);
+            setElemHTML('totalYearlyIncome', formatMoney(yearlySubIncome + yearlySales));
         } if (document.getElementById('totalExpenses')) {
-            document.getElementById('totalExpenses').innerHTML = formatMoney(totalExpenses + totalStaffPayouts);
-        } document.getElementById('netProfit').innerHTML = formatMoney(totalOverallNetProfit);
+            setElemHTML('totalExpenses', formatMoney(totalExpenses + totalStaffPayouts));
+        } setElemHTML('netProfit', formatMoney(totalOverallNetProfit));
         if (document.getElementById('netProductProfit')) {
-            document.getElementById('netProductProfit').innerHTML = formatMoney(allTimeProductProfit);
-        } document.getElementById('totalDebt').innerHTML = formatMoney(totalDebt + totalExternalCredits);
-        document.getElementById('activeCount').innerText = activeCount;
-        document.getElementById('nearExpiryCount').innerText = nearExpiryCount;
+            setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
+        } setElemHTML('totalDebt', formatMoney(totalDebt + totalExternalCredits));
+        setElemText('activeCount', activeCount);
+        setElemText('nearExpiryCount', nearExpiryCount);
         if (document.getElementById('sessionSubscribersCount')) {
-            document.getElementById('sessionSubscribersCount').innerText = totalQuickSessionClients;
+            setElemText('sessionSubscribersCount', totalQuickSessionClients);
         }
         // Update new dashboard metrics
         if (document.getElementById('todaySubIncome')) {
-            document.getElementById('todaySubIncome').innerHTML = formatMoney(todaySubIncome);
-            document.getElementById('todayProductSales').innerHTML = formatMoney(todaySales);
-            document.getElementById('todaySalesCount').innerHTML = todaySalesCount;
-            document.getElementById('monthlySubIncome').innerHTML = formatMoney(monthlySubIncome);
-            document.getElementById('yearlySubIncome').innerHTML = formatMoney(yearlySubIncome);
-            document.getElementById('monthlyProductSales').innerHTML = formatMoney(monthlySales);
-            document.getElementById('yearlyProductSales').innerHTML = formatMoney(yearlySales);
-            document.getElementById('netProductProfit').innerHTML = formatMoney(allTimeProductProfit);
+            setElemHTML('todaySubIncome', formatMoney(todaySubIncome));
+            setElemHTML('todayProductSales', formatMoney(todaySales));
+            setElemHTML('todaySalesCount', todaySalesCount);
+            setElemHTML('monthlySubIncome', formatMoney(monthlySubIncome));
+            setElemHTML('yearlySubIncome', formatMoney(yearlySubIncome));
+            setElemHTML('monthlyProductSales', formatMoney(monthlySales));
+            setElemHTML('yearlyProductSales', formatMoney(yearlySales));
+            setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
         }
         // Calculate Stock metrics
         let totalStock1Units = 0; let totalStock2Units = 0;
@@ -6626,19 +6678,19 @@
             }); }
         // Update Products View Summary Stats
         if (document.getElementById('prodViewTodaySales')) {
-            document.getElementById('prodViewTodaySales').innerHTML = formatMoney(todaySales);
+            setElemHTML('prodViewTodaySales', formatMoney(todaySales));
         } if (document.getElementById('prodViewMonthlySales')) {
-            document.getElementById('prodViewMonthlySales').innerHTML = formatMoney(monthlySales);
+            setElemHTML('prodViewMonthlySales', formatMoney(monthlySales));
         } if (document.getElementById('prodViewTodayCount')) {
-            document.getElementById('prodViewTodayCount').innerText = todaySalesCount;
+            setElemText('prodViewTodayCount', todaySalesCount);
         } if (document.getElementById('prodViewStock1Count')) {
-            document.getElementById('prodViewStock1Count').innerText = `${totalStock1Units} قطعة`;
+            setElemText('prodViewStock1Count', `${totalStock1Units} قطعة`);
         } if (document.getElementById('prodViewStock2Count')) {
-            document.getElementById('prodViewStock2Count').innerText = `${totalStock2Units} قطعة`;
+            setElemText('prodViewStock2Count', `${totalStock2Units} قطعة`);
         } if (document.getElementById('prodViewTotalCapital')) {
-            document.getElementById('prodViewTotalCapital').innerHTML = formatMoney(totalStockCapital);
+            setElemHTML('prodViewTotalCapital', formatMoney(totalStockCapital));
         } if (document.getElementById('prodViewNetProfit')) {
-            document.getElementById('prodViewNetProfit').innerHTML = formatMoney(allTimeProductProfit);
+            setElemHTML('prodViewNetProfit', formatMoney(allTimeProductProfit));
         }
         // Real-time Category Breakdown Calculations (Doses, Boxes, Frigo)
         let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
@@ -6661,39 +6713,39 @@
                     frigoProfit += profit;
                     frigoUnits += qty; } } });
         if (document.getElementById('prodCatMonthLabel')) {
-            document.getElementById('prodCatMonthLabel').innerText = `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`;
+            setElemText('prodCatMonthLabel', `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`);
         } if (document.getElementById('prodCatDosesIncome')) {
-            document.getElementById('prodCatDosesIncome').innerHTML = formatMoney(dosesSales);
-            document.getElementById('prodCatDosesProfit').innerHTML = `صافي الربح: ${dosesProfit.toLocaleString()} دج`;
-            document.getElementById('prodCatDosesUnits').innerText = `${dosesUnits} جرعة مباعة`;
+            setElemHTML('prodCatDosesIncome', formatMoney(dosesSales));
+            setElemHTML('prodCatDosesProfit', `صافي الربح: ${dosesProfit.toLocaleString()} دج`);
+            setElemText('prodCatDosesUnits', `${dosesUnits} جرعة مباعة`);
         } if (document.getElementById('prodCatBoxesIncome')) {
-            document.getElementById('prodCatBoxesIncome').innerHTML = formatMoney(boxesSales);
-            document.getElementById('prodCatBoxesProfit').innerHTML = `صافي الربح: ${boxesProfit.toLocaleString()} دج`;
-            document.getElementById('prodCatBoxesUnits').innerText = `${boxesUnits} علبة مباعة`;
+            setElemHTML('prodCatBoxesIncome', formatMoney(boxesSales));
+            setElemHTML('prodCatBoxesProfit', `صافي الربح: ${boxesProfit.toLocaleString()} دج`);
+            setElemText('prodCatBoxesUnits', `${boxesUnits} علبة مباعة`);
         } if (document.getElementById('prodCatFrigoIncome')) {
-            document.getElementById('prodCatFrigoIncome').innerHTML = formatMoney(frigoSales);
-            document.getElementById('prodCatFrigoProfit').innerHTML = `صافي الربح: ${frigoProfit.toLocaleString()} دج`;
-            document.getElementById('prodCatFrigoUnits').innerText = `${frigoUnits} قارورة / قطعة`;
+            setElemHTML('prodCatFrigoIncome', formatMoney(frigoSales));
+            setElemHTML('prodCatFrigoProfit', `صافي الربح: ${frigoProfit.toLocaleString()} دج`);
+            setElemText('prodCatFrigoUnits', `${frigoUnits} قارورة / قطعة`);
         }
         // Update Customers View Summary Stats
         if (document.getElementById('custViewActiveCount')) {
-            document.getElementById('custViewActiveCount').innerText = activeCount;
+            setElemText('custViewActiveCount', activeCount);
         } if (document.getElementById('custViewTodayIncome')) {
-            document.getElementById('custViewTodayIncome').innerHTML = formatMoney(todaySubIncome);
+            setElemHTML('custViewTodayIncome', formatMoney(todaySubIncome));
         } if (document.getElementById('custViewMonthlyIncome')) {
-            document.getElementById('custViewMonthlyIncome').innerHTML = formatMoney(monthlySubIncome);
+            setElemHTML('custViewMonthlyIncome', formatMoney(monthlySubIncome));
         } if (document.getElementById('custViewSessionCount')) {
-            document.getElementById('custViewSessionCount').innerText = totalQuickSessionClients;
+            setElemText('custViewSessionCount', totalQuickSessionClients);
         } if (document.getElementById('custViewNearExpiryCount')) {
-            document.getElementById('custViewNearExpiryCount').innerText = nearExpiryCount;
+            setElemText('custViewNearExpiryCount', nearExpiryCount);
         }
         // Keep all Dashboard Stats sections visible on all screen sizes and devices
         if (document.getElementById('mainStatsSection')) {
-            document.getElementById('mainStatsSection').style.display = 'block';
+            setElemDisplay('mainStatsSection', 'block');
         } if (document.getElementById('productsStatsSection')) {
-            document.getElementById('productsStatsSection').style.display = 'block';
+            setElemDisplay('productsStatsSection', 'block');
         } if (document.getElementById('subscribersStatsSection')) {
-            document.getElementById('subscribersStatsSection').style.display = 'block';
+            setElemDisplay('subscribersStatsSection', 'block');
         } const eyeIcon = document.getElementById('eyeIcon');
         if (eyeIcon) { if (appState.hideFinances) {
                 eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"></path>';
@@ -6916,7 +6968,7 @@
         const dateInput = document.getElementById('caisseInspectionDate');
         if (dateInput) dateInput.value = newDate;
         renderCaisseView(); } window.handleClotureFormDateChange = handleClotureFormDateChange;
-    function handleClotureAmountInput() { const dateVal = document.getElementById('clotureFormDate')?.value || appState.selectedCaisseDate || getLocalDateString(new Date());
+    function handleClotureAmountInput() { const dateVal = getElemVal('clotureFormDate') || appState.selectedCaisseDate || getLocalDateString(new Date());
         const details = calculateCaisseDetails(dateVal);
         const actualInput = document.getElementById('clotureFormActualAmount');
         const previewContainer = document.getElementById('clotureDifferencePreview');
@@ -6944,12 +6996,12 @@
     function toggleDenominationCounter() { const container = document.getElementById('denominationCounterContainer');
         if (container) { container.classList.toggle('hidden');
         } } window.toggleDenominationCounter = toggleDenominationCounter;
-    function calcDenominations() { const v2000 = (parseInt(document.getElementById('denom_2000')?.value) || 0) * 2000;
-        const v1000 = (parseInt(document.getElementById('denom_1000')?.value) || 0) * 1000;
-        const v500 = (parseInt(document.getElementById('denom_500')?.value) || 0) * 500;
-        const v200 = (parseInt(document.getElementById('denom_200')?.value) || 0) * 200;
-        const v100 = (parseInt(document.getElementById('denom_100')?.value) || 0) * 100;
-        const v50 = (parseInt(document.getElementById('denom_50')?.value) || 0) * 50;
+    function calcDenominations() { const v2000 = (parseInt(getElemVal('denom_2000')) || 0) * 2000;
+        const v1000 = (parseInt(getElemVal('denom_1000')) || 0) * 1000;
+        const v500 = (parseInt(getElemVal('denom_500')) || 0) * 500;
+        const v200 = (parseInt(getElemVal('denom_200')) || 0) * 200;
+        const v100 = (parseInt(getElemVal('denom_100')) || 0) * 100;
+        const v50 = (parseInt(getElemVal('denom_50')) || 0) * 50;
         const sum = v2000 + v1000 + v500 + v200 + v100 + v50;
         const badge = document.getElementById('denomTotalBadge');
         if (badge) { badge.textContent = `المجموع: ${formatMoney(sum)}`;
@@ -6993,6 +7045,7 @@
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('caisseLogs', logEntry);
         }
+        if (typeof logActivity === 'function') logActivity('caisse', 'جرد وإغلاق الخزينة', `تاريخ الجرد: ${dateVal} - المبلغ الفعلي: ${finalActual.toLocaleString()} دج`, finalActual);
         saveState(); renderCaisseView();
         render(); } window.handleCaisseClotureSubmit = handleCaisseClotureSubmit;
     function deleteCaisseLog(logId) { if (!logId) return;
@@ -7000,7 +7053,10 @@
             showAppConfirm('هل أنت متأكد من حذف سجل جرد الصندوق هذا؟', function() {
                 if (!Array.isArray(appState.caisseLogs)) return;
                 const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
-                if (idx === -1) return; appState.caisseLogs.splice(idx, 1);
+                if (idx === -1) return;
+                const logItem = appState.caisseLogs[idx];
+                if (typeof logActivity === 'function') logActivity('caisse', 'حذف سجل جرد الخزينة', `حذف سجل الجرد ليوم: ${logItem ? logItem.date : logId}`);
+                appState.caisseLogs.splice(idx, 1);
                 if (window.deleteFirebaseSectionItem) {
                     window.deleteFirebaseSectionItem('caisseLogs', logId);
                 }
@@ -7038,10 +7094,10 @@
         }
         // 2. Metrics Cards
         if (document.getElementById('caisseDayTotalIncome')) {
-            document.getElementById('caisseDayTotalIncome').innerHTML = formatMoney(details.totalIncome);
-            document.getElementById('caisseDaySubIncome').innerHTML = formatMoney(details.subIncome);
-            document.getElementById('caisseDayQuickIncome').innerHTML = formatMoney(details.quickIncome);
-            document.getElementById('caisseDaySalesIncome').innerHTML = formatMoney(details.salesIncome);
+            setElemHTML('caisseDayTotalIncome', formatMoney(details.totalIncome));
+            setElemHTML('caisseDaySubIncome', formatMoney(details.subIncome));
+            setElemHTML('caisseDayQuickIncome', formatMoney(details.quickIncome));
+            setElemHTML('caisseDaySalesIncome', formatMoney(details.salesIncome));
         } const actualElem = document.getElementById('caisseDayActualAmount');
         const statusBadgeElem = document.getElementById('caisseDayStatusBadge');
         if (actualElem) { if (details.isClosed) {
@@ -7080,8 +7136,8 @@
                 diffLabelElem.textContent = 'سجل المبلغ الفعلي لمعرفة الفارق والعجز';
                 if (diffCardElem) diffCardElem.className = 'bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-2xs';
             } } if (document.getElementById('caisseMonthManqueTotal')) {
-            document.getElementById('caisseMonthManqueTotal').innerHTML = formatMoney(caisseStats.currentMonthManque);
-            document.getElementById('caisseYearManqueTotal').innerHTML = formatMoney(caisseStats.currentYearManque);
+            setElemHTML('caisseMonthManqueTotal', formatMoney(caisseStats.currentMonthManque));
+            setElemHTML('caisseYearManqueTotal', formatMoney(caisseStats.currentYearManque));
         }
         // 3. Populate Clôture Form
         const clotureDateInput = document.getElementById('clotureFormDate');
@@ -8069,6 +8125,7 @@
         };
 
         appState.staffPayouts.unshift(newPayout);
+        if (typeof logActivity === 'function') logActivity('payout', 'تسجيل خلاص عامل', `العامل: ${name} - النوع: ${type}`, amount);
         saveState();
 
         if (nameInput) nameInput.value = '';
@@ -8083,19 +8140,24 @@
 
     window.deleteStaffPayout = function(id) {
         if (!id) return;
-        showAppConfirm('هل أنت متأكد من حذف هذه الدفعة المخصصة للعامل؟', function() {
-            if (!Array.isArray(appState.staffPayouts)) return;
-            const idx = appState.staffPayouts.findIndex(p => String(p.id) === String(id));
-            if (idx !== -1) {
-                appState.staffPayouts.splice(idx, 1);
-                saveState();
-                showSuccessToast('تم حذف الدفعة بنجاح');
-                renderStaffPayouts();
-                render();
-            }
-        }, {
-            title: 'حذف خلاص عامل',
-            confirmText: 'نعم، حذف'
+        promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
+            showAppConfirm('هل أنت متأكد من حذف هذه الدفعة المخصصة للعامل؟', function() {
+                if (!Array.isArray(appState.staffPayouts)) return;
+                const idx = appState.staffPayouts.findIndex(p => String(p.id) === String(id));
+                if (idx !== -1) {
+                    const pItem = appState.staffPayouts[idx];
+                    if (typeof logActivity === 'function') logActivity('payout', 'حذف خلاص عامل', `حذف الدفعة المخصصة لـ: ${pItem ? pItem.name : id}`);
+                    appState.staffPayouts.splice(idx, 1);
+                    if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
+                    saveState();
+                    showSuccessToast('تم حذف الدفعة بنجاح');
+                    renderStaffPayouts();
+                    render();
+                }
+            }, {
+                title: 'حذف خلاص عامل',
+                confirmText: 'نعم، حذف'
+            });
         });
     };
 
@@ -8341,12 +8403,263 @@
                     `; }).join(''); } } modal.classList.add('active');
     };     window.printSuppliersMonthlyReport = function() {
         window.print(); };
+
+    // ============================================================================
+    // ACTIVITY LOG ENGINE
+    // ============================================================================
+    function logActivity(type, title, details, amount = 0) {
+        try {
+            if (!Array.isArray(appState.activityLogs)) appState.activityLogs = [];
+            const logItem = {
+                id: 'act_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                timestamp: new Date().toISOString(),
+                type: type || 'system',
+                title: title || 'عملية جديدة',
+                details: details || '',
+                amount: Number(amount) || 0,
+                dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0]
+            };
+            appState.activityLogs.unshift(logItem);
+            if (appState.activityLogs.length > 500) {
+                appState.activityLogs = appState.activityLogs.slice(0, 500);
+            }
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('activityLogs', logItem);
+            }
+            saveState();
+        } catch (err) {
+            console.warn('logActivity error:', err);
+        }
+    }
+    window.logActivity = logActivity;
+
+    function ensureSeedActivityLogs() {
+        if (!Array.isArray(appState.activityLogs)) appState.activityLogs = [];
+        if (appState.activityLogs.length > 0) return;
+
+        const seeded = [];
+        if (Array.isArray(appState.sales)) {
+            appState.sales.forEach(s => {
+                if (!s) return;
+                const d = s.date || s.createdAt || new Date().toISOString();
+                seeded.push({
+                    id: 'act_s_' + (s.id || Math.random()),
+                    timestamp: d,
+                    type: 'sale',
+                    title: 'عملية بيع منتج',
+                    details: `المنتج: ${s.prodName || s.name || 'منتج'} - الكمية: ${s.qty || 1}`,
+                    amount: Number(s.totalPrice || s.price || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+        if (Array.isArray(appState.expenses)) {
+            appState.expenses.forEach(e => {
+                if (!e) return;
+                const d = e.date || new Date().toISOString();
+                seeded.push({
+                    id: 'act_e_' + (e.id || Math.random()),
+                    timestamp: d,
+                    type: 'expense',
+                    title: 'تسجيل مصروف',
+                    details: `البيان: ${e.desc || 'مصروف'} - الفئة: ${e.category || 'عام'}`,
+                    amount: Number(e.amount || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+        if (Array.isArray(appState.credits)) {
+            appState.credits.forEach(c => {
+                if (!c) return;
+                const d = c.date || new Date().toISOString();
+                seeded.push({
+                    id: 'act_cr_' + (c.id || Math.random()),
+                    timestamp: d,
+                    type: 'credit',
+                    title: 'تسجيل دين / كريدي',
+                    details: `الاسم: ${c.name || 'عميل'} - ${c.desc || ''}`,
+                    amount: Number(c.amount || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+        if (Array.isArray(appState.customers)) {
+            appState.customers.forEach(cust => {
+                if (!cust) return;
+                const d = cust.startDate || new Date().toISOString();
+                seeded.push({
+                    id: 'act_cust_' + (cust.id || Math.random()),
+                    timestamp: d,
+                    type: 'customer',
+                    title: 'اشتراك مشترك',
+                    details: `المشترك: ${cust.name || ''} - الهاتف: ${cust.phone || ''}`,
+                    amount: Number(cust.price || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+        if (Array.isArray(appState.staffPayouts)) {
+            appState.staffPayouts.forEach(p => {
+                if (!p) return;
+                const d = p.date || new Date().toISOString();
+                seeded.push({
+                    id: 'act_p_' + (p.id || Math.random()),
+                    timestamp: d,
+                    type: 'payout',
+                    title: 'تسجيل خلاص عامل',
+                    details: `العامل: ${p.name || ''} - النوع: ${p.type || 'خلاص'}`,
+                    amount: Number(p.amount || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+        if (Array.isArray(appState.caisseLogs)) {
+            appState.caisseLogs.forEach(l => {
+                if (!l) return;
+                const d = l.date || new Date().toISOString();
+                seeded.push({
+                    id: 'act_l_' + (l.id || Math.random()),
+                    timestamp: d,
+                    type: 'caisse',
+                    title: 'جرد إغلاق الخزينة',
+                    details: `المبلغ الفعلي: ${Number(l.actualAmount || 0).toLocaleString()} دج`,
+                    amount: Number(l.actualAmount || 0),
+                    dateStr: typeof getLocalDateString === 'function' ? getLocalDateString(new Date(d)) : String(d).split('T')[0]
+                });
+            });
+        }
+
+        seeded.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+        appState.activityLogs = seeded;
+        saveState();
+    }
+    window.ensureSeedActivityLogs = ensureSeedActivityLogs;
+
+    function openActivityLogModal() {
+        ensureSeedActivityLogs();
+        const modal = document.getElementById('activityLogModal');
+        if (modal) {
+            modal.classList.add('active');
+            renderActivityLogModal();
+        }
+    }
+    window.openActivityLogModal = openActivityLogModal;
+
+    function renderActivityLogModal() {
+        const container = document.getElementById('activityLogList');
+        const countElem = document.getElementById('activityLogTotalCount');
+        if (!container) return;
+
+        let logs = Array.isArray(appState.activityLogs) ? [...appState.activityLogs] : [];
+
+        const searchInput = document.getElementById('activityLogSearchInput');
+        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        if (q) {
+            logs = logs.filter(l => {
+                if (!l) return false;
+                const t = (l.title || '').toLowerCase();
+                const d = (l.details || '').toLowerCase();
+                return t.includes(q) || d.includes(q);
+            });
+        }
+
+        const catFilter = document.getElementById('activityLogCategoryFilter');
+        const cat = catFilter ? catFilter.value : 'all';
+        if (cat !== 'all') {
+            logs = logs.filter(l => l && l.type === cat);
+        }
+
+        logs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+
+        if (countElem) {
+            countElem.textContent = `${logs.length} عملية`;
+        }
+
+        if (logs.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-12 bg-slate-50 border border-slate-100 rounded-2xl">
+                    <div class="w-12 h-12 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center mx-auto mb-3">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <p class="text-sm font-bold text-slate-700">لا توجد عمليات مسجلة في السجل</p>
+                    <p class="text-xs text-slate-400 mt-1">سيتم تسجيل كافة التحركات المالية والاشتراكات هنا تلقائياً</p>
+                </div>
+            `;
+            return;
+        }
+
+        const typeConfig = {
+            customer: { label: 'مشتركين', color: 'bg-blue-50 text-blue-700 border-blue-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>' },
+            sale: { label: 'مبيعات', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>' },
+            expense: { label: 'مصاريف', color: 'bg-rose-50 text-rose-700 border-rose-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>' },
+            credit: { label: 'كريدي', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>' },
+            payout: { label: 'خلاص عمال', color: 'bg-purple-50 text-purple-700 border-purple-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>' },
+            supplier: { label: 'موردين', color: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0zM13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 011 1v1M13 16h2.586a1 1 0 00.707-.293l3.414-3.414a1 1 0 00.293-.707V10a1 1 0 00-1-1h-1"></path></svg>' },
+            caisse: { label: 'جرد خزينة', color: 'bg-cyan-50 text-cyan-700 border-cyan-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z"></path></svg>' },
+            system: { label: 'النظام', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' }
+        };
+
+        container.innerHTML = logs.map(item => {
+            const safeId = escapeHTML(item.id || '');
+            const cfg = typeConfig[item.type] || typeConfig.system;
+            const dateObj = new Date(item.timestamp || Date.now());
+            const formattedDate = isNaN(dateObj.getTime()) 
+                ? (item.dateStr || '') 
+                : dateObj.toLocaleDateString('ar-DZ') + ' - ' + dateObj.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' });
+
+            const amt = Number(item.amount) || 0;
+            const amtBadge = amt > 0 
+                ? `<span class="px-2.5 py-1 rounded-xl bg-slate-900 text-white font-extrabold text-xs shrink-0 dir-ltr">${amt.toLocaleString()} دج</span>` 
+                : '';
+
+            return `
+            <div class="flex items-center justify-between p-3.5 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all gap-3">
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <div class="w-10 h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-base shrink-0">
+                        ${cfg.icon}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap mb-0.5">
+                            <span class="px-2 py-0.5 rounded-md text-[10px] font-black ${cfg.color} border">${cfg.label}</span>
+                            <h4 class="font-bold text-slate-800 text-xs sm:text-sm truncate">${escapeHTML(item.title || '')}</h4>
+                        </div>
+                        <p class="text-xs text-slate-600 font-medium truncate">${escapeHTML(item.details || '')}</p>
+                        <span class="text-[10px] text-slate-400 font-bold block mt-1">${formattedDate}</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 shrink-0">
+                    ${amtBadge}
+                    <button type="button" onclick="deleteActivityLog('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            </div>
+            `;
+        }).join('');
+    }
+    window.renderActivityLogModal = renderActivityLogModal;
+
+    function deleteActivityLog(id) {
+        if (!id) return;
+        promptWithPassword({ title: 'حذف من سجل العمليات', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا السجل من سجل العمليات العام', buttonText: 'تأكيد الحذف' }, () => {
+            if (!Array.isArray(appState.activityLogs)) return;
+            appState.activityLogs = appState.activityLogs.filter(l => String(l && l.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('activityLogs', id);
+            }
+            saveState();
+            showSuccessToast('تم حذف السجل من سجل العمليات بنجاح');
+            renderActivityLogModal();
+        });
+    }
+    window.deleteActivityLog = deleteActivityLog;
     setupGlobalInputSecurity(); render(); if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
