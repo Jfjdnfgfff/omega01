@@ -3764,7 +3764,7 @@
     }
     window.updateMockDataUIState = updateMockDataUIState;
 
-    window.generateMockTestData = function(customersCount = 200, creditsCount = 100, silent = false) {
+    function generateMockTestData(customersCount = 200, creditsCount = 100, silent = false) {
         if (!Array.isArray(appState.packages) || appState.packages.length === 0) {
             appState.packages = [
                 { id: 'pkg_1', name: 'اشتراك كمال أجسام شهري', price: 3000, type: 'time', durationDays: 30 },
@@ -3897,7 +3897,7 @@
         if (typeof renderCreditsList === 'function') renderCreditsList();
     };
 
-    window.clearMockTestData = function() {
+    function clearMockTestData() {
         showAppConfirm('هل أنت متأكد من حذف البيانات التجريبية فقط؟ ستبقى كافة بياناتك الحقيقية كما هي.', function() {
             if (Array.isArray(appState.customers)) {
                 const removedCustIds = appState.customers.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cust_'))).map(c => c.id);
@@ -3923,7 +3923,9 @@
             if (typeof render === 'function') render();
             if (typeof renderCreditsList === 'function') renderCreditsList();
         }, { title: 'حذف البيانات التجريبية', confirmText: 'نعم، حذف التجريبي' });
-    };
+    }
+    window.generateMockTestData = generateMockTestData;
+    window.clearMockTestData = clearMockTestData;
 
     // Auto-seed mock test data immediately for testing system performance
     if (!localStorage.getItem('sm_mock_seeded_200_100_v1')) {
@@ -7126,7 +7128,7 @@
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, sharedRootFetch, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }

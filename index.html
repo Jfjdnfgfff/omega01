@@ -11,6 +11,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
+  <script>
+    // Ensure critical inline event handlers have safe stubs if clicked before module completes
+    window.generateMockTestData = window.generateMockTestData || function() {
+      console.warn('generateMockTestData is loading...');
+    };
+    window.clearMockTestData = window.clearMockTestData || function() {
+      console.warn('clearMockTestData is loading...');
+    };
+  </script>
 </head>
 <body class="text-slate-900 w-full min-h-screen min-h-dvh flex flex-col bg-slate-50">
   <div id="loginView" class="hidden" style="display: none !important;"></div>
