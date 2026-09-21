@@ -1617,7 +1617,10 @@
           <p id="privacyModalPrompt" class="text-xs text-slate-500 mb-4 text-center font-bold">أدخل كلمة المرور لعرض الإحصائيات المالية</p>
           <div class="space-y-4">
               <input type="password" id="privacyPasswordInput" class="w-full border border-slate-200 rounded-xl px-4 py-3 text-center text-lg font-bold outline-none focus:border-blue-500 bg-slate-50 focus:bg-white transition-all" placeholder="••••" maxlength="4">
-              <button id="privacyModalSubmitBtn" onclick="confirmPrivacyPassword()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg transition-all active:scale-95">عرض البيانات</button>
+              <div class="grid grid-cols-2 gap-3">
+                  <button id="privacyModalCancelBtn" onclick="cancelPrivacyPassword()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-all active:scale-95">إلغاء</button>
+                  <button id="privacyModalSubmitBtn" onclick="confirmPrivacyPassword()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg transition-all active:scale-95">عرض البيانات</button>
+              </div>
           </div> </div> </div>
   <div id="expensesModal" class="modal-overlay" onclick="handleOverlayClick(event, 'expensesModal')">
       <div class="modal-content relative w-full max-w-lg bg-white p-6 sm:p-7 rounded-[2rem] shadow-2xl space-y-5">

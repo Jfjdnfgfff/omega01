@@ -19,6 +19,32 @@
     appId: "1:596061120034:web:f7c9999af8ee4ef949cc7b",
     measurementId: "G-YCRV248RTM"
   };
+
+  // Global state variables
+  window.pendingPasswordCallback = null;
+  window.pendingCancelCallback = null;
+  window.renderScheduled = false;
+
+  function togglePrivacy() {
+      if (appState.hideFinances) {
+          promptWithPassword({
+              title: 'قفل البيانات المالية',
+              prompt: 'أدخل كلمة المرور لعرض الإحصائيات والأرقام المالية',
+              buttonText: 'عرض البيانات'
+          }, () => {
+              appState.hideFinances = false;
+              saveState();
+              render();
+              showSuccessToast('تم إلغاء قفل البيانات المالية');
+          });
+      } else {
+          appState.hideFinances = true;
+          saveState();
+          render();
+      }
+  }
+  window.togglePrivacy = togglePrivacy;
+
   function getRTDBUrl() {
     return (firebaseConfig && firebaseConfig.databaseURL)
       ? firebaseConfig.databaseURL.replace(/\/$/, '')
@@ -985,6 +1011,8 @@
                         buttonText: 'فتح الصندوق'
                     }, () => {
                         openCaisseInternal();
+                    }, () => {
+                        toggleView('dashboard');
                     });
                 } else {
                     openCaisseInternal();
@@ -4343,10 +4371,12 @@
             } } closeModal('messageModal'); }
     function formatMoney(amount) { return appState.hideFinances ? '**** دج' : Number(amount).toLocaleString() + ' دج'; }
     // Global password action callback handler
-    let pendingPasswordCallback = null; function verifyMasterPassword(pass) {
+    
+    function verifyMasterPassword(pass) {
         if (!pass) return false; return (pass === '8992' || (typeof hashString === 'function' && hashString(pass) === 1724890));
     } window.verifyMasterPassword = verifyMasterPassword;
-    function promptWithPassword(options, onSuccessCallback) {
+
+    function promptWithPassword(options, onSuccessCallback, onCancelCallback) {
         const title = options?.title || 'كلمة المرور';
         const promptText = options?.prompt || 'أدخل كلمة المرور للمتابعة';
         const btnText = options?.buttonText || 'تأكيد';
@@ -4358,33 +4388,41 @@
         if (promptEl) promptEl.innerText = promptText;
         if (submitBtn) submitBtn.innerText = btnText;
         if (input) input.value = '';
-        pendingPasswordCallback = typeof onSuccessCallback === 'function' ? onSuccessCallback : null;
+        window.pendingPasswordCallback = typeof onSuccessCallback === 'function' ? onSuccessCallback : null;
+        window.pendingCancelCallback = typeof onCancelCallback === 'function' ? onCancelCallback : null;
         openModal('privacyModal'); setTimeout(() => {
             if (input) input.focus(); }, 200); }
     window.promptWithPassword = promptWithPassword;
-    function togglePrivacy() { if (appState.hideFinances) {
-            promptWithPassword({ title: 'قفل البيانات المالية',
-                prompt: 'أدخل كلمة المرور لعرض الإحصائيات والأرقام المالية',
-                buttonText: 'عرض البيانات' }, () => {
-                appState.hideFinances = false;
-                saveState(); render();
-                showSuccessToast('تم إلغاء قفل البيانات المالية');
-            }); } else { appState.hideFinances = true;
-            saveState(); render(); } } window.confirmPrivacyPassword = function() {
+
+    window.confirmPrivacyPassword = function() {
         const input = document.getElementById('privacyPasswordInput');
         const pass = input ? input.value : '';
-        // Check master password '8992' (hash 1724890)
-        if (verifyMasterPassword(pass)) { const cb = pendingPasswordCallback;
-            pendingPasswordCallback = null;
+        if (verifyMasterPassword(pass)) { 
+            const cb = window.pendingPasswordCallback;
+            window.pendingPasswordCallback = null;
+            window.pendingCancelCallback = null;
             closeModal('privacyModal'); if (input) input.value = '';
             if (cb) { try { cb(); } catch (err) {
                     console.error('Error executing password callback:', err);
                 } } else { appState.hideFinances = false;
                 saveState(); render();
                 showSuccessToast('تم التحقق بنجاح');
-            } } else { showErrorToast('كلمة المرور خاطئة');
-            if (input) { input.value = ''; input.focus();
-            } } }; document.getElementById('privacyPasswordInput')?.addEventListener('keypress', function(e) {
+            } 
+        } else { 
+            showErrorToast('كلمة المرور خاطئة');
+            if (input) { input.value = ''; input.focus(); } 
+        } 
+    };
+
+    window.cancelPrivacyPassword = function() {
+        const cb = window.pendingCancelCallback;
+        window.pendingPasswordCallback = null;
+        window.pendingCancelCallback = null;
+        closeModal('privacyModal');
+        if (cb) { try { cb(); } catch (err) {
+            console.error('Error executing cancel callback:', err);
+        } }
+    }; document.getElementById('privacyPasswordInput')?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') confirmPrivacyPassword();
     }); window.openExpensesIfAllowed = function() {
         if (appState.hideFinances) {
@@ -5575,12 +5613,11 @@
         if (isVisible('caisseView') || isModalOpen('caisseModal')) renderCaisseView();
         if (typeof updateMockDataUIState === 'function') updateMockDataUIState();
     }
-    let renderScheduled = false;
     function render() {
-        if (renderScheduled) return;
-        renderScheduled = true;
+        if (window.renderScheduled) return;
+        window.renderScheduled = true;
         requestAnimationFrame(() => {
-            renderScheduled = false;
+            window.renderScheduled = false;
             performFullRender();
         });
     }
