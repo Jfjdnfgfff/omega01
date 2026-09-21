@@ -148,7 +148,9 @@ window.setElemRequired = setElemRequired;
     caisseLogs: { oldestKey: null, newestKey: null, hasMore: true },
     staffPayouts: { oldestKey: null, newestKey: null, hasMore: true },
     coachAbsences: { oldestKey: null, newestKey: null, hasMore: true },
+    suppliers: { oldestKey: null, newestKey: null, hasMore: true },
     supplierTransactions: { oldestKey: null, newestKey: null, hasMore: true },
+    packages: { oldestKey: null, newestKey: null, hasMore: true },
     activityLogs: { oldestKey: null, newestKey: null, hasMore: true }
   };
   window.firebaseLoadedSections = window.firebaseLoadedSections || {};
@@ -170,32 +172,22 @@ window.setElemRequired = setElemRequired;
         let items = [];
 
         if (window.firebaseDB && window.firebaseRef && window.firebaseGet && window.firebaseQuery && window.firebaseLimitToLast && window.firebaseOrderByKey) {
-          let q;
-          if (sectionName === 'packages' || sectionName === 'suppliers') {
-            q = window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`);
-          } else {
-            q = window.firebaseQuery(
-              window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
-              window.firebaseOrderByKey(),
-              window.firebaseLimitToLast(limit)
-            );
-          }
+          const q = window.firebaseQuery(
+            window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
+            window.firebaseOrderByKey(),
+            window.firebaseLimitToLast(limit)
+          );
           let snap = await window.firebaseGet(q);
           if (snap.exists()) {
             const data = snap.val();
             items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
           } else {
             // Migration / legacy fallback
-            let legQ;
-            if (sectionName === 'packages' || sectionName === 'suppliers') {
-              legQ = window.firebaseRef(window.firebaseDB, sectionName);
-            } else {
-              legQ = window.firebaseQuery(
-                window.firebaseRef(window.firebaseDB, sectionName),
-                window.firebaseOrderByKey(),
-                window.firebaseLimitToLast(limit)
-              );
-            }
+            const legQ = window.firebaseQuery(
+              window.firebaseRef(window.firebaseDB, sectionName),
+              window.firebaseOrderByKey(),
+              window.firebaseLimitToLast(limit)
+            );
             const legSnap = await window.firebaseGet(legQ);
             if (legSnap.exists()) {
               const data = legSnap.val();
@@ -204,9 +196,7 @@ window.setElemRequired = setElemRequired;
           }
         } else {
           const baseUrl = getRTDBUrl();
-          const url = (sectionName === 'packages' || sectionName === 'suppliers')
-            ? `${baseUrl}/v2/${v2Sec}.json`
-            : `${baseUrl}/v2/${v2Sec}.json?orderBy="$key"&limitToLast=${limit}`;
+          const url = `${baseUrl}/v2/${v2Sec}.json?orderBy="$key"&limitToLast=${limit}`;
           const res = await fetch(url);
           if (res.ok) {
             const data = await res.json();
@@ -4133,8 +4123,9 @@ window.setElemRequired = setElemRequired;
                             p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => x.id !== p.id && x.barcode === prodBarcode && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
                             if (p1) { p1.stock = q1;
                                 p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal;
+                                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                             } else if (q1 > 0) {
-                                appState.products.push({
+                                const newProd1 = {
                                     id: Date.now().toString(),
                                     barcode: prodBarcode,
                                     name: prodName,
@@ -4147,13 +4138,17 @@ window.setElemRequired = setElemRequired;
                                     stockLocation: 'stock1',
                                     expiryDate: expiryDateVal,
                                     category: categoryVal
-                                }); } } else { p.stock = q1;
+                                };
+                                appState.products.push(newProd1);
+                                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd1);
+                            } } else { p.stock = q1;
                             p.stockLocation = 'stock1';
                             let p2 = prodBarcode ? appState.products.find(x => x.id !== p.id && x.barcode === prodBarcode && x.stockLocation === 'stock2') : null;
                             if (p2) { p2.stock = q2;
                                 p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal;
+                                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                             } else if (q2 > 0) {
-                                appState.products.push({
+                                const newProd2 = {
                                     id: (Date.now() + 10).toString(),
                                     barcode: prodBarcode,
                                     name: prodName,
@@ -4166,7 +4161,10 @@ window.setElemRequired = setElemRequired;
                                     stockLocation: 'stock2',
                                     expiryDate: expiryDateVal,
                                     category: categoryVal
-                                }); } } } else {
+                                };
+                                appState.products.push(newProd2);
+                                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
+                            } } } else {
                         p.stockLocation = stockLocationVal;
                         p.stock = parseFloat(getElemVal('prodStock')) || 0;
                     } if (p && window.saveFirebaseSectionItem) {
@@ -4194,6 +4192,7 @@ window.setElemRequired = setElemRequired;
                             p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal;
                             p1.expiryDate = expiryDateVal || p1.expiryDate;
                             p1.category = categoryVal;
+                            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                         } else { const newProd1 = {
                                 id: Date.now().toString(),
                                 barcode: prodBarcode,
@@ -4678,7 +4677,11 @@ window.setElemRequired = setElemRequired;
             return; } const normalizedBarcode = String(barcode).trim().toLowerCase();
         const localCandidate = (appState.products || []).find(p => String(p.barcode || '').trim().toLowerCase() === normalizedBarcode);
         showSuccessToast('جاري البحث عن بيانات المنتج...');
-        let product = null; if (window.firebaseDB && window.firebaseGet && window.firebaseRef) {
+        let product = null;
+        if (window.findProductByBarcode) {
+            try { product = await window.findProductByBarcode(barcode); } catch (e) { console.warn('findProductByBarcode note:', e); }
+        }
+        if (!product && window.firebaseDB && window.firebaseGet && window.firebaseRef) {
             try { const snapshot = await window.firebaseGet(window.firebaseRef(window.firebaseDB, 'products/' + barcode));
                 if (snapshot.exists()) { product = snapshot.val();
                 } } catch (e) { console.warn('Firebase search note:', e?.message || e);
@@ -9693,6 +9696,9 @@ window.setElemRequired = setElemRequired;
                 renderStaffPayouts();
                 if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) {
                     renderWorkerTransactionsModal();
+                }
+                if (typeof renderFemaleCoachModal === 'function' && isModalOpen('femaleCoachModal')) {
+                    renderFemaleCoachModal();
                 }
                 render();
             }

@@ -1,5 +1,5 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v2';
+const CACHE_NAME = 'omega-gym-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
