@@ -2096,6 +2096,16 @@ window.setElemRequired = setElemRequired;
     function closeModal(id) { if (!id) return;
         const el = document.getElementById(id);
         if (el) el.classList.remove('active'); }
+    function isModalOpen(id) {
+        if (!id) return false;
+        const el = document.getElementById(id);
+        return !!(el && el.classList.contains('active'));
+    }
+    function isVisible(id) {
+        if (!id) return false;
+        const el = document.getElementById(id);
+        return !!(el && !el.classList.contains('hidden') && el.style.display !== 'none');
+    }
     function handleOverlayClick(event, id) { if (!id) return;
         const el = document.getElementById(id);
         if (el && event.target === el) closeModal(id);
@@ -2106,8 +2116,12 @@ window.setElemRequired = setElemRequired;
             const activeModals = document.querySelectorAll('.modal-overlay.active');
             activeModals.forEach(modal => {
                 modal.classList.remove('active');
-            }); } }); window.openModal = openModal;
-    window.closeModal = closeModal; window.handleOverlayClick = handleOverlayClick;
+            }); } });
+    window.openModal = openModal;
+    window.closeModal = closeModal;
+    window.isModalOpen = isModalOpen;
+    window.isVisible = isVisible;
+    window.handleOverlayClick = handleOverlayClick;
     let appConfirmCallback = null; function showAppConfirm(message, onConfirm, options = {}) {
         appConfirmCallback = onConfirm; const titleElem = document.getElementById('appConfirmTitle');
         const msgElem = document.getElementById('appConfirmMessage');
@@ -3421,79 +3435,227 @@ window.setElemRequired = setElemRequired;
         document.getElementById('prodName')?.focus();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     } window.editProduct = editProduct;
-    // Stock Transfer Functions
+    // Stock Transfer Functions (تحويل بضاعة بين المخازن Stock 1 & Stock 2)
     function openStockTransferModal(defaultProdId) {
-        promptWithPassword({ title: 'تحويل المخزون',
-            prompt: 'أدخل كلمة المرور لإجراء عملية التحويل بين المخازن (Stock 1 / Stock 2)',
-            buttonText: 'متابعة التحويل' }, () => {
-            openModal('stockTransferModal');
-            populateTransferProducts(defaultProdId);
-        }); } window.openStockTransferModal = openStockTransferModal;
-    function populateTransferProducts(defaultProdId) {
+        openModal('stockTransferModal');
+        if (defaultProdId) {
+            const prod = (appState.products || []).find(p => String(p.id) === String(defaultProdId));
+            if (prod) {
+                const prodLoc = prod.stockLocation || 'stock1';
+                const fromSelect = document.getElementById('transferFromStock');
+                const toSelect = document.getElementById('transferToStock');
+                if (fromSelect) fromSelect.value = prodLoc;
+                if (toSelect) toSelect.value = (prodLoc === 'stock2') ? 'stock1' : 'stock2';
+            }
+        }
+        populateTransferProducts(defaultProdId);
+    }
+    window.openStockTransferModal = openStockTransferModal;
+
+    function handleTransferFromStockChange() {
         const fromLoc = getElemVal('transferFromStock') || 'stock2';
         const toSelect = document.getElementById('transferToStock');
-        if (toSelect) { toSelect.value = (fromLoc === 'stock2') ? 'stock1' : 'stock2';
-        } const prods = (appState.products || []).filter(p => {
+        if (toSelect) {
+            toSelect.value = (fromLoc === 'stock2') ? 'stock1' : 'stock2';
+        }
+        populateTransferProducts();
+    }
+    window.handleTransferFromStockChange = handleTransferFromStockChange;
+
+    function handleTransferToStockChange() {
+        const toLoc = getElemVal('transferToStock') || 'stock1';
+        const fromSelect = document.getElementById('transferFromStock');
+        if (fromSelect) {
+            fromSelect.value = (toLoc === 'stock1') ? 'stock2' : 'stock1';
+        }
+        populateTransferProducts();
+    }
+    window.handleTransferToStockChange = handleTransferToStockChange;
+
+    function populateTransferProducts(defaultProdId) {
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
+        const toLoc = getElemVal('transferToStock') || 'stock1';
+        const prods = (appState.products || []).filter(p => {
             const loc = p.stockLocation || 'stock1';
             return loc === fromLoc && Number(p.stock || 0) > 0;
-        }); const select = document.getElementById('transferProductSelect');
-        if (!select) return; let html = '<option value="">-- اختر المنتج لتحويله --</option>';
-        html += prods.map(p => { const sel = (p.id === defaultProdId) ? 'selected' : '';
-            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock}) ${p.barcode ? `[${p.barcode}]` : ''}</option>`;
-        }).join(''); select.innerHTML = html;
-        updateTransferMaxQty(); } window.populateTransferProducts = populateTransferProducts;
-    function updateTransferMaxQty() { const sel = document.getElementById('transferProductSelect');
+        });
+        const select = document.getElementById('transferProductSelect');
+        if (!select) return;
+        let html = '<option value="">-- اختر المنتج لتحويله --</option>';
+        html += prods.map(p => {
+            const sel = (String(p.id) === String(defaultProdId)) ? 'selected' : '';
+            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} قطعة)${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
+        }).join('');
+        select.innerHTML = html;
+        if (defaultProdId && prods.some(p => String(p.id) === String(defaultProdId))) {
+            select.value = defaultProdId;
+        }
+        updateTransferMaxQty();
+    }
+    window.populateTransferProducts = populateTransferProducts;
+
+    function updateTransferMaxQty() {
+        const sel = document.getElementById('transferProductSelect');
         const infoDiv = document.getElementById('transferCurrentStockInfo');
-        const badge = document.getElementById('transferAvailableQtyBadge');
+        const availBadge = document.getElementById('transferAvailableQtyBadge');
+        const destBadge = document.getElementById('transferDestQtyBadge');
         const input = document.getElementById('transferQtyInput');
-        if (!sel || !sel.value) { if (infoDiv) infoDiv.classList.add('hidden');
-            return; } const p = appState.products.find(x => x.id === sel.value);
-        if (p) { if (infoDiv) infoDiv.classList.remove('hidden');
-            if (badge) badge.textContent = `${p.stock} قطعة`;
-            if (input) { input.max = p.stock; if (!input.value || parseFloat(input.value) > p.stock) {
-                    input.value = Math.min(1, p.stock);
-                } } } } window.updateTransferMaxQty = updateTransferMaxQty;
-    function setTransferMaxQty() { const sel = document.getElementById('transferProductSelect');
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
+        const toLoc = getElemVal('transferToStock') || 'stock1';
+
+        if (!sel || !sel.value) {
+            if (infoDiv) infoDiv.classList.add('hidden');
+            return;
+        }
+        const sourceProd = (appState.products || []).find(x => String(x.id) === String(sel.value));
+        if (sourceProd) {
+            if (infoDiv) infoDiv.classList.remove('hidden');
+            const sourceStock = Number(sourceProd.stock || 0);
+            if (availBadge) availBadge.textContent = `${sourceStock} قطعة (${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+
+            let destProd = null;
+            if (sourceProd.barcode) {
+                destProd = (appState.products || []).find(p => p.barcode === sourceProd.barcode && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+            } else {
+                destProd = (appState.products || []).find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+            }
+            const destStock = destProd ? Number(destProd.stock || 0) : 0;
+            if (destBadge) destBadge.textContent = `${destStock} قطعة (${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+
+            if (input) {
+                input.max = sourceStock;
+                if (!input.value || parseFloat(input.value) > sourceStock || parseFloat(input.value) <= 0) {
+                    input.value = Math.min(1, sourceStock);
+                }
+            }
+            updateTransferPreview();
+        }
+    }
+    window.updateTransferMaxQty = updateTransferMaxQty;
+
+    function updateTransferPreview() {
+        const sel = document.getElementById('transferProductSelect');
+        const previewBadge = document.getElementById('transferPreviewBadge');
+        const input = document.getElementById('transferQtyInput');
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
+        const toLoc = getElemVal('transferToStock') || 'stock1';
+        if (!sel || !sel.value || !input || !previewBadge) return;
+
+        const sourceProd = (appState.products || []).find(x => String(x.id) === String(sel.value));
+        if (!sourceProd) return;
+
+        const qty = parseFloat(input.value) || 0;
+        const sourceStock = Number(sourceProd.stock || 0);
+        let destProd = null;
+        if (sourceProd.barcode) {
+            destProd = (appState.products || []).find(p => p.barcode === sourceProd.barcode && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+        } else {
+            destProd = (appState.products || []).find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+        }
+        const destStock = destProd ? Number(destProd.stock || 0) : 0;
+
+        const newSourceStock = Math.max(0, sourceStock - qty);
+        const newDestStock = destStock + (qty > 0 && qty <= sourceStock ? qty : 0);
+
+        const fromName = fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1';
+        const toName = toLoc === 'stock2' ? 'Stock 2' : 'Stock 1';
+
+        previewBadge.textContent = `${fromName}: (${sourceStock} ➔ ${newSourceStock})  |  ${toName}: (${destStock} ➔ ${newDestStock})`;
+    }
+    window.updateTransferPreview = updateTransferPreview;
+
+    function setTransferMaxQty() {
+        const sel = document.getElementById('transferProductSelect');
         const input = document.getElementById('transferQtyInput');
         if (!sel || !sel.value || !input) return;
-        const p = appState.products.find(x => x.id === sel.value);
-        if (p) { input.value = p.stock; } }
+        const p = (appState.products || []).find(x => String(x.id) === String(sel.value));
+        if (p) {
+            input.value = Number(p.stock || 0);
+            updateTransferPreview();
+        }
+    }
     window.setTransferMaxQty = setTransferMaxQty;
-    function handleStockTransfer(e) { if (e) e.preventDefault();
+
+    function handleStockTransfer(e) {
+        if (e) e.preventDefault();
         const fromLoc = getElemVal('transferFromStock') || 'stock2';
         const toLoc = getElemVal('transferToStock') || 'stock1';
         const prodId = getElemVal('transferProductSelect');
         const qty = parseFloat(getElemVal('transferQtyInput'));
-        if (!prodId) { showErrorToast('يرجى اختيار المنتج المراد تحويله');
-            return; } if (isNaN(qty) || qty <= 0) {
+        if (!prodId) {
+            showErrorToast('يرجى اختيار المنتج المراد تحويله');
+            return;
+        }
+        if (isNaN(qty) || qty <= 0) {
             showErrorToast('يرجى إدخال كمية صحيحة للتحويل');
-            return; } const sourceProd = appState.products.find(p => p.id === prodId);
-        if (!sourceProd) { showErrorToast('المنتج غير موجود');
-            return; } if (Number(sourceProd.stock || 0) < qty) {
+            return;
+        }
+        const sourceProd = (appState.products || []).find(p => String(p.id) === String(prodId));
+        if (!sourceProd) {
+            showErrorToast('المنتج غير موجود');
+            return;
+        }
+        if (Number(sourceProd.stock || 0) < qty) {
             showErrorToast(`الكمية المتوفرة بالمصدر (${sourceProd.stock}) أقل من الكمية المطلوبة (${qty})`);
-            return; }
+            return;
+        }
+
         // Deduct from source
         sourceProd.stock = Number(sourceProd.stock || 0) - qty;
+
         // Find or create target product in destination stock
-        let targetProd = null; if (sourceProd.barcode) {
-            targetProd = appState.products.find(p => p.barcode === sourceProd.barcode && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
-        } else { targetProd = appState.products.find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
-        } if (targetProd) { targetProd.stock = Number(targetProd.stock || 0) + qty;
+        let targetProd = null;
+        if (sourceProd.barcode) {
+            targetProd = (appState.products || []).find(p => p.barcode === sourceProd.barcode && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+        } else {
+            targetProd = (appState.products || []).find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
+        }
+
+        if (targetProd) {
+            targetProd.stock = Number(targetProd.stock || 0) + qty;
             if (!targetProd.expiryDate && sourceProd.expiryDate) {
                 targetProd.expiryDate = sourceProd.expiryDate;
-            } } else { targetProd = { id: Date.now().toString(),
+            }
+        } else {
+            targetProd = {
+                id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 7),
                 barcode: sourceProd.barcode || '',
-                name: sourceProd.name, weight: sourceProd.weight || '',
+                name: sourceProd.name,
+                weight: sourceProd.weight || '',
+                weightType: sourceProd.weightType || '',
+                category: sourceProd.category || 'other',
                 cost: sourceProd.cost || 0,
                 price: sourceProd.price || 0,
-                stock: qty, brand: sourceProd.brand || '',
+                stock: qty,
+                brand: sourceProd.brand || '',
                 imageUrl: sourceProd.imageUrl || '',
-                stockLocation: toLoc, expiryDate: sourceProd.expiryDate || ''
-            }; appState.products.push(targetProd);
-        } saveState(); closeModal('stockTransferModal');
-        playBeep(); showSuccessToast(`تم تحويل (${qty}) قطعة من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
+                stockLocation: toLoc,
+                expiryDate: sourceProd.expiryDate || ''
+            };
+            appState.products.push(targetProd);
+        }
+
+        // Sync with Firebase
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('products', sourceProd);
+            window.saveFirebaseSectionItem('products', targetProd);
+        }
+
+        // Log Activity
+        if (typeof logActivity === 'function') {
+            const fromName = fromLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+            const toName = toLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+            logActivity('sale', 'تحويل مخزون بين المخازن', `نقل (${qty}) قطعة من [${sourceProd.name}] من ${fromName} إلى ${toName}`);
+        }
+
+        saveState();
+        closeModal('stockTransferModal');
+        playBeep();
+        showSuccessToast(`تم تحويل (${qty}) قطعة من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
         if (typeof renderProductsList === 'function') renderProductsList();
-    } window.handleStockTransfer = handleStockTransfer;
+        if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
+    }
+    window.handleStockTransfer = handleStockTransfer;
     function deleteProduct(id) { if (!id) return;
         promptWithPassword({ title: 'حذف منتج من المخزون',
             prompt: 'أدخل كلمة المرور لتأكيد حذف هذا المنتج نهائياً من المخزون',
@@ -3869,104 +4031,92 @@ window.setElemRequired = setElemRequired;
         period: 'month', monthVal: '', worker: 'all'
     }; window.setStaffPayoutsPeriod = function(period) {
         window.staffPayoutsFilter.period = period;
-        renderStaffPayouts(); }; window.handleStaffPayoutMonthChange = function(val) {
-        if (val) { window.staffPayoutsFilter.period = 'month';
+        if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+    }; window.handleStaffPayoutMonthChange = function(val) {
+        if (val) {
+            window.staffPayoutsFilter.period = 'month';
             window.staffPayoutsFilter.monthVal = val;
-        } renderStaffPayouts(); }; window.editStaffPayout = function(id) {
+        }
+        if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+    }; window.editStaffPayout = function(id) {
         if (!id || !Array.isArray(appState.staffPayouts)) return;
-        const item = appState.staffPayouts.find(p => String(p.id) === String(id));
-        if (!item) return; const editIdInput = document.getElementById('editingStaffPayoutId');
+        const item = appState.staffPayouts.find(p => String(p && p.id) === String(id));
+        if (!item) return;
+        const editIdInput = document.getElementById('editingStaffPayoutId');
         if (editIdInput) editIdInput.value = item.id;
-        const nameInput = document.getElementById('staffName');
+        const nameInput = document.getElementById('staffPayoutName') || document.getElementById('staffName');
         if (nameInput) nameInput.value = item.name || item.staffName || '';
-        const amountInput = document.getElementById('staffAmount');
+        const amountInput = document.getElementById('staffPayoutAmount') || document.getElementById('staffAmount');
         if (amountInput) amountInput.value = item.amount || item.price || '';
         const typeInput = document.getElementById('staffPayoutType');
         if (typeInput && item.type) typeInput.value = item.type;
         const dateInput = document.getElementById('staffPayoutDate');
-        if (dateInput) { const dStr = item.date || item.payoutDate || '';
+        if (dateInput) {
+            const dStr = item.date || item.payoutDate || '';
             if (/^\d{4}-\d{2}-\d{2}/.test(dStr)) {
                 dateInput.value = dStr.slice(0, 10);
-            } else if (dStr) { const d = new Date(dStr);
+            } else if (dStr) {
+                const d = new Date(dStr);
                 if (!isNaN(d.getTime())) {
-                    dateInput.value = getLocalDateString(d);
-                } } } const notesInput = document.getElementById('staffNotes');
+                    dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(d) : d.toISOString().split('T')[0];
+                }
+            }
+        }
+        const notesInput = document.getElementById('staffPayoutNotes') || document.getElementById('staffNotes');
         if (notesInput) notesInput.value = item.notes || '';
         const title = document.getElementById('staffPayoutFormTitle');
-        if (title) { title.innerHTML = `
+        if (title) {
+            title.innerHTML = `
                 <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                 <span>تعديل خلاص: <span class="text-blue-700 font-bold">${escapeHTML(item.name || item.staffName || '')}</span></span>
-            `; } const cancelBtn = document.getElementById('cancelStaffEditBtn');
+            `;
+        }
+        const cancelBtn = document.getElementById('cancelStaffEditBtn');
         if (cancelBtn) cancelBtn.classList.remove('hidden');
         const submitBtn = document.getElementById('staffPayoutSubmitBtn');
-        if (submitBtn) { submitBtn.className = "w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-bold shadow-md shadow-amber-200 transition-colors cursor-pointer flex items-center justify-center gap-2";
-        } const submitBtnText = document.getElementById('staffPayoutSubmitBtnText');
-        if (submitBtnText) submitBtnText.textContent = "حفظ التعديلات والتاريخ";
+        if (submitBtn) {
+            submitBtn.className = "flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-bold shadow-md shadow-amber-200 transition-colors cursor-pointer flex items-center justify-center gap-2";
+        }
+        const submitBtnText = document.getElementById('staffPayoutSubmitBtnText');
+        if (submitBtnText) submitBtnText.textContent = "حفظ التعديلات";
         document.getElementById('addStaffPayoutForm')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }; window.cancelStaffPayoutEdit = function() {
         const editIdInput = document.getElementById('editingStaffPayoutId');
         if (editIdInput) editIdInput.value = '';
         const form = document.getElementById('addStaffPayoutForm');
-        if (form) form.reset(); const dateInput = document.getElementById('staffPayoutDate');
-        if (dateInput) dateInput.value = getLocalDateString(new Date());
+        if (form) form.reset();
+        const dateInput = document.getElementById('staffPayoutDate');
+        if (dateInput) dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         const title = document.getElementById('staffPayoutFormTitle');
-        if (title) { title.innerHTML = `
+        if (title) {
+            title.innerHTML = `
                 <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                <span>تسجيل خلاص / أجر جديد</span>
-            `; } const cancelBtn = document.getElementById('cancelStaffEditBtn');
+                <span>تسجيل خلاص / تسبق / مكافأة لعامل</span>
+            `;
+        }
+        const cancelBtn = document.getElementById('cancelStaffEditBtn');
         if (cancelBtn) cancelBtn.classList.add('hidden');
         const submitBtn = document.getElementById('staffPayoutSubmitBtn');
-        if (submitBtn) { submitBtn.className = "w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-colors cursor-pointer flex items-center justify-center gap-2";
-        } const submitBtnText = document.getElementById('staffPayoutSubmitBtnText');
-        if (submitBtnText) submitBtnText.textContent = "تسجيل الدفعة والدخول";
-    }; document.getElementById('addStaffPayoutForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const editingId = getElemVal('editingStaffPayoutId') || '';
-        let name = getElemVal('staffName').trim();
-        const rawAmount = String(getElemVal('staffAmount')).replace(/,/g, '').trim();
-        const amount = parseFloat(rawAmount);
-        const type = getElemVal('staffPayoutType');
-        const dateStr = getElemVal('staffPayoutDate');
-        let notes = document.getElementById('staffNotes') ? getElemVal('staffNotes').trim() : '';
-        // Only block real script tags and dangerous html
-        const isMalicious = (str) => /<\s*script\b|<\s*iframe\b|javascript\s*:|data\s*:\s*text\/html/i.test(str);
-        if (isMalicious(name) || isMalicious(notes)) {
-            showErrorToast('تحذير أمني: تم حظر محتوى غير مسموح به في بيانات خلاص العامل.');
-            return; } name = sanitizeInputText(name, 80);
-        notes = sanitizeInputText(notes, 200);
-        if (!name) { showErrorToast('يرجى كتابة اسم العامل أولاً');
-            return; } if (isNaN(amount) || amount <= 0) {
-            showErrorToast('يرجى إدخال مبلغ خلاص صحيح أكبر من الصفر');
-            return; } const finalDate = dateStr ? dateStr : getLocalDateString(new Date());
-        if (!Array.isArray(appState.staffPayouts)) appState.staffPayouts = [];
-        if (editingId) { const index = appState.staffPayouts.findIndex(p => String(p.id) === String(editingId));
-            if (index !== -1) { appState.staffPayouts[index] = {
-                    ...appState.staffPayouts[index],
-                    name, staffName: name,
-                    amount, type, date: finalDate,
-                    notes, updatedAt: new Date().toISOString()
-                };
-                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('staffPayouts', appState.staffPayouts[index]);
-                showSuccessToast('تم تحديث بيانات خلاص العامل وتاريخه بنجاح');
-            } cancelStaffPayoutEdit(); } else {
-            const newPayout = { id: Date.now().toString(),
-                name, staffName: name, amount,
-                type, date: finalDate, notes,
-                createdAt: new Date().toISOString()
-            };
-            appState.staffPayouts.unshift(newPayout);
-            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('staffPayouts', newPayout);
-            showSuccessToast('تم تسجيل خلاص العامل والدخول بنجاح');
-            this.reset(); const dateInput = document.getElementById('staffPayoutDate');
-            if (dateInput) dateInput.value = getLocalDateString(new Date());
-        } saveState(); renderStaffPayouts();
-        render(); // Update totals
-    }); function deleteStaffPayout(id) { if (!id) return;
+        if (submitBtn) {
+            submitBtn.className = "flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-colors cursor-pointer flex items-center justify-center gap-2";
+        }
+        const submitBtnText = document.getElementById('staffPayoutSubmitBtnText');
+        if (submitBtnText) submitBtnText.textContent = "تسجيل خلاص العامل";
+    }; function deleteStaffPayout(id) { if (!id) return;
         promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
             if (!Array.isArray(appState.staffPayouts)) return;
-            window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
-            saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
-            renderStaffPayouts(); render();
+            const idx = appState.staffPayouts.findIndex(s => String(s && s.id) === String(id));
+            if (idx !== -1) {
+                const pItem = appState.staffPayouts[idx];
+                if (typeof logActivity === 'function') logActivity('payout', 'حذف خلاص عامل', `حذف الدفعة المخصصة لـ: ${pItem ? (pItem.name || pItem.staffName || id) : id}`);
+                appState.staffPayouts.splice(idx, 1);
+                if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
+                saveState();
+                showSuccessToast('تم حذف الدفعة بنجاح');
+                if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+                if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) renderWorkerTransactionsModal();
+                render();
+            }
         }); } window.deleteStaffPayout = deleteStaffPayout;
     function switchPayoutTab(tab) { const staffBtn = document.getElementById('tabStaffPayoutsBtn');
         const supBtn = document.getElementById('tabSuppliersBtn');
@@ -5606,7 +5756,6 @@ window.setElemRequired = setElemRequired;
         `; printWindow.document.open();
         printWindow.document.write(docHtml);
         printWindow.document.close(); };
-    function renderStaffPayouts() { return; } window.renderStaffPayouts = renderStaffPayouts;
     document.getElementById('coachAbsenceForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const numDays = parseInt(getElemVal('absenceDays'));
         if (isNaN(numDays) || numDays <= 0) return;
@@ -8252,14 +8401,17 @@ window.setElemRequired = setElemRequired;
         if (!Array.isArray(appState.staffPayouts)) appState.staffPayouts = [];
         const payouts = appState.staffPayouts;
 
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
 
         let totalAll = 0;
         let totalMonth = 0;
+        const allKnownNames = new Set();
         const staffMap = {};
 
         payouts.forEach(p => {
+            if (!p) return;
             const amt = Number(p.amount) || 0;
             totalAll += amt;
 
@@ -8268,16 +8420,25 @@ window.setElemRequired = setElemRequired;
                 totalMonth += amt;
             }
 
-            const name = (p.name || p.staffName || 'عامل عام').trim();
-            if (!staffMap[name]) {
-                staffMap[name] = { name: name, total: 0, monthTotal: 0, count: 0, list: [] };
+            const name = (p.name || p.staffName || 'عامل').trim();
+            if (name) {
+                allKnownNames.add(name);
+                staffMap[name] = (staffMap[name] || 0) + 1;
             }
-            staffMap[name].total += amt;
-            if (!isNaN(pDate.getTime()) && pDate.getMonth() === currentMonth && pDate.getFullYear() === currentYear) {
-                staffMap[name].monthTotal += amt;
-            }
-            staffMap[name].count += 1;
-            staffMap[name].list.push(p);
+        });
+
+        // Also add coaches and customers to suggestions datalist
+        (appState.coachAbsences || []).forEach(c => {
+            const n = (c && (c.coachName || c.name) || '').trim();
+            if (n) allKnownNames.add(n);
+        });
+        (appState.packages || []).forEach(pkg => {
+            const n = (pkg && pkg.coachName || '').trim();
+            if (n) allKnownNames.add(n);
+        });
+        (appState.customers || []).forEach(cust => {
+            const n = (cust && cust.name || '').trim();
+            if (n) allKnownNames.add(n);
         });
 
         // Update KPI summary numbers
@@ -8291,75 +8452,76 @@ window.setElemRequired = setElemRequired;
         if (totalAllElem) totalAllElem.innerHTML = `${totalAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (totalMonthElem) totalMonthElem.innerHTML = `${totalMonth.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (staffCountElem) staffCountElem.textContent = `${uniqueStaffNames.length} عامل`;
-        if (staffBadgeElem) staffBadgeElem.textContent = `${uniqueStaffNames.length} عامل`;
+        if (staffBadgeElem) staffBadgeElem.textContent = `${payouts.length} خلاص`;
 
-        // Update datalist for existing staff
+        // Update datalist for suggestions
         const datalist = document.getElementById('existingStaffDatalist');
         if (datalist) {
-            datalist.innerHTML = uniqueStaffNames.map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
+            datalist.innerHTML = Array.from(allKnownNames).sort().map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
         }
 
-        // Render staff list grouped by worker
         const container = document.getElementById('staffPayoutsList');
         if (!container) return;
 
-        if (uniqueStaffNames.length === 0) {
-            container.innerHTML = '<div class="text-center py-8 text-slate-400 font-medium text-xs bg-slate-50 rounded-2xl border border-slate-100">لا توجد خلاصات أو مستحقات عمال مسجلة بعد</div>';
+        if (payouts.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-8 text-slate-400 font-medium text-xs bg-slate-50/80 rounded-2xl border border-dashed border-slate-200 space-y-1">
+                    <p class="font-bold text-slate-600">لا توجد خلاصات مسجلة بعد</p>
+                    <p class="text-[11px] text-slate-400">عند تسجيل خلاص عامل سيظهر هنا فوراً في السجل</p>
+                </div>
+            `;
             return;
         }
 
-        container.innerHTML = Object.values(staffMap).map(st => {
-            const recentPayouts = st.list.slice(0, 3);
+        const typeBadgeStyles = {
+            'راتب شهري': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+            'تسقيع / تسليف': 'bg-amber-50 text-amber-700 border-amber-200',
+            'مكافأة / بونوس': 'bg-purple-50 text-purple-700 border-purple-200',
+            'نسبة مئوية': 'bg-indigo-50 text-indigo-700 border-indigo-200',
+            'أجر يومي': 'bg-sky-50 text-sky-700 border-sky-200'
+        };
+
+        // Render all payouts directly in clean cards
+        container.innerHTML = payouts.map(p => {
+            const safeId = escapeHTML(String(p.id || ''));
+            const pName = escapeHTML(p.name || p.staffName || 'عامل');
+            const pType = escapeHTML(p.type || 'خلاص');
+            const pNotes = p.notes ? escapeHTML(p.notes) : '';
+            const pAmount = (Number(p.amount) || 0).toLocaleString();
+            const badgeClass = typeBadgeStyles[p.type] || 'bg-slate-100 text-slate-700 border-slate-200';
+
+            const d = new Date(p.date || p.createdAt || Date.now());
+            const dateStr = isNaN(d.getTime()) ? (p.date || '') : d.toLocaleDateString('ar-DZ');
+
             return `
-            <div class="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-blue-300 transition-all space-y-3">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                    <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-black text-base shadow-xs shrink-0">
-                            <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-                        </div>
-                        <div>
-                            <div class="font-black text-slate-800 text-base flex items-center gap-2">
-                                <span>${escapeHTML(st.name)}</span>
-                                <span class="text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-800 font-bold border border-blue-100">${st.count} دفعات</span>
-                            </div>
-                            <div class="text-xs text-slate-500 font-medium">
-                                خلاص هذا الشهر: <strong class="text-blue-700">${st.monthTotal.toLocaleString()} دج</strong>
-                            </div>
-                        </div>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-blue-300 transition-all gap-2.5">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center font-black text-sm shrink-0">
+                        ${escapeHTML(pName.charAt(0).toUpperCase())}
                     </div>
-                    <div class="flex items-center gap-2">
-                        <div class="text-left bg-blue-50/80 px-3 py-1.5 rounded-xl border border-blue-100">
-                            <div class="text-[10px] text-blue-600 font-bold">إجمالي المستحقات المدفوعة</div>
-                            <div class="text-base font-black text-blue-800">${st.total.toLocaleString()} دج</div>
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-extrabold text-slate-900 text-sm truncate">${pName}</span>
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${pType}</span>
+                            <span class="text-[11px] text-slate-400 font-medium">${dateStr}</span>
                         </div>
-                        <button onclick="openWorkerTransactionsModal('${escapeHTML(st.name)}')" class="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer" title="عرض جميع معاملات هذا العامل">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                            <span>كشف المعاملات</span>
-                        </button>
+                        ${pNotes ? `<div class="text-xs text-slate-500 font-medium truncate mt-0.5">${pNotes}</div>` : ''}
                     </div>
                 </div>
 
-                <!-- Recent payouts items -->
-                <div class="space-y-1.5 pt-1">
-                    ${recentPayouts.map(p => {
-                        const d = new Date(p.date || p.createdAt || Date.now());
-                        const dateStr = isNaN(d.getTime()) ? p.date : d.toLocaleDateString('ar-DZ');
-                        return `
-                        <div class="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-100 text-xs">
-                            <div class="flex items-center gap-2 min-w-0">
-                                <span class="px-2 py-0.5 rounded bg-white text-slate-700 font-bold border border-slate-200 text-[10px] shrink-0">${escapeHTML(p.type || 'خلاص')}</span>
-                                <span class="font-semibold text-slate-800 truncate">${escapeHTML(p.notes || 'دفعة مالية')}</span>
-                                <span class="text-[10px] text-slate-400 shrink-0">(${dateStr})</span>
-                            </div>
-                            <div class="flex items-center gap-2 shrink-0">
-                                <span class="font-extrabold text-blue-700">${(Number(p.amount) || 0).toLocaleString()} دج</span>
-                                <button onclick="deleteStaffPayout('${p.id}')" class="text-slate-400 hover:text-red-600 transition-colors p-1" title="حذف هذه الدفعة">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                </button>
-                            </div>
-                        </div>
-                        `;
-                    }).join('')}
+                <div class="flex items-center justify-between sm:justify-end gap-2 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
+                    <span class="font-black text-blue-900 text-sm sm:text-base bg-blue-50/70 border border-blue-100/80 px-2.5 py-1 rounded-xl">${pAmount} دج</span>
+                    <div class="flex items-center gap-1">
+                        <button type="button" onclick="openWorkerTransactionsModal('${pName}')" class="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="عرض كشف هذا العامل">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        </button>
+                        <button type="button" onclick="editStaffPayout('${safeId}')" class="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="تعديل الخلاص">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                        </button>
+                        <button type="button" onclick="deleteStaffPayout('${safeId}')" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="حذف الخلاص">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
             `;
@@ -8368,24 +8530,30 @@ window.setElemRequired = setElemRequired;
 
     window.handleAddStaffPayout = function(e) {
         if (e) e.preventDefault();
-        const nameInput = document.getElementById('staffPayoutName');
+        const editingIdInput = document.getElementById('editingStaffPayoutId');
+        const editingId = editingIdInput ? editingIdInput.value.trim() : '';
+        const nameInput = document.getElementById('staffPayoutName') || document.getElementById('staffName');
         const typeInput = document.getElementById('staffPayoutType');
-        const amountInput = document.getElementById('staffPayoutAmount');
+        const amountInput = document.getElementById('staffPayoutAmount') || document.getElementById('staffAmount');
         const dateInput = document.getElementById('staffPayoutDate');
-        const notesInput = document.getElementById('staffPayoutNotes');
+        const notesInput = document.getElementById('staffPayoutNotes') || document.getElementById('staffNotes');
 
-        const name = nameInput ? nameInput.value.trim() : '';
+        let name = nameInput ? nameInput.value.trim() : '';
         const type = typeInput ? typeInput.value : 'راتب شهري';
-        const amount = Number(amountInput?.value) || 0;
-        const dateStr = dateInput?.value || new Date().toISOString().split('T')[0];
-        const notes = notesInput ? notesInput.value.trim() : '';
+        const rawAmount = String(amountInput ? amountInput.value : '').replace(/,/g, '').trim();
+        const amount = parseFloat(rawAmount) || 0;
+        const dateStr = dateInput?.value || (typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0]);
+        let notes = notesInput ? notesInput.value.trim() : '';
 
+        // Validate
         if (!name) {
-            showErrorToast('يرجى إدخال اسم العامل أو المدرب');
+            showErrorToast('يرجى كتابة أو اختيار اسم العامل أو المدرب');
+            if (nameInput) nameInput.focus();
             return false;
         }
-        if (amount <= 0) {
-            showErrorToast('يرجى إدخال مبلغ الخلاص بشكل صحيح');
+        if (amount <= 0 || isNaN(amount)) {
+            showErrorToast('يرجى إدخال مبلغ الخلاص بشكل صحيح (أكبر من الصفر)');
+            if (amountInput) amountInput.focus();
             return false;
         }
 
@@ -8393,29 +8561,57 @@ window.setElemRequired = setElemRequired;
             appState.staffPayouts = [];
         }
 
-        const newPayout = {
-            id: 'payout_' + Date.now().toString(),
-            name: name,
-            type: type,
-            amount: amount,
-            date: dateStr,
-            notes: notes,
-            createdAt: new Date().toISOString()
-        };
+        if (editingId) {
+            const index = appState.staffPayouts.findIndex(p => String(p && p.id) === String(editingId));
+            if (index !== -1) {
+                appState.staffPayouts[index] = {
+                    ...appState.staffPayouts[index],
+                    name,
+                    staffName: name,
+                    type,
+                    amount,
+                    date: dateStr,
+                    notes,
+                    updatedAt: new Date().toISOString()
+                };
+                if (window.saveFirebaseSectionItem) {
+                    window.saveFirebaseSectionItem('staffPayouts', appState.staffPayouts[index]);
+                }
+                if (typeof logActivity === 'function') logActivity('payout', 'تعديل خلاص عامل', `العامل: ${name} - النوع: ${type}`, amount);
+                showSuccessToast(`تم تحديث خلاص العامل (${name}) بنجاح`);
+            }
+            if (typeof cancelStaffPayoutEdit === 'function') cancelStaffPayoutEdit();
+        } else {
+            const newPayout = {
+                id: 'payout_' + Date.now().toString(),
+                name: name,
+                staffName: name,
+                type: type,
+                amount: amount,
+                date: dateStr,
+                notes: notes,
+                createdAt: new Date().toISOString()
+            };
 
-        appState.staffPayouts.unshift(newPayout);
-        if (window.saveFirebaseSectionItem) {
-            window.saveFirebaseSectionItem('staffPayouts', newPayout);
+            appState.staffPayouts.unshift(newPayout);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('staffPayouts', newPayout);
+            }
+            if (typeof logActivity === 'function') logActivity('payout', 'تسجيل خلاص عامل', `العامل: ${name} - النوع: ${type}`, amount);
+
+            if (nameInput) nameInput.value = '';
+            if (amountInput) amountInput.value = '';
+            if (notesInput) notesInput.value = '';
+            if (dateInput) dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+
+            showSuccessToast(`تم تسجيل خلاص بقيمة ${amount.toLocaleString()} دج للعامل (${name}) بنجاح`);
         }
-        if (typeof logActivity === 'function') logActivity('payout', 'تسجيل خلاص عامل', `العامل: ${name} - النوع: ${type}`, amount);
+
         saveState();
-
-        if (nameInput) nameInput.value = '';
-        if (amountInput) amountInput.value = '';
-        if (notesInput) notesInput.value = '';
-
-        showSuccessToast(`تم تسجيل خلاص بقيمة ${amount.toLocaleString()} دج للعامل (${name}) بنجاح`);
         renderStaffPayouts();
+        if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) {
+            renderWorkerTransactionsModal();
+        }
         render();
         return false;
     };
@@ -8424,7 +8620,7 @@ window.setElemRequired = setElemRequired;
         if (!id) return;
         promptWithPassword({ title: 'حذف دفعة عامل', prompt: 'أدخل كلمة المرور لتأكيد حذف الدفعة', buttonText: 'تأكيد الحذف' }, () => {
             if (!Array.isArray(appState.staffPayouts)) return;
-            const idx = appState.staffPayouts.findIndex(p => String(p.id) === String(id));
+            const idx = appState.staffPayouts.findIndex(p => p && String(p.id) === String(id));
             if (idx !== -1) {
                 const pItem = appState.staffPayouts[idx];
                 if (typeof logActivity === 'function') logActivity('payout', 'حذف خلاص عامل', `حذف الدفعة المخصصة لـ: ${pItem ? pItem.name : id}`);
@@ -8433,6 +8629,9 @@ window.setElemRequired = setElemRequired;
                 saveState();
                 showSuccessToast('تم حذف الدفعة بنجاح');
                 renderStaffPayouts();
+                if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) {
+                    renderWorkerTransactionsModal();
+                }
                 render();
             }
         });
@@ -9016,7 +9215,7 @@ window.setElemRequired = setElemRequired;
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, populateTransferProducts, updateTransferMaxQty, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, renderStaffPayouts, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
