@@ -1,6 +1,14 @@
-  // Firebase Configuration - Realtime Database Dedicated Engine
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getDatabase, ref, set, update, push, onValue, get } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
+  // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
+  import { initializeApp } from "firebase/app";
+  import { getDatabase, ref, set, update, push, onValue, get } from "firebase/database";
+
+  // High-Speed PWA Caching Engine Registration
+  if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+
   let firebaseConfig = {
     apiKey: "AIzaSyATQdkTAABcNa5PDSG2KUHlqJ2iJcMFpe8",
     authDomain: "omega-a7040.firebaseapp.com",
@@ -249,14 +257,32 @@
     };
     return JSON.parse(JSON.stringify(payload));
   }
-  // Dedicated Section Update & Push Utility Functions using update / push / PATCH
+  // Convert array to dictionary indexed by clean ID for Firebase RTDB updates
+  function arrayToDict(arr, idKey = 'id', prefix = 'item') {
+    if (!arr) return {};
+    const list = Array.isArray(arr) ? arr : Object.values(arr);
+    const dict = {};
+    list.forEach((item, idx) => {
+      if (!item || typeof item !== 'object') return;
+      const rawId = item[idKey] || item.id || item.barcode || (prefix + '_' + idx);
+      const cleanKey = String(rawId).replace(/[.#$[\]/]/g, '_');
+      dict[cleanKey] = item;
+    });
+    return dict;
+  }
+  window.arrayToDict = arrayToDict;
+
+  // Dedicated Section Update Utility: strictly uses UPDATE (SDK) and PATCH (REST)
   window.updateFirebaseSection = async function(sectionPath, sectionData) {
     let sdkOk = false;
     let restOk = false;
-    if (window.firebaseDB && (window.firebaseUpdate || window.firebaseSet) && window.firebaseRef) {
+    let payloadData = sectionData;
+    if (Array.isArray(sectionData)) {
+      payloadData = arrayToDict(sectionData, 'id', sectionPath);
+    }
+    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
       try {
-        const updateFn = window.firebaseUpdate || window.firebaseSet;
-        await updateFn(window.firebaseRef(window.firebaseDB, sectionPath), sectionData);
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, sectionPath), payloadData);
         sdkOk = true;
       } catch (err) {
         console.warn(`SDK update error for ${sectionPath}:`, err);
@@ -267,7 +293,7 @@
       const res = await fetch(`${baseUrl}/${sectionPath}.json`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sectionData)
+        body: JSON.stringify(payloadData)
       });
       if (res.ok) restOk = true;
     } catch (e) {
@@ -276,13 +302,16 @@
     return sdkOk || restOk;
   };
 
+  // Dedicated Section Push Utility: strictly uses PUSH (SDK) and POST (REST)
   window.pushToFirebaseSection = async function(sectionPath, itemData) {
     let sdkOk = false;
     let restOk = false;
+    let newKey = null;
     if (window.firebaseDB && window.firebasePush && window.firebaseRef) {
       try {
-        await window.firebasePush(window.firebaseRef(window.firebaseDB, sectionPath), itemData);
+        const pushRef = await window.firebasePush(window.firebaseRef(window.firebaseDB, sectionPath), itemData);
         sdkOk = true;
+        newKey = pushRef?.key || null;
       } catch (err) {
         console.warn(`SDK push error for ${sectionPath}:`, err);
       }
@@ -294,49 +323,132 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(itemData)
       });
-      if (res.ok) restOk = true;
+      if (res.ok) {
+        const json = await res.json();
+        restOk = true;
+        if (!newKey) newKey = json?.name || null;
+      }
     } catch (e) {
       console.warn(`REST POST error for ${sectionPath}:`, e);
+    }
+    return { success: sdkOk || restOk, key: newKey };
+  };
+
+  // Dedicated Item-Level Save: uses UPDATE (PATCH) for existing/identified items, PUSH (POST) otherwise
+  window.saveFirebaseSectionItem = async function(sectionPath, itemData) {
+    if (!itemData || typeof itemData !== 'object') return false;
+    const rawId = itemData.id || itemData.barcode;
+    if (!rawId) {
+      const pushRes = await window.pushToFirebaseSection(sectionPath, itemData);
+      return pushRes.success;
+    }
+    const cleanId = String(rawId).replace(/[.#$[\]/]/g, '_');
+    const itemPath = `${sectionPath}/${cleanId}`;
+    let sdkOk = false;
+    let restOk = false;
+    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+      try {
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, itemPath), itemData);
+        sdkOk = true;
+      } catch (err) {
+        console.warn(`SDK update item error for ${itemPath}:`, err);
+      }
+    }
+    try {
+      const baseUrl = getRTDBUrl();
+      const res = await fetch(`${baseUrl}/${itemPath}.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(itemData)
+      });
+      if (res.ok) restOk = true;
+    } catch (e) {
+      console.warn(`REST PATCH item error for ${itemPath}:`, e);
     }
     return sdkOk || restOk;
   };
 
-  // Push State to Firebase Realtime Database using UPDATE & PATCH (Dedicated section paths)
+  // Dedicated Item-Level Delete: uses UPDATE with null (SDK) or DELETE (REST)
+  window.deleteFirebaseSectionItem = async function(sectionPath, itemId) {
+    if (!itemId) return false;
+    const cleanId = String(itemId).replace(/[.#$[\]/]/g, '_');
+    const itemPath = `${sectionPath}/${cleanId}`;
+    let sdkOk = false;
+    let restOk = false;
+    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+      try {
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, sectionPath), { [cleanId]: null });
+        sdkOk = true;
+      } catch (err) {
+        console.warn(`SDK delete item error for ${itemPath}:`, err);
+      }
+    }
+    try {
+      const baseUrl = getRTDBUrl();
+      const res = await fetch(`${baseUrl}/${itemPath}.json`, {
+        method: 'DELETE'
+      });
+      if (res.ok) restOk = true;
+    } catch (e) {
+      console.warn(`REST DELETE error for ${itemPath}:`, e);
+    }
+    return sdkOk || restOk;
+  };
+
+  // Push Full State to Firebase Realtime Database across every section path using UPDATE & PATCH (NEVER SET)
   window.pushFullStateToFirebase = async function(customState) {
     const payload = getCleanSyncPayload(customState);
     let rtdbSuccess = false; let restSuccess = false;
     let lastErrMsg = '';
+
+    // Convert each section into an indexed dictionary by item ID
+    const customersDict = arrayToDict(payload.customers, 'id', 'cust');
+    const productsDict = arrayToDict(payload.products, 'barcode', 'prod');
+    const packagesDict = arrayToDict(payload.packages, 'id', 'pkg');
+    const salesDict = arrayToDict(payload.sales, 'id', 'sale');
+    const expensesDict = arrayToDict(payload.expenses, 'id', 'exp');
+    const caisseLogsDict = arrayToDict(payload.caisseLogs, 'id', 'caisse');
+    const coachAbsencesDict = arrayToDict(payload.coachAbsences, 'id', 'abs');
+    const staffPayoutsDict = arrayToDict(payload.staffPayouts, 'id', 'staff');
+    const creditsDict = arrayToDict(payload.credits, 'id', 'cr');
+    const suppliersDict = arrayToDict(payload.suppliers, 'id', 'sup');
+    const supplierTxDict = arrayToDict(payload.supplierTransactions, 'id', 'suptx');
+    const quickSessionsDict = arrayToDict(payload.quickSessions, 'id', 'qs');
+    const appStateObj = {
+      hideFinances: customState ? customState.hideFinances : (window.appState?.hideFinances !== false),
+      lastUpdated: payload.lastUpdated
+    };
+
     // 1. Primary: Realtime Database SDK - perform atomic UPDATE on root and section paths
-    if (window.firebaseDB && window.firebaseRef) {
-      const updateFn = window.firebaseUpdate || window.firebaseSet;
+    if (window.firebaseDB && window.firebaseRef && window.firebaseUpdate) {
       try {
         const rootUpdates = {
-          'appState': payload.appState,
-          'customers': payload.customers,
-          'products': payload.products,
-          'coachAbsences': payload.coachAbsences,
-          'absences': payload.absences,
-          'packages': payload.packages,
-          'sales': payload.sales,
-          'expenses': payload.expenses,
-          'caisseLogs': payload.caisseLogs,
-          'caisse': payload.caisse,
-          'treasury': payload.treasury,
-          'credits': payload.credits,
-          'staffPayouts': payload.staffPayouts,
-          'suppliers': payload.suppliers,
-          'supplierTransactions': payload.supplierTransactions,
-          'quickSessions': payload.quickSessions,
+          'customers': customersDict,
+          'products': productsDict,
+          'packages': packagesDict,
+          'sales': salesDict,
+          'expenses': expensesDict,
+          'caisseLogs': caisseLogsDict,
+          'caisse': caisseLogsDict,
+          'treasury': caisseLogsDict,
+          'coachAbsences': coachAbsencesDict,
+          'absences': coachAbsencesDict,
+          'staffPayouts': staffPayoutsDict,
+          'credits': creditsDict,
+          'suppliers': suppliersDict,
+          'supplierTransactions': supplierTxDict,
+          'quickSessions': quickSessionsDict,
+          'appState': appStateObj,
           'lastUpdated': payload.lastUpdated
         };
-        await updateFn(window.firebaseRef(window.firebaseDB), rootUpdates);
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), rootUpdates);
         rtdbSuccess = true;
       } catch (err) {
         console.warn('Realtime Database SDK update note:', err?.message || err);
         lastErrMsg = err?.message || String(err);
       }
     }
-    // 2. Direct Realtime Database REST API using PATCH (atomic update for all dedicated section paths)
+    // 2. Direct Realtime Database REST API using PATCH on each dedicated section path
     try {
       const baseUrl = getRTDBUrl();
       const patchOpts = (bodyData) => ({
@@ -345,23 +457,35 @@
         body: JSON.stringify(bodyData)
       });
       const restPromises = [
-        fetch(`${baseUrl}/.json`, patchOpts(payload)),
-        fetch(`${baseUrl}/appState.json`, patchOpts(payload.appState)),
-        fetch(`${baseUrl}/customers.json`, patchOpts(payload.customers)),
-        fetch(`${baseUrl}/products.json`, patchOpts(payload.products)),
-        fetch(`${baseUrl}/coachAbsences.json`, patchOpts(payload.coachAbsences)),
-        fetch(`${baseUrl}/absences.json`, patchOpts(payload.absences)),
-        fetch(`${baseUrl}/packages.json`, patchOpts(payload.packages)),
-        fetch(`${baseUrl}/sales.json`, patchOpts(payload.sales)),
-        fetch(`${baseUrl}/expenses.json`, patchOpts(payload.expenses)),
-        fetch(`${baseUrl}/caisseLogs.json`, patchOpts(payload.caisseLogs)),
-        fetch(`${baseUrl}/caisse.json`, patchOpts(payload.caisse)),
-        fetch(`${baseUrl}/treasury.json`, patchOpts(payload.treasury)),
-        fetch(`${baseUrl}/credits.json`, patchOpts(payload.credits)),
-        fetch(`${baseUrl}/staffPayouts.json`, patchOpts(payload.staffPayouts)),
-        fetch(`${baseUrl}/suppliers.json`, patchOpts(payload.suppliers)),
-        fetch(`${baseUrl}/supplierTransactions.json`, patchOpts(payload.supplierTransactions)),
-        fetch(`${baseUrl}/quickSessions.json`, patchOpts(payload.quickSessions))
+        fetch(`${baseUrl}/.json`, patchOpts({
+          customers: customersDict,
+          products: productsDict,
+          packages: packagesDict,
+          sales: salesDict,
+          expenses: expensesDict,
+          caisseLogs: caisseLogsDict,
+          coachAbsences: coachAbsencesDict,
+          staffPayouts: staffPayoutsDict,
+          credits: creditsDict,
+          suppliers: suppliersDict,
+          supplierTransactions: supplierTxDict,
+          quickSessions: quickSessionsDict,
+          appState: appStateObj,
+          lastUpdated: payload.lastUpdated
+        })),
+        fetch(`${baseUrl}/customers.json`, patchOpts(customersDict)),
+        fetch(`${baseUrl}/products.json`, patchOpts(productsDict)),
+        fetch(`${baseUrl}/packages.json`, patchOpts(packagesDict)),
+        fetch(`${baseUrl}/sales.json`, patchOpts(salesDict)),
+        fetch(`${baseUrl}/expenses.json`, patchOpts(expensesDict)),
+        fetch(`${baseUrl}/caisseLogs.json`, patchOpts(caisseLogsDict)),
+        fetch(`${baseUrl}/coachAbsences.json`, patchOpts(coachAbsencesDict)),
+        fetch(`${baseUrl}/staffPayouts.json`, patchOpts(staffPayoutsDict)),
+        fetch(`${baseUrl}/credits.json`, patchOpts(creditsDict)),
+        fetch(`${baseUrl}/suppliers.json`, patchOpts(suppliersDict)),
+        fetch(`${baseUrl}/supplierTransactions.json`, patchOpts(supplierTxDict)),
+        fetch(`${baseUrl}/quickSessions.json`, patchOpts(quickSessionsDict)),
+        fetch(`${baseUrl}/appState.json`, patchOpts(appStateObj))
       ];
       const responses = await Promise.allSettled(restPromises);
       const successfulSaves = responses.filter(r => r.status === 'fulfilled' && r.value.ok);
@@ -386,71 +510,73 @@
       return { success: false, error: lastErrMsg };
     }
   };
-  // Immediate Initial Fast Data Load from Realtime Database upon page entry
-  // One shared download of the root data (startup used to download the whole database 3 times + once more via the live listener)
-  let rootShared = null, rootSharedAt = 0, lastRootApplied = null, lastRootStr = null;
+  // Optimized Fast Data Sync with Firebase Realtime Database (Single guarded load + WebSocket listener)
+  let rootShared = null, lastRootApplied = null, lastRootStr = null;
   window.__firebaseAlreadyFetched = false;
-  function sharedRootFetch(baseUrl) { if (!rootShared || Date.now() - rootSharedAt > 15000) {
-      rootSharedAt = Date.now(); let pre = null;
-      if ((baseUrl === 'https://omega-a7040-default-rtdb.firebaseio.com' || baseUrl === 'https://saas-faae1-default-rtdb.firebaseio.com') && window.__rtdbPre && !window.__rtdbPreUsed) { window.__rtdbPreUsed = true; pre = window.__rtdbPre; }
-      rootShared = (pre || fetch(`${baseUrl}/.json`).then(r => r.ok ? r.json() : null).catch(() => null)).then(d => { if (!d) rootShared = null; return d; });
-    } return rootShared; } window.fetchAndLoadFirebaseData = async function(force) {
+  window.fetchAndLoadFirebaseData = async function(force) {
     if (window.__firebaseAlreadyFetched && !force) return true;
-    try { const baseUrl = getRTDBUrl(); const data = await sharedRootFetch(baseUrl);
-        if (data && typeof data === 'object') {
-          window.__firebaseAlreadyFetched = true;
-          if (data !== lastRootApplied) { lastRootApplied = data; try { lastRootStr = JSON.stringify(data); } catch (e) { lastRootStr = null; }
-            window.applyFirebaseDataToAppState(data, 'Root Instant Fetch'); }
-          return true; }
-      // Fallback: If root is empty or structure is divided, fetch key json paths in parallel
-      const [custRes, prodRes, absRes, expRes, caisseRes, appStateRes] = await Promise.allSettled([
-        fetch(`${baseUrl}/customers.json`),
-        fetch(`${baseUrl}/products.json`), fetch(`${baseUrl}/coachAbsences.json`),
-        fetch(`${baseUrl}/expenses.json`), fetch(`${baseUrl}/caisseLogs.json`),
-        fetch(`${baseUrl}/appState.json`) ]);
-      const partialPayload = {}; if (custRes.status === 'fulfilled' && custRes.value.ok) {
-        partialPayload.customers = await custRes.value.json().catch(() => null);
-      } if (prodRes.status === 'fulfilled' && prodRes.value.ok) {
-        partialPayload.products = await prodRes.value.json().catch(() => null);
-      } if (absRes.status === 'fulfilled' && absRes.value.ok) {
-        partialPayload.coachAbsences = await absRes.value.json().catch(() => null);
-      } if (expRes.status === 'fulfilled' && expRes.value.ok) {
-        partialPayload.expenses = await expRes.value.json().catch(() => null);
-      } if (caisseRes.status === 'fulfilled' && caisseRes.value.ok) {
-        partialPayload.caisseLogs = await caisseRes.value.json().catch(() => null);
-      } if (appStateRes.status === 'fulfilled' && appStateRes.value.ok) {
-        partialPayload.appState = await appStateRes.value.json().catch(() => null);
-      } if (Object.keys(partialPayload).length > 0) {
+    try {
+      const baseUrl = getRTDBUrl();
+      if (!rootShared || force) {
+        rootShared = fetch(`${baseUrl}/.json`).then(r => r.ok ? r.json() : null).catch(() => null);
+      }
+      const data = await rootShared;
+      if (data && typeof data === 'object') {
         window.__firebaseAlreadyFetched = true;
-        window.applyFirebaseDataToAppState(partialPayload, 'Segmented Fetch');
-        return true; } } catch (err) { console.warn('Initial fetch note:', err);
-    } return false; };
+        if (data !== lastRootApplied) {
+          lastRootApplied = data;
+          try { lastRootStr = JSON.stringify(data); } catch (e) { lastRootStr = null; }
+          window.applyFirebaseDataToAppState(data, 'Fast Sync Fetch');
+        }
+        return true;
+      }
+    } catch (err) {
+      console.warn('Initial fetch note:', err);
+    }
+    return false;
+  };
   // Test connection button handler
   window.testFirebaseConnection = async function() {
     const syncBtn = document.getElementById('firebaseManualSyncBtn');
-    if (syncBtn) { syncBtn.disabled = true;
+    if (syncBtn) {
+      syncBtn.disabled = true;
       syncBtn.innerHTML = `<span>جاري فحص الاتصال والمزامنة...</span>`;
     }
-    // 1. Fetch latest from cloud
-    try { const fetchResp = await fetch(`${getRTDBUrl()}/.json`);
-      if (fetchResp.ok) { const cloudData = await fetchResp.json();
-        if (cloudData) { window.applyFirebaseDataToAppState(cloudData, 'Manual Sync Load');
-        } } } catch (e) {} const res = await window.pushFullStateToFirebase();
-    if (res.success) { if (typeof showSuccessToast === 'function') {
+    // Fetch latest from cloud
+    try {
+      const fetchResp = await fetch(`${getRTDBUrl()}/.json`);
+      if (fetchResp.ok) {
+        const cloudData = await fetchResp.json();
+        if (cloudData) {
+          window.applyFirebaseDataToAppState(cloudData, 'Manual Sync Load');
+        }
+      }
+    } catch (e) {}
+    const res = await window.pushFullStateToFirebase();
+    if (res.success) {
+      if (typeof showSuccessToast === 'function') {
         showSuccessToast('تم تحميل ومزامنة كامل البيانات مع Realtime Database بنجاح!');
-      } } else { if (typeof showErrorToast === 'function') {
+      }
+    } else {
+      if (typeof showErrorToast === 'function') {
         showErrorToast('فشل الحفظ في Realtime Database: ' + (res.error || 'تحقق من تفعيل القواعد'));
-      } } if (syncBtn) { syncBtn.disabled = false;
+      }
+    }
+    if (syncBtn) {
+      syncBtn.disabled = false;
       syncBtn.innerHTML = `
         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
         <span>فحص الاتصال ومزامنة البيانات فوراً</span>
-      `; } }; window.copyTextToClipboard = function(text) {
+      `;
+    }
+  };
+  window.copyTextToClipboard = function(text) {
     navigator.clipboard.writeText(text).then(() => {
       if (typeof showSuccessToast === 'function') showSuccessToast('تم نسخ القواعد بنجاح!');
-    }); };
-  // Trigger fast fetch immediately and on lifecycle events
-  window.fetchAndLoadFirebaseData(); window.addEventListener('DOMContentLoaded', () => window.fetchAndLoadFirebaseData());
-  window.addEventListener('load', () => window.fetchAndLoadFirebaseData());
+    });
+  };
+  // Single immediate fast fetch (no duplicate event listeners)
+  window.fetchAndLoadFirebaseData();
   async function initFirebase() { try { try {
         const cfgRes = await fetch('/firebase.config.json');
         if (cfgRes.ok) { const cfgJson = await cfgRes.json();
@@ -754,10 +880,24 @@
       window.__firebasePushTimer = setTimeout(() => {
         if (typeof window.pushFullStateToFirebase === 'function') {
           window.pushFullStateToFirebase(appState);
-        } else if (window.firebaseDB && (window.firebaseSet || window.firebaseUpdate) && window.firebaseRef) {
-            const setFn = window.firebaseSet || window.firebaseUpdate;
-            try { setFn(window.firebaseRef(window.firebaseDB, 'appState'), JSON.parse(JSON.stringify(appState)))
-                  .catch(err => console.warn('Firebase save notice:', err?.message || err));
+        } else if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+            try {
+              const rootUpdates = {
+                customers: window.arrayToDict ? window.arrayToDict(appState.customers, 'id', 'cust') : {},
+                products: window.arrayToDict ? window.arrayToDict(appState.products, 'barcode', 'prod') : {},
+                sales: window.arrayToDict ? window.arrayToDict(appState.sales, 'id', 'sale') : {},
+                expenses: window.arrayToDict ? window.arrayToDict(appState.expenses, 'id', 'exp') : {},
+                caisseLogs: window.arrayToDict ? window.arrayToDict(appState.caisseLogs, 'id', 'caisse') : {},
+                packages: window.arrayToDict ? window.arrayToDict(appState.packages, 'id', 'pkg') : {},
+                staffPayouts: window.arrayToDict ? window.arrayToDict(appState.staffPayouts, 'id', 'staff') : {},
+                credits: window.arrayToDict ? window.arrayToDict(appState.credits, 'id', 'cr') : {},
+                suppliers: window.arrayToDict ? window.arrayToDict(appState.suppliers, 'id', 'sup') : {},
+                quickSessions: window.arrayToDict ? window.arrayToDict(appState.quickSessions, 'id', 'qs') : {},
+                coachAbsences: window.arrayToDict ? window.arrayToDict(appState.coachAbsences, 'id', 'abs') : {},
+                appState: { hideFinances: appState.hideFinances !== false, lastUpdated: new Date().toISOString() }
+              };
+              window.firebaseUpdate(window.firebaseRef(window.firebaseDB), rootUpdates)
+                .catch(err => console.warn('Firebase save notice:', err?.message || err));
             } catch(err) { console.warn('Firebase save sync exception:', err?.message || err);
             } }
       }, 350);
@@ -899,7 +1039,15 @@
                 dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
             } if (typeof renderStaffPayouts === 'function') {
                 renderStaffPayouts(); } if (typeof renderSuppliersList === 'function') {
-                renderSuppliersList(); } } }
+                renderSuppliersList(); } } else if (id === 'expensesModal') {
+            const dateInput = document.getElementById('expenseDateModal');
+            if (dateInput && !dateInput.value) {
+                dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+            }
+            if (typeof renderExpensesListModal === 'function') {
+                renderExpensesListModal();
+            }
+        } }
     function closeModal(id) { if (!id) return;
         const el = document.getElementById(id);
         if (el) el.classList.remove('active'); }
@@ -1327,7 +1475,8 @@
             const imageUrl = document.getElementById('addCustImageUrl')?.value || null;
             if (!Array.isArray(appState.customers)) {
                 appState.customers = appState.customers ? Object.values(appState.customers) : [];
-            } appState.customers.unshift({ id: Date.now().toString(),
+            }
+            const newCustomer = { id: Date.now().toString(),
                 imageUrl, name: custName, phone: cleanPhone(custPhone),
                 gender: custGender, dob: custDob,
                 age: dobValidation.age, weight: custWeight,
@@ -1340,16 +1489,25 @@
                 sessionHistory: [],
                 paymentStatus, debtAmount,
                 status: 'active', startDate: startDate.toISOString(),
-                endDate: endDate.toISOString() });
+                endDate: endDate.toISOString() };
+            appState.customers.unshift(newCustomer);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('customers', newCustomer);
+            }
             // Automatically add to Credits section if there's debt
             if (paymentStatus === 'credit' && debtAmount > 0) {
                 if (!appState.credits) appState.credits = [];
-                appState.credits.unshift({ id: 'cr_auto_' + Date.now(),
+                const newCredit = { id: 'cr_auto_' + Date.now(),
                     name: custName, nickname: 'مشترك',
                     phone: cleanPhone(custPhone),
                     desc: `دين اشتراك - باقة: ${pkg ? pkg.name : 'باقة'} (${custPrice} دج)`,
                     amount: debtAmount, date: new Date().toISOString()
-                }); } saveState(); const modalForm = document.getElementById('addCustomerFormModal');
+                };
+                appState.credits.unshift(newCredit);
+                if (window.saveFirebaseSectionItem) {
+                    window.saveFirebaseSectionItem('credits', newCredit);
+                }
+            } saveState(); const modalForm = document.getElementById('addCustomerFormModal');
             if (modalForm) modalForm.reset(); if (typeof window.removeAddImage === 'function') window.removeAddImage();
             if (typeof window.setAddCustSubscriptionType === 'function') window.setAddCustSubscriptionType('time');
             if (typeof window.toggleDebtFieldView === 'function') window.toggleDebtFieldView();
@@ -1517,7 +1675,47 @@
         const el = document.getElementById(selectId);
         if (el) { el.value = cat;
             showSuccessToast(`تم تحديد التصنيف: ${getExpenseCategoryDetails(cat).label}`);
-        } }; window.getExpenseCategory = function(e) {
+        } };
+    window.setExpenseDescription = function(desc, cat, target) {
+        const descId = target === 'modal' ? 'expenseDescModal' : 'expenseDescView';
+        const catId = target === 'modal' ? 'expenseCategoryModal' : 'expenseCategoryView';
+        const descInput = document.getElementById(descId);
+        const catSelect = document.getElementById(catId);
+        if (descInput) {
+            descInput.value = desc;
+            descInput.focus();
+        }
+        if (cat && catSelect) {
+            catSelect.value = cat;
+        }
+    };
+    window.setExpenseDatePreset = function(type, target) {
+        const dateId = target === 'modal' ? 'expenseDateModal' : 'expenseDateView';
+        const dateInput = document.getElementById(dateId);
+        if (!dateInput) return;
+        const now = new Date();
+        if (type === 'today') {
+            dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(now) : now.toISOString().split('T')[0];
+        } else if (type === 'yesterday') {
+            const y = new Date(now);
+            y.setDate(y.getDate() - 1);
+            dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(y) : y.toISOString().split('T')[0];
+        }
+    };
+    window.createSafeExpenseISO = function(dateVal) {
+        if (!dateVal) return new Date().toISOString();
+        if (dateVal.includes('T')) return new Date(dateVal).toISOString();
+        const parts = dateVal.split('-');
+        if (parts.length === 3) {
+            const y = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10) - 1;
+            const d = parseInt(parts[2], 10);
+            const dt = new Date(y, m, d, 12, 0, 0);
+            return dt.toISOString();
+        }
+        return new Date(dateVal).toISOString();
+    };
+    window.getExpenseCategory = function(e) {
         if (e && e.category) return e.category;
         const d = (e && e.desc ? String(e.desc).toLowerCase() : '');
         if (d.includes('يومي') || d.includes('قهوة') || d.includes('فطور') || d.includes('غداء') || d.includes('عشاء') || d.includes('طاكسي') || d.includes('نقل') || d.includes('بنزين') || d.includes('مازوت') || d.includes('ماكلة') || d.includes('سندويتش') || d.includes('سوق') || d.includes('خبز') || d.includes('حليب') || d.includes('شخصي') || d.includes('مأكولات') || d.includes('وجبة') || d.includes('كوتي')) {
@@ -1555,14 +1753,37 @@
         const amount = amountInput ? parseInt(amountInput.value) : NaN;
         const dateVal = dateInput ? dateInput.value : '';
         const category = catSelect ? catSelect.value : 'general';
-        if (!desc || isNaN(amount)) return; if (containsDangerousCode(desc)) {
+        if (!desc) {
+            showErrorToast('يرجى إدخال وصف وبيان المصروف');
+            if (descInput) descInput.focus();
+            return;
+        }
+        if (isNaN(amount) || amount <= 0) {
+            showErrorToast('يرجى إدخال مبلغ صحيح للمصروف');
+            if (amountInput) amountInput.focus();
+            return;
+        }
+        if (containsDangerousCode(desc)) {
             showErrorToast('تم رفض الإدخال: وصف المصروف يحتوي على أسطر برمجية غير مسموح بها.');
-            return; } desc = sanitizeInputText(desc, 100);
+            return;
+        }
+        desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
-        appState.expenses.push({ id: Date.now().toString(),
+        const isoDate = window.createSafeExpenseISO(dateVal);
+        const newExp = { id: Date.now().toString(),
             desc: desc, amount: amount, category: category,
-            date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString()
-        }); saveState(); this.reset(); const catDetails = getExpenseCategoryDetails(category);
+            date: isoDate
+        };
+        appState.expenses.push(newExp);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('expenses', newExp);
+        }
+        saveState();
+        this.reset();
+        if (dateInput) {
+            dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+        }
+        const catDetails = getExpenseCategoryDetails(category);
         showSuccessToast(`تم تسجيل المصروف بنجاح (${catDetails.label})`);
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (window.renderExpensesListView) window.renderExpensesListView();
@@ -1724,21 +1945,44 @@
                     </div>
                 </div>
             `; }).join(''); }; document.getElementById('addExpenseFormView')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const dateVal = document.getElementById('expenseDateView').value;
-        const dateStr = dateVal ? new Date(dateVal).toISOString() : new Date().toISOString();
-        let desc = document.getElementById('expenseDescView').value.trim();
+        e.preventDefault();
+        const dateInput = document.getElementById('expenseDateView');
+        const dateVal = dateInput ? dateInput.value : '';
+        const descInput = document.getElementById('expenseDescView');
+        let desc = descInput ? descInput.value.trim() : '';
         const catSelect = document.getElementById('expenseCategoryView');
         const category = catSelect ? catSelect.value : 'general';
-        const amount = parseInt(document.getElementById('expenseAmountView').value);
+        const amountInput = document.getElementById('expenseAmountView');
+        const amount = amountInput ? parseInt(amountInput.value) : NaN;
+        if (!desc) {
+            showErrorToast('يرجى إدخال وصف وبيان المصروف');
+            if (descInput) descInput.focus();
+            return;
+        }
+        if (isNaN(amount) || amount <= 0) {
+            showErrorToast('يرجى إدخال مبلغ صحيح للمصروف');
+            if (amountInput) amountInput.focus();
+            return;
+        }
         if (containsDangerousCode(desc)) {
             showErrorToast('تم رفض الإدخال: الوصف يحتوي على أكواد غير مسموح بها.');
-            return; } desc = sanitizeInputText(desc, 100);
+            return;
+        }
+        desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
-        appState.expenses.push({ id: Date.now().toString(),
+        const isoDate = window.createSafeExpenseISO(dateVal);
+        const newExp = { id: Date.now().toString(),
             desc: desc, amount: amount, category: category,
-            date: dateStr }); saveState(); this.reset();
-        const dateInput = document.getElementById('expenseDateView');
-        if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+            date: isoDate };
+        appState.expenses.push(newExp);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('expenses', newExp);
+        }
+        saveState();
+        this.reset();
+        if (dateInput) {
+            dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+        }
         const catDetails = getExpenseCategoryDetails(category);
         showSuccessToast(`تم إضافة المصروف بنجاح (${catDetails.label})`);
         if (window.renderExpensesListView) window.renderExpensesListView();
@@ -1747,6 +1991,9 @@
         if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذا المصروف؟', function() {
             if (!Array.isArray(appState.expenses)) return;
             window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('expenses', id);
+            }
             saveState(); showSuccessToast('تم حذف المصروف بنجاح');
             if (window.renderExpensesListView) window.renderExpensesListView();
             if (window.renderExpensesListModal) window.renderExpensesListModal();
@@ -1770,12 +2017,18 @@
         // Ensure no session packages exist
         appState.packages = appState.packages.filter(p => p && p.type !== 'session');
         appState.packages.push(newPkg);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('packages', newPkg);
+        }
         saveState(); this.reset();
         showSuccessToast('تم إضافة الباقة بنجاح');
         render(); }); function deletePackage(id) {
         if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذه الباقة؟', function() {
             if (!Array.isArray(appState.packages)) return;
             window.appState.packages = appState.packages.filter(p => String(p && p.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('packages', id);
+            }
             saveState(); showSuccessToast('تم حذف الباقة بنجاح');
             render(); }, { title: 'حذف الباقة',
             confirmText: 'نعم، حذف' }); }
@@ -1875,14 +2128,9 @@
                                 }); } } } else {
                         p.stockLocation = stockLocationVal;
                         p.stock = parseFloat(document.getElementById('prodStock')?.value) || 0;
-                    } if (p.barcode && window.firebaseDB) {
-                        try { const updateFn = window.firebaseUpdate || window.firebaseSet;
-                            const res = updateFn(window.firebaseRef(window.firebaseDB, 'products/' + p.barcode), p);
-                            if (res && typeof res.catch === 'function') {
-                                res.catch(err => console.warn('Firebase product sync notice:', err?.message || err));
-                            } } catch (e) {
-                            console.warn('Firebase product sync exception:', e);
-                        } } } delete formEl.dataset.editId;
+                    } if (p && window.saveFirebaseSectionItem) {
+                        window.saveFirebaseSectionItem('products', p);
+                    } } delete formEl.dataset.editId;
                 const submitBtn = formEl.querySelector('button[type="submit"]');
                 if (submitBtn) { submitBtn.textContent = 'إضافة المنتج إلى Stock 1 و Stock 2 معاً';
                     submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
@@ -1914,19 +2162,15 @@
                                 expiryDate: expiryDateVal,
                                 category: categoryVal
                             }; appState.products.push(newProd1);
-                            if (newProd1.barcode && window.firebaseDB) {
-                                try { const updateFn = window.firebaseUpdate || window.firebaseSet;
-                                    const res = updateFn(window.firebaseRef(window.firebaseDB, 'products/' + newProd1.barcode), newProd1);
-                                    if (res && typeof res.catch === 'function') {
-                                        res.catch(err => console.warn('Firebase product sync notice:', err?.message || err));
-                                    } } catch (e) {
-                                    console.warn('Firebase product sync exception:', e);
-                                } } } } if (q2 > 0) {
+                            if (newProd1 && window.saveFirebaseSectionItem) {
+                                window.saveFirebaseSectionItem('products', newProd1);
+                            } } } if (q2 > 0) {
                         let p2 = prodBarcode ? appState.products.find(p => p.barcode === prodBarcode && p.stockLocation === 'stock2')
                             : null; if (p2) { p2.stock = Number(p2.stock || 0) + q2;
                             p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal;
                             p2.expiryDate = expiryDateVal || p2.expiryDate;
                             p2.category = categoryVal;
+                            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                         } else { const newProd2 = {
                                 id: (Date.now() + 20).toString(),
                                 barcode: prodBarcode,
@@ -1940,6 +2184,7 @@
                                 expiryDate: expiryDateVal,
                                 category: categoryVal
                             }; appState.products.push(newProd2);
+                            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
                         } } showSuccessToast(`تم إضافة المنتج بنجاح: (${q1}) في Stock 1 و (${q2}) في Stock 2`);
                 } else {
                     // Single stock location
@@ -1955,6 +2200,7 @@
                         existing.imageUrl = imgUrlVal;
                         existing.expiryDate = expiryDateVal || existing.expiryDate;
                         existing.category = categoryVal;
+                        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', existing);
                     } else { const newProduct = {
                             id: Date.now().toString(),
                             barcode: prodBarcode,
@@ -1968,14 +2214,9 @@
                             expiryDate: expiryDateVal,
                             category: categoryVal
                         }; appState.products.push(newProduct);
-                        if (newProduct.barcode && window.firebaseDB) {
-                            try { const updateFn = window.firebaseUpdate || window.firebaseSet;
-                                const res = updateFn(window.firebaseRef(window.firebaseDB, 'products/' + newProduct.barcode), newProduct);
-                                if (res && typeof res.catch === 'function') {
-                                    res.catch(err => console.warn('Firebase product sync notice:', err?.message || err));
-                                } } catch (e) {
-                                console.warn('Firebase product sync exception:', e);
-                            } } }
+                        if (window.saveFirebaseSectionItem) {
+                            window.saveFirebaseSectionItem('products', newProduct);
+                        } }
                     showSuccessToast(`تم إضافة المنتج إلى ${stockLocationVal === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)'} بنجاح`);
                 } } saveState(); formEl.reset();
             if (document.getElementById('prodStock1')) document.getElementById('prodStock1').value = '';
@@ -2117,7 +2358,12 @@
             buttonText: 'تأكيد الحذف' }, () => {
             showAppConfirm('هل أنت متأكد من حذف هذا المنتج؟', function() {
                 if (!Array.isArray(appState.products)) return;
+                const prodToDelete = appState.products.find(p => String(p && p.id) === String(id));
                 window.appState.products = appState.products.filter(p => String(p && p.id) !== String(id));
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('products', id);
+                    if (prodToDelete?.barcode) window.deleteFirebaseSectionItem('products', prodToDelete.barcode);
+                }
                 saveState(); showSuccessToast('تم حذف المنتج بنجاح');
                 if (typeof renderProductsList === 'function') renderProductsList();
                 render(); }, { title: 'حذف المنتج',
@@ -2352,7 +2598,7 @@
         } const saleProfit = saleTotal - saleCost;
         const coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
         const prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
-        appState.sales.unshift({ id: Date.now().toString(),
+        const newSale = { id: Date.now().toString(),
             prodId: product.id, prodName: saleLabel,
             category: prodCategory,
             stockLocation: product.stockLocation || 'stock1',
@@ -2361,7 +2607,13 @@
             cost: saleCost, total: saleTotal,
             profit: saleProfit, coachName: coachVal,
             coachCommission: coachCommission,
-            date: dateStr }); saveState(); this.reset();
+            date: dateStr };
+        appState.sales.unshift(newSale);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('sales', newSale);
+            window.saveFirebaseSectionItem('products', product);
+        }
+        saveState(); this.reset();
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
@@ -2371,10 +2623,16 @@
         if (!id) return; showAppConfirm('هل أنت متأكد من حذف هذا المشترك نهائياً؟', function() {
             if (!Array.isArray(appState.customers)) return;
             window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('customers', id);
+            }
             // Clean up auto-generated credits for this customer
             if (Array.isArray(appState.credits)) {
                 const autoId = 'cr_auto_' + id;
                 window.appState.credits = appState.credits.filter(c => c.id !== autoId);
+                if (window.deleteFirebaseSectionItem) {
+                    window.deleteFirebaseSectionItem('credits', autoId);
+                }
             } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render(); }, { title: 'حذف المشترك',
@@ -2795,10 +3053,26 @@
     function openFullReportModal() {
         renderFullReport(); openModal('fullReportModal');
     } window.openFullReportModal = openFullReportModal;
+    let html2canvasInstance = null;
+    async function loadLocalHtml2Canvas() {
+        if (!html2canvasInstance) {
+            const mod = await import('html2canvas');
+            html2canvasInstance = mod.default || mod;
+        }
+        return html2canvasInstance;
+    }
     async function printFullReport() { const reportElem = document.getElementById('fullReportContent');
         const printBtn = document.getElementById('printReportBtn');
-        if (!reportElem) return; if (typeof html2canvas === 'undefined') { try { await loadLib('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'); } catch (e) {} } if (typeof html2canvas === 'undefined') {
-            window.print(); return; } const originalBtnContent = printBtn ? printBtn.innerHTML : '';
+        if (!reportElem) return;
+        let html2canvas = null;
+        try {
+            html2canvas = await loadLocalHtml2Canvas();
+        } catch (e) {
+            console.warn('html2canvas import fallback:', e);
+        }
+        if (!html2canvas) {
+            window.print(); return;
+        } const originalBtnContent = printBtn ? printBtn.innerHTML : '';
         if (printBtn) { printBtn.disabled = true;
             printBtn.innerHTML = `
                 <svg class="w-4 h-4 animate-spin text-white inline-block" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
@@ -4025,7 +4299,7 @@
             let saleLabel = product.name;
             product.stock = Number(product.stock || 0) - qty;
             if (!appState.sales) appState.sales = [];
-            appState.sales.unshift({ id: Date.now().toString(),
+            const newSale = { id: Date.now().toString(),
                 prodId: product.id, prodName: saleLabel,
                 category: prodCategory,
                 stockLocation: product.stockLocation || 'stock1',
@@ -4034,13 +4308,14 @@
                 total: saleTotal, profit: saleProfit,
                 coachName: coachVal,
                 coachCommission: coachCommission,
-                date: new Date().toISOString() });
-            saveState(); if (product.barcode && window.firebaseDB) {
-                const updateFn = window.firebaseUpdate || window.firebaseSet;
-                try { await updateFn( window.firebaseRef(window.firebaseDB, 'products/' + String(product.barcode).trim()),
-                        product ); } catch (fbErr) {
-                    console.error('Firebase product update err:', fbErr);
-                } } playBeep(); showSuccessToast(`تم بيع (${qty}) من ${product.name} وخصمها من Stock 1`);
+                date: new Date().toISOString() };
+            appState.sales.unshift(newSale);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('sales', newSale);
+                window.saveFirebaseSectionItem('products', product);
+            }
+            saveState();
+            playBeep(); showSuccessToast(`تم بيع (${qty}) من ${product.name} وخصمها من Stock 1`);
             if (typeof render === 'function') render();
             return true; } finally {
             isProcessingBarcode = false; } }
@@ -4193,33 +4468,36 @@
             <div style="position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center;">
                 <div style="width:92%;height:30%;max-width:620px;border:3px solid #22c55e;border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.16);"></div>
             </div>`; const video = document.getElementById('barcodeVideo');
-        if (!video) return; try { if (!window.ZXingBrowser) { await loadLib('https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js'); await loadLib('https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js'); } if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserMultiFormatReader) {
-                throw new Error('ZXing library did not load');
+        if (!video) return;
+        try {
+            let zxingMod = null;
+        try {
+            zxingMod = await import('@zxing/browser');
+        } catch (e) {
+            console.warn('ZXing dynamic import failed:', e);
+        }
+        if (!zxingMod || !zxingMod.BrowserMultiFormatReader) {
+            throw new Error('ZXing library did not load');
+        }
+        let hints;
+        try {
+            if (zxingMod.BarcodeFormat) {
+                hints = new Map();
+                hints.set(2, [
+                    zxingMod.BarcodeFormat.EAN_13,
+                    zxingMod.BarcodeFormat.EAN_8,
+                    zxingMod.BarcodeFormat.UPC_A,
+                    zxingMod.BarcodeFormat.UPC_E,
+                    zxingMod.BarcodeFormat.CODE_128,
+                    zxingMod.BarcodeFormat.CODE_39,
+                    zxingMod.BarcodeFormat.CODE_93,
+                    zxingMod.BarcodeFormat.ITF,
+                    zxingMod.BarcodeFormat.CODABAR,
+                    zxingMod.BarcodeFormat.QR_CODE
+                ]);
             }
-            // Build decode hints: restrict to the formats actually used on retail/paper
-            // products and ask the decoder to TRY_HARDER. This matters a lot for small,
-            // low-contrast, or slightly blurry barcodes (e.g. a small barcode sticker) —
-            // without hints ZXing scans every supported format on every frame, which is
-            // both slower and, for the "try harder" pass, is skipped entirely by default.
-            // Enums come from window.ZXing (the @zxing/library UMD) loaded above; we fall
-            // back to no hints if that script failed to load for any reason.
-            let hints; try { const ZX = window.ZXing;
-                if (ZX && ZX.DecodeHintType && ZX.BarcodeFormat) {
-                    hints = new Map(); hints.set(ZX.DecodeHintType.TRY_HARDER, true);
-                    hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, [
-                        ZX.BarcodeFormat.EAN_13,
-                        ZX.BarcodeFormat.EAN_8,
-                        ZX.BarcodeFormat.UPC_A,
-                        ZX.BarcodeFormat.UPC_E,
-                        ZX.BarcodeFormat.CODE_128,
-                        ZX.BarcodeFormat.CODE_39,
-                        ZX.BarcodeFormat.CODE_93,
-                        ZX.BarcodeFormat.ITF, ZX.BarcodeFormat.CODABAR,
-                        ZX.BarcodeFormat.QR_CODE
-                    ]); } } catch (e) { hints = undefined; }
-            // Scan every ~150ms instead of the 500ms default so a brief, well-framed
-            // moment on a small/curved barcode is more likely to be caught.
-            zxingReader = new ZXingBrowser.BrowserMultiFormatReader(hints, 150);
+        } catch (e) { hints = undefined; }
+        zxingReader = new zxingMod.BrowserMultiFormatReader(hints, 150);
             // Determine active camera device ID or facing mode.
             let deviceId = barcodeSelectedDeviceId;
             if (!deviceId) { try { const tempStream = await navigator.mediaDevices.getUserMedia({
@@ -4530,8 +4808,15 @@
             if (idx === -1) return; const sale = appState.sales[idx];
             if (sale.prodId && appState.products) {
                 const prod = appState.products.find(p => p.id === sale.prodId);
-                if (prod) { prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
-                } } appState.sales.splice(idx, 1);
+                if (prod) {
+                    prod.stock = Number(prod.stock || 0) + Number(sale.qty || 1);
+                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
+                }
+            }
+            appState.sales.splice(idx, 1);
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('sales', saleId);
+            }
             saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
             render(); if (typeof updateFullReportSalesSection === 'function') {
                 updateFullReportSalesSection();
@@ -5050,6 +5335,15 @@
             return el && el.classList.contains('active');
         };
 
+        const expDateM = document.getElementById('expenseDateModal');
+        if (expDateM && !expDateM.value) {
+            expDateM.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+        }
+        const expDateV = document.getElementById('expenseDateView');
+        if (expDateV && !expDateV.value) {
+            expDateV.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
+        }
+
         if (isModalOpen('expensesModal') && typeof renderExpensesListModal === 'function') renderExpensesListModal();
         if (isVisible('expensesView') && typeof renderExpensesListView === 'function') renderExpensesListView();
         if (isModalOpen('staffPayoutsModal')) {
@@ -5275,13 +5569,20 @@
             showSuccessToast(`تم تحديث جرد وإغلاق الصندوق ليوم ${dateVal}`);
         } else { appState.caisseLogs.unshift(logEntry);
             showSuccessToast(`تم حفظ جرد وإغلاق الصندوق ليوم ${dateVal} بنجاح`);
-        } saveState(); renderCaisseView();
+        }
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('caisseLogs', logEntry);
+        }
+        saveState(); renderCaisseView();
         render(); } window.handleCaisseClotureSubmit = handleCaisseClotureSubmit;
     function deleteCaisseLog(logId) { if (!logId) return;
         showAppConfirm('هل أنت متأكد من حذف سجل جرد الصندوق هذا؟', function() {
             if (!Array.isArray(appState.caisseLogs)) return;
             const idx = appState.caisseLogs.findIndex(l => String(l.id) === String(logId));
             if (idx === -1) return; appState.caisseLogs.splice(idx, 1);
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('caisseLogs', logId);
+            }
             saveState(); showSuccessToast('تم حذف سجل جرد الصندوق');
             renderCaisseView(); render(); }, {
             title: 'حذف سجل جرد الصندوق',
@@ -5512,7 +5813,7 @@
                 id.includes('duration') || id.includes('days') ||
                 id.includes('sessions') || id === 'staffamount' ||
                 id === 'staffpayoutamount' || id.includes('salary') ||
-                id.includes('expense') ) && !id.includes('date') && !id.includes('filter') && id !== 'prodweight';
+                (id.includes('expense') && id.includes('amount')) ) && !id.includes('date') && !id.includes('filter') && !id.includes('desc') && !id.includes('search') && !id.includes('category') && id !== 'prodweight';
             if (isNumericInput && type !== 'number') {
                 const raw = target.value; const sanitized = raw.replace(/[^0-9.]/g, '');
                 if (raw !== sanitized) { target.value = sanitized;
@@ -5535,9 +5836,28 @@
     const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
     let gdriveTokenClient = null; let gdriveAccessToken = null;
     let gdriveTokenExpiresAt = 0; let gdriveCurrentUser = null;
+    let gsiLoadingPromise = null;
+    function loadGoogleGSI() {
+        if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+            return Promise.resolve(true);
+        }
+        if (gsiLoadingPromise) return gsiLoadingPromise;
+        gsiLoadingPromise = new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+            script.defer = true;
+            script.onload = () => resolve(true);
+            script.onerror = () => {
+                gsiLoadingPromise = null;
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        });
+        return gsiLoadingPromise;
+    }
     window.initGoogleDriveOAuth = function() {
         if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
-            console.warn('Google Identity Services SDK not loaded yet.');
             return false; } if (!gdriveTokenClient) {
             try { gdriveTokenClient = google.accounts.oauth2.initTokenClient({
                     client_id: GOOGLE_DRIVE_CLIENT_ID,
@@ -5567,7 +5887,8 @@
                 gdriveAccessToken = cached;
                 gdriveTokenExpiresAt = exp;
                 return cached; } } catch (e) {}
-        return null; } window.connectGoogleDriveAccount = function() {
+        return null; } window.connectGoogleDriveAccount = async function() {
+        await loadGoogleGSI();
         if (!window.initGoogleDriveOAuth()) {
             showErrorToast('جاري تحميل خدمات Google، يرجى المحاولة بعد ثوانٍ قليلة...');
             return; } if (gdriveTokenClient) {
@@ -5594,12 +5915,13 @@
                 appState.gdriveSettings.userEmail = gdriveCurrentUser.email || '';
                 saveState(); updateGoogleDriveUI();
             } } catch (e) { console.warn('Could not load user profile from Google:', e);
-        } } window.openGoogleDriveModal = function() {
+        } } window.openGoogleDriveModal = async function() {
         const modal = document.getElementById('googleDriveModal');
         if (!modal) return; if (!appState.gdriveSettings) {
             appState.gdriveSettings = { autoSync: true,
                 lastSyncTime: null,
                 lastSyncStatus: 'جاهز' }; }
+        await loadGoogleGSI();
         window.initGoogleDriveOAuth(); const token = getValidGDriveToken();
         if (token && !gdriveCurrentUser) {
             fetchGoogleDriveUserInfo();
