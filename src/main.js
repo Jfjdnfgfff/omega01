@@ -148,7 +148,8 @@ window.setElemRequired = setElemRequired;
     caisseLogs: { oldestKey: null, newestKey: null, hasMore: true },
     staffPayouts: { oldestKey: null, newestKey: null, hasMore: true },
     coachAbsences: { oldestKey: null, newestKey: null, hasMore: true },
-    supplierTransactions: { oldestKey: null, newestKey: null, hasMore: true }
+    supplierTransactions: { oldestKey: null, newestKey: null, hasMore: true },
+    activityLogs: { oldestKey: null, newestKey: null, hasMore: true }
   };
   window.firebaseLoadedSections = window.firebaseLoadedSections || {};
   window.firebaseLoadingPromises = window.firebaseLoadingPromises || {};
@@ -356,6 +357,7 @@ window.setElemRequired = setElemRequired;
     const mergedSuppliers = dedupeCollection([...toArr(appStateNode.suppliers), ...toArr(gymStateNode.suppliers), ...toArr(root.suppliers)], 'sup');
     const mergedSupplierTx = dedupeCollection([...toArr(appStateNode.supplierTransactions), ...toArr(gymStateNode.supplierTransactions), ...toArr(root.supplierTransactions)], 'suptx');
     const mergedQuickSessions = dedupeCollection([...toArr(appStateNode.quickSessions), ...toArr(gymStateNode.quickSessions), ...toArr(root.quickSessions)], 'qs');
+    const mergedActivityLogs = dedupeCollection([...toArr(appStateNode.activityLogs), ...toArr(gymStateNode.activityLogs), ...toArr(root.activityLogs)], 'act');
 
     window.appState = window.appState || {};
     window.appState.customers = mergedCustomers.length > 0 ? mergedCustomers : (window.appState.customers || []);
@@ -370,6 +372,7 @@ window.setElemRequired = setElemRequired;
     window.appState.suppliers = mergedSuppliers.length > 0 ? mergedSuppliers : (window.appState.suppliers || []);
     window.appState.supplierTransactions = mergedSupplierTx.length > 0 ? mergedSupplierTx : (window.appState.supplierTransactions || []);
     window.appState.quickSessions = mergedQuickSessions.length > 0 ? mergedQuickSessions : (window.appState.quickSessions || []);
+    window.appState.activityLogs = mergedActivityLogs.length > 0 ? mergedActivityLogs : (window.appState.activityLogs || []);
     window.appState.lastUpdated = rawPayload.lastUpdated || new Date().toISOString();
     scheduleRender();
     window.firebaseSyncState = window.firebaseSyncState || {};
@@ -482,6 +485,7 @@ window.setElemRequired = setElemRequired;
     const supplierTransactionsArr = dedupe(s.supplierTransactions, 'suptx');
     const quickSessionsArr = dedupe(s.quickSessions, 'qs');
     const caisseLogsArr = dedupe(s.caisseLogs, 'caisse');
+    const activityLogsArr = dedupe(s.activityLogs, 'act');
 
     const payload = {
       customers: customersArr,
@@ -499,6 +503,7 @@ window.setElemRequired = setElemRequired;
       suppliers: suppliersArr,
       supplierTransactions: supplierTransactionsArr,
       quickSessions: quickSessionsArr,
+      activityLogs: activityLogsArr,
       appState: {
         customers: customersArr,
         products: productsArr,
@@ -515,6 +520,7 @@ window.setElemRequired = setElemRequired;
         suppliers: suppliersArr,
         supplierTransactions: supplierTransactionsArr,
         quickSessions: quickSessionsArr,
+        activityLogs: activityLogsArr,
         lastUpdated: new Date().toISOString()
       },
       lastUpdated: new Date().toISOString()
@@ -1073,6 +1079,7 @@ window.setElemRequired = setElemRequired;
     mapSectionToV2(payload.suppliers, 'suppliers');
     mapSectionToV2(payload.supplierTransactions, 'supplierTransactions');
     mapSectionToV2(payload.quickSessions, 'quickSessions');
+    mapSectionToV2(payload.activityLogs, 'activityLogs');
     v2Updates['v2/meta'] = {
       hideFinances: customState ? customState.hideFinances : (window.appState?.hideFinances !== false),
       lastUpdated: payload.lastUpdated
@@ -8529,11 +8536,15 @@ window.setElemRequired = setElemRequired;
     }
     window.ensureSeedActivityLogs = ensureSeedActivityLogs;
 
-    function openActivityLogModal() {
+    async function openActivityLogModal() {
         ensureSeedActivityLogs();
         const modal = document.getElementById('activityLogModal');
         if (modal) {
             modal.classList.add('active');
+            renderActivityLogModal();
+        }
+        if (window.lazyLoadSection) {
+            await window.lazyLoadSection('activityLogs');
             renderActivityLogModal();
         }
     }

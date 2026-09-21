@@ -3,6 +3,9 @@
     "/* SECURITY NOTE */": "These rules currently allow read/write access for development and offline-first client operations. For hardened production environments, require Firebase Authentication: '.read': 'auth != null', '.write': 'auth != null'",
     ".read": true,
     ".write": true,
+    "activityLogs": {
+      ".indexOn": ["timestamp", "type", "dateStr"]
+    },
     "customers": {
       ".indexOn": ["startDate", "endDate", "phone", "status", "paymentStatus", "createdAt", "updatedAt"]
     },
@@ -66,6 +69,9 @@
       },
       "caisse": {
         ".indexOn": ["dateKey", "type", "createdAt"]
+      },
+      "activityLogs": {
+        ".indexOn": ["timestamp", "type", "dateStr"]
       }
     }
   }
