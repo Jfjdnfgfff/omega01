@@ -10,14 +10,14 @@
   }
 
   let firebaseConfig = {
-    apiKey: "AIzaSyATQdkTAABcNa5PDSG2KUHlqJ2iJcMFpe8",
-    authDomain: "omega-a7040.firebaseapp.com",
-    databaseURL: "https://omega-a7040-default-rtdb.firebaseio.com",
-    projectId: "omega-a7040",
-    storageBucket: "omega-a7040.firebasestorage.app",
-    messagingSenderId: "596061120034",
-    appId: "1:596061120034:web:f7c9999af8ee4ef949cc7b",
-    measurementId: "G-YCRV248RTM"
+    apiKey: (import.meta.env && import.meta.env.VITE_FIREBASE_API_KEY) || "AIzaSyATQdkTAABcNa5PDSG2KUHlqJ2iJcMFpe8",
+    authDomain: (import.meta.env && import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) || "omega-a7040.firebaseapp.com",
+    databaseURL: (import.meta.env && import.meta.env.VITE_FIREBASE_DATABASE_URL) || "https://omega-a7040-default-rtdb.firebaseio.com",
+    projectId: (import.meta.env && import.meta.env.VITE_FIREBASE_PROJECT_ID) || "omega-a7040",
+    storageBucket: (import.meta.env && import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) || "omega-a7040.firebasestorage.app",
+    messagingSenderId: (import.meta.env && import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) || "596061120034",
+    appId: (import.meta.env && import.meta.env.VITE_FIREBASE_APP_ID) || "1:596061120034:web:f7c9999af8ee4ef949cc7b",
+    measurementId: (import.meta.env && import.meta.env.VITE_FIREBASE_MEASUREMENT_ID) || "G-YCRV248RTM"
   };
 
   // Global state variables
@@ -858,6 +858,82 @@
     window.appState.currentInvoice = baseSource.currentInvoice || null;
     window.appState.hideFinances = localStorage.getItem('sm_hideFinances') !== 'false';
     let appState = window.appState;
+    appState.customerPage = 1;
+    appState.creditPage = 1;
+
+    // ============================================================================
+    // HIGH-PERFORMANCE WORKER & CACHE ENGINE
+    // ============================================================================
+    let perfWorker = null;
+    let workerMsgId = 0;
+    const workerCallbacks = new Map();
+    try {
+      perfWorker = new Worker(new URL('./perfWorker.js', import.meta.url), { type: 'module' });
+      perfWorker.onmessage = function(e) {
+        const { id, success, result, error } = e.data || {};
+        const cb = workerCallbacks.get(id);
+        if (cb) {
+          workerCallbacks.delete(id);
+          if (success) cb.resolve(result);
+          else cb.reject(new Error(error));
+        }
+      };
+      perfWorker.onerror = function(err) {
+        console.warn('Worker background thread notice:', err);
+      };
+    } catch (e) {
+      console.info('Worker running in main-thread mode.');
+    }
+
+    function runWorkerTask(type, payload) {
+      if (!perfWorker) return Promise.reject(new Error('Worker unavailable'));
+      return new Promise((resolve, reject) => {
+        const id = ++workerMsgId;
+        workerCallbacks.set(id, { resolve, reject });
+        perfWorker.postMessage({ id, type, payload });
+      });
+    }
+    window.runWorkerTask = runWorkerTask;
+
+    // O(1) Package Map Cache
+    let _cachedPackageMap = null;
+    let _cachedPackageCount = -1;
+    function getPackageMap() {
+      const pkgs = appState.packages || [];
+      if (!_cachedPackageMap || _cachedPackageCount !== pkgs.length) {
+        _cachedPackageMap = new Map();
+        for (let i = 0; i < pkgs.length; i++) {
+          const p = pkgs[i];
+          if (p && p.id) _cachedPackageMap.set(p.id, p);
+        }
+        _cachedPackageCount = pkgs.length;
+      }
+      return _cachedPackageMap;
+    }
+    window.getPackageMap = getPackageMap;
+
+    // Debounced LocalStorage Engine to prevent main-thread I/O blocking
+    let __localStorageSaveTimer = null;
+    function scheduleLocalStorageSave() {
+      if (__localStorageSaveTimer) clearTimeout(__localStorageSaveTimer);
+      __localStorageSaveTimer = setTimeout(() => {
+        try {
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(() => {
+              try { localStorage.setItem('sm_appState', JSON.stringify(appState)); } catch(e){}
+            });
+          } else {
+            localStorage.setItem('sm_appState', JSON.stringify(appState));
+          }
+        } catch (storageErr) {
+          console.warn('LocalStorage save notice:', storageErr);
+        }
+      }, 150);
+    }
+    window.addEventListener('beforeunload', () => {
+      try { localStorage.setItem('sm_appState', JSON.stringify(appState)); } catch(e){}
+    });
+
     // State loaded from Firebase
     function showSuccessToast(message) { let toast = document.getElementById('firebase-toast');
       if (!toast) { toast = document.createElement('div');
@@ -907,9 +983,10 @@
       appState.suppliers = ensureArray(appState.suppliers);
       appState.quickSessions = ensureArray(appState.quickSessions);
       appState.caisseLogs = ensureArray(appState.caisseLogs);
-      try { localStorage.setItem('sm_appState', JSON.stringify(appState));
-      } catch (storageErr) { console.warn('LocalStorage save notice:', storageErr);
-      }
+      
+      // Async non-blocking save
+      scheduleLocalStorageSave();
+
       if (window.__firebasePushTimer) clearTimeout(window.__firebasePushTimer);
       window.__firebasePushTimer = setTimeout(() => {
         if (typeof window.pushFullStateToFirebase === 'function') {
@@ -2673,21 +2750,42 @@
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render(); }, { title: 'حذف المشترك',
             confirmText: 'نعم، حذف' }); }
-    function calculateStatus(customer) { if (!customer) return 'active';
+    function calculateStatus(customer, cachedNowMs) {
+      if (!customer) return 'active';
       if (customer.status === 'frozen') return 'frozen';
       const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
-      if (isSession) { const remaining = parseInt(customer.remainingSessions) || 0;
-          if (remaining <= 0) return 'expired';
-          if (customer.endDate) { const diffDays = Math.ceil((new Date(customer.endDate) - new Date()) / (1000 * 60 * 60 * 24));
-              if (diffDays < 0) return 'expired';
-              if (diffDays <= 5 || remaining <= 2) return 'near_expiry';
-          } else if (remaining <= 2) { return 'near_expiry';
-          } return 'active'; } if (!customer.endDate) return 'active';
-      const diffDays = Math.ceil((new Date(customer.endDate) - new Date()) / (1000 * 60 * 60 * 24));
-      if (diffDays < 0) return 'expired'; if (diffDays <= 5) return 'near_expiry';
-      return 'active'; } function getRemainingDays(customer) {
-       if (!customer) return 0; if (customer.status === 'frozen') return (customer.frozenRemainingDays || 0);
-       if (!customer.endDate) return 0; return Math.max(0, Math.ceil((new Date(customer.endDate) - new Date()) / (1000 * 60 * 60 * 24)));
+      const nowMs = cachedNowMs || Date.now();
+      if (isSession) {
+        const remaining = parseInt(customer.remainingSessions) || 0;
+        if (remaining <= 0) return 'expired';
+        if (customer.endDate) {
+          const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
+          if (!isNaN(endMs)) {
+            const diffDays = Math.ceil((endMs - nowMs) / 86400000);
+            if (diffDays < 0) return 'expired';
+            if (diffDays <= 5 || remaining <= 2) return 'near_expiry';
+          }
+        } else if (remaining <= 2) {
+          return 'near_expiry';
+        }
+        return 'active';
+      }
+      if (!customer.endDate) return 'active';
+      const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
+      if (isNaN(endMs)) return 'active';
+      const diffDays = Math.ceil((endMs - nowMs) / 86400000);
+      if (diffDays < 0) return 'expired';
+      if (diffDays <= 5) return 'near_expiry';
+      return 'active';
+    }
+    function getRemainingDays(customer, cachedNowMs) {
+      if (!customer) return 0;
+      if (customer.status === 'frozen') return (customer.frozenRemainingDays || 0);
+      if (!customer.endDate) return 0;
+      const nowMs = cachedNowMs || Date.now();
+      const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
+      if (isNaN(endMs)) return 0;
+      return Math.max(0, Math.ceil((endMs - nowMs) / 86400000));
     } function recordCustomerAttendance(customerId) {
         if (!appState.customers) return; const customer = appState.customers.find(c => c.id === customerId);
         if (!customer) return; const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
@@ -3609,9 +3707,20 @@
                     </div>
                     <p class="text-sm font-bold text-slate-400">${searchQuery ? 'لا توجد نتائج مطابقة للبحث' : 'لا توجد ديون معلقة حالياً'}</p>
                 </div>
-            `; return; } const sorted = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date));
-        container.innerHTML = sorted.map(cr => {
-            const d = new Date(cr.date); const dateFormatted = isNaN(d.getTime()) ? escapeHTML(cr.date || '') : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+              `; return; }
+        const sorted = [...filtered].sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
+        const CREDIT_PAGE_SIZE = 40;
+        if (!appState.creditPage || appState.creditPage < 1) appState.creditPage = 1;
+        const totalCreds = sorted.length;
+        const totalCredPages = Math.max(1, Math.ceil(totalCreds / CREDIT_PAGE_SIZE));
+        if (appState.creditPage > totalCredPages) appState.creditPage = 1;
+        const startCredIdx = (appState.creditPage - 1) * CREDIT_PAGE_SIZE;
+        const endCredIdx = Math.min(startCredIdx + CREDIT_PAGE_SIZE, totalCreds);
+        const pagedCredits = sorted.slice(startCredIdx, endCredIdx);
+
+        const cardsHtml = pagedCredits.map(cr => {
+            const d = cr.date ? new Date(cr.date) : null;
+            const dateFormatted = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : escapeHTML(cr.date || '');
             const rawName = (cr.name || '').trim();
             const safeName = escapeHTML(rawName || 'بدون اسم');
             const firstLetter = safeName.charAt(0) || '؟';
@@ -3651,7 +3760,7 @@
 
                     <div class="flex items-center justify-between text-[11px] pt-0.5">
                         <div class="flex items-center gap-1 text-slate-400 font-medium">
-                            <svg class="w-3 h-3 text-slate-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                             <span>بتاريخ: ${dateFormatted}</span>
                         </div>
                         
@@ -3669,8 +3778,42 @@
                         </div>
                     </div>
                 </div>
-            `; }).join(''); } function handleCreditSearch() {
-        renderCreditsList(); } window.handleCreditSearch = handleCreditSearch;
+            `; }).join('');
+
+        const paginationHtml = totalCreds > CREDIT_PAGE_SIZE ? `
+            <div class="col-span-full flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 pb-2 border-t border-slate-200/80 mt-2">
+                <div class="text-xs sm:text-sm font-bold text-slate-600">
+                    عرض ${startCredIdx + 1} - ${endCredIdx} من إجمالي ${totalCreds.toLocaleString()} سجل
+                </div>
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="changeCreditPage(-1)" ${appState.creditPage <= 1 ? 'disabled class="opacity-40 cursor-not-allowed px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 text-xs font-bold"' : 'class="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold shadow-2xs transition-all"'}>
+                        السابق
+                    </button>
+                    <span class="px-3.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 text-xs font-extrabold border border-blue-200/80">
+                        صفحة ${appState.creditPage} من ${totalCredPages}
+                    </span>
+                    <button type="button" onclick="changeCreditPage(1)" ${appState.creditPage >= totalCredPages ? 'disabled class="opacity-40 cursor-not-allowed px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 text-xs font-bold"' : 'class="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold shadow-2xs transition-all"'}>
+                        التالي
+                    </button>
+                </div>
+            </div>` : '';
+
+        container.innerHTML = cardsHtml + paginationHtml;
+    }
+    window.changeCreditPage = function(delta) {
+        const sorted = (appState.credits || []);
+        const totalCredPages = Math.max(1, Math.ceil(sorted.length / 40));
+        appState.creditPage = Math.max(1, Math.min(totalCredPages, (appState.creditPage || 1) + delta));
+        renderCreditsList();
+    };
+    let _creditSearchDebounceTimer = null;
+    function handleCreditSearch() {
+        if (_creditSearchDebounceTimer) clearTimeout(_creditSearchDebounceTimer);
+        _creditSearchDebounceTimer = setTimeout(() => {
+            appState.creditPage = 1;
+            renderCreditsList();
+        }, 120);
+    } window.handleCreditSearch = handleCreditSearch;
     function settleCredit(id) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
         showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
@@ -3811,126 +3954,156 @@
         const defaultPkg = appState.packages[0] || { id: 'pkg_1', name: 'اشتراك شهري', price: 3000, durationDays: 30 };
         const pkg2 = appState.packages[1] || defaultPkg;
 
-        const firstNames = [
-            'محمد', 'أحمد', 'يوسف', 'أيمن', 'بلال', 'رياض', 'كريم', 'حمزة', 'إسلام', 'فاروق',
-            'عبد القادر', 'طارق', 'أسامة', 'وليد', 'ياسين', 'أمين', 'هشام', 'سمير', 'سفيان', 'حسام',
-            'نذير', 'صلاح', 'عادل', 'جمال', 'مراد', 'عمر', 'علي', 'إلياس', 'صابر', 'رضوان',
-            'سليم', 'شكيب', 'مهدي', 'بشير', 'عبد الرحمن', 'زكرياء', 'منير', 'عصام', 'نبيل', 'خالد'
-        ];
-        const lastNames = [
-            'بن علي', 'بوعلام', 'قادري', 'مرابط', 'حميدي', 'زرقي', 'منصوري', 'مسعودي', 'سلطاني', 'بوزيد',
-            'براهيمي', 'بن عمار', 'لعربي', 'بلحاج', 'شريف', 'عثماني', 'رحماني', 'سعيدي', 'طاهري', 'عماري',
-            'داودي', 'علالي', 'مزيان', 'بلقاسم', 'حداد', 'دراجي', 'قاسمي', 'مقداد', 'زايدي', 'بوشامة'
-        ];
-        const creditDescriptions = [
-            'دين مكمل بروتين واي (Gold Standard)',
-            'باقي اشتراك شهر كمال أجسام',
-            'دين كرياتين مونوهيدرات 300غ',
-            'دين مشروبات طاقة ومياه معدنية',
-            'دين حزام كمال أجسام وقفازات تمرين',
-            'باقي اشتراك 3 أشهر',
-            'دين مكمل أحماض أمينية BCAA',
-            'دين بروتين بار وسناكس طاقة',
-            'مستحقات تدريب خاص وتغذية',
-            'دين ملابس وتيشيرت رياضي نادي أوميغا'
-        ];
-        const creditNicknames = ['مشترك', 'زبون قاعة', 'صديق', 'مشتري مكملات', 'رياضي', 'لاعب'];
+        const applyData = (newCustomers, newCredits) => {
+            if (!Array.isArray(appState.customers)) appState.customers = [];
+            if (!Array.isArray(appState.credits)) appState.credits = [];
+            // Remove previous mock items if any
+            appState.customers = appState.customers.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cust_'));
+            appState.credits = appState.credits.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cred_'));
 
-        if (!Array.isArray(appState.customers)) appState.customers = [];
-        if (!Array.isArray(appState.credits)) appState.credits = [];
+            // Pre-index search keys for hyper-speed filtering
+            for (let i = 0; i < newCustomers.length; i++) {
+                const c = newCustomers[i];
+                c._searchKey = `${c.name || ''} ${(c.phone || '').replace(/\D/g, '')}`.toLowerCase();
+            }
 
-        // Remove previous mock items if any to avoid stacking duplicates
-        appState.customers = appState.customers.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cust_'));
-        appState.credits = appState.credits.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cred_'));
+            appState.customers.unshift(...newCustomers);
+            appState.credits.unshift(...newCredits);
 
-        const now = Date.now();
-        const newMockCustomers = [];
+            saveState();
 
-        for (let i = 0; i < customersCount; i++) {
-            const fn = firstNames[i % firstNames.length];
-            const ln = lastNames[(i * 3 + Math.floor(i / 7)) % lastNames.length];
-            const fullName = `${fn} ${ln} #${i + 1}`;
-            const phone = `05${String(50000000 + ((i * 12347) % 49000000)).padStart(8, '0')}`;
-            const isExpired = (i % 5 === 0);
-            const daysAgo = (i % 28) + 1;
-            const startDate = new Date(now - (isExpired ? (daysAgo + 35) : daysAgo) * 86400000);
-            const pkg = (i % 4 === 0) ? pkg2 : defaultPkg;
-            const duration = parseInt(pkg.durationDays || 30);
-            const endDate = new Date(startDate);
-            endDate.setDate(startDate.getDate() + duration);
-            const isCreditPayment = (i % 7 === 0);
-            const debtAmount = isCreditPayment ? ((i % 4 + 1) * 500) : 0;
-            const weight = 60 + (i % 38);
-            const birthYear = 1988 + (i % 18);
-            const dob = `${birthYear}-0${(i % 9) + 1}-15`;
+            if (window.updateFirebaseSection) {
+                window.updateFirebaseSection('customers', appState.customers);
+                window.updateFirebaseSection('credits', appState.credits);
+            }
 
-            newMockCustomers.push({
-                id: `mock_cust_${i + 1}`,
-                name: fullName,
-                phone: phone,
-                gender: (i % 10 === 9) ? 'female' : 'male',
-                dob: dob,
-                age: new Date().getFullYear() - birthYear,
-                weight: weight,
-                packageId: pkg.id,
-                price: pkg.price || 3000,
-                subscriptionType: 'time',
-                totalSessions: null,
-                remainingSessions: null,
-                attendedSessions: (i % 15),
-                sessionHistory: [],
-                paymentStatus: isCreditPayment ? 'credit' : 'paid',
-                debtAmount: debtAmount,
-                status: isExpired ? 'expired' : 'active',
-                startDate: startDate.toISOString(),
-                endDate: endDate.toISOString(),
-                isMock: true
+            updateMockDataUIState();
+
+            if (!silent && typeof showSuccessToast === 'function') {
+                showSuccessToast(`تمت إضافة ${customersCount} مشترك و ${creditsCount} كريدي تجريبي بنجاح عبر المعالجة المتوازية!`);
+            }
+            if (typeof render === 'function') render();
+            if (typeof renderCreditsList === 'function') renderCreditsList();
+        };
+
+        // Try off-thread parallel worker first
+        if (typeof runWorkerTask === 'function') {
+            runWorkerTask('GENERATE_MOCK_DATA', {
+                customersCount,
+                creditsCount,
+                defaultPackage: defaultPkg,
+                pkg2: pkg2
+            }).then(result => {
+                if (result && result.customers && result.credits) {
+                    applyData(result.customers, result.credits);
+                }
+            }).catch(() => {
+                fallbackGenerate();
             });
+            return;
         }
 
-        const newMockCredits = [];
-        const creditAmounts = [500, 800, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4500, 6000, 7500, 9000];
+        fallbackGenerate();
 
-        for (let i = 0; i < creditsCount; i++) {
-            const fn = firstNames[(i * 2 + 5) % firstNames.length];
-            const ln = lastNames[(i * 4 + 7) % lastNames.length];
-            const fullName = `${fn} ${ln} [كريدي ${i + 1}]`;
-            const phone = `06${String(60000000 + ((i * 98765) % 39000000)).padStart(8, '0')}`;
-            const nickname = creditNicknames[i % creditNicknames.length];
-            const desc = creditDescriptions[i % creditDescriptions.length];
-            const amount = creditAmounts[i % creditAmounts.length];
-            const daysAgo = (i % 45) + 1;
-            const date = new Date(now - daysAgo * 86400000);
+        function fallbackGenerate() {
+            const firstNames = [
+                'محمد', 'أحمد', 'يوسف', 'أيمن', 'بلال', 'رياض', 'كريم', 'حمزة', 'إسلام', 'فاروق',
+                'عبد القادر', 'طارق', 'أسامة', 'وليد', 'ياسين', 'أمين', 'هشام', 'سمير', 'سفيان', 'حسام',
+                'نذير', 'صلاح', 'عادل', 'جمال', 'مراد', 'عمر', 'علي', 'إلياس', 'صابر', 'رضوان',
+                'سليم', 'شكيب', 'مهدي', 'بشير', 'عبد الرحمن', 'زكرياء', 'منير', 'عصام', 'نبيل', 'خالد'
+            ];
+            const lastNames = [
+                'بن علي', 'بوعلام', 'قادري', 'مرابط', 'حميدي', 'زرقي', 'منصوري', 'مسعودي', 'سلطاني', 'بوزيد',
+                'براهيمي', 'بن عمار', 'لعربي', 'بلحاج', 'شريف', 'عثماني', 'رحماني', 'سعيدي', 'طاهري', 'عماري',
+                'داودي', 'علالي', 'مزيان', 'بلقاسم', 'حداد', 'دراجي', 'قاسمي', 'مقداد', 'زايدي', 'بوشامة'
+            ];
+            const creditDescriptions = [
+                'دين مكمل بروتين واي (Gold Standard)',
+                'باقي اشتراك شهر كمال أجسام',
+                'دين كرياتين مونوهيدرات 300غ',
+                'دين مشروبات طاقة ومياه معدنية',
+                'دين حزام كمال أجسام وقفازات تمرين',
+                'باقي اشتراك 3 أشهر',
+                'دين مكمل أحماض أمينية BCAA',
+                'دين بروتين بار وسناكس طاقة',
+                'مستحقات تدريب خاص وتغذية',
+                'دين ملابس وتيشيرت رياضي نادي أوميغا'
+            ];
+            const creditNicknames = ['مشترك', 'زبون قاعة', 'صديق', 'مشتري مكملات', 'رياضي', 'لاعب'];
 
-            newMockCredits.push({
-                id: `mock_cred_${i + 1}`,
-                name: fullName,
-                nickname: nickname,
-                phone: phone,
-                desc: desc,
-                amount: amount,
-                date: date.toISOString(),
-                isMock: true
-            });
+            const now = Date.now();
+            const newMockCustomers = [];
+
+            for (let i = 0; i < customersCount; i++) {
+                const fn = firstNames[i % firstNames.length];
+                const ln = lastNames[(i * 3 + Math.floor(i / 7)) % lastNames.length];
+                const fullName = `${fn} ${ln} #${i + 1}`;
+                const phone = `05${String(50000000 + ((i * 12347) % 49000000)).padStart(8, '0')}`;
+                const isExpired = (i % 5 === 0);
+                const daysAgo = (i % 28) + 1;
+                const startDate = new Date(now - (isExpired ? (daysAgo + 35) : daysAgo) * 86400000);
+                const pkg = (i % 4 === 0) ? pkg2 : defaultPkg;
+                const duration = parseInt(pkg.durationDays || 30);
+                const endDate = new Date(startDate);
+                endDate.setDate(startDate.getDate() + duration);
+                const isCreditPayment = (i % 7 === 0);
+                const debtAmount = isCreditPayment ? ((i % 4 + 1) * 500) : 0;
+                const weight = 60 + (i % 38);
+                const birthYear = 1988 + (i % 18);
+                const dob = `${birthYear}-0${(i % 9) + 1}-15`;
+
+                newMockCustomers.push({
+                    id: `mock_cust_${i + 1}`,
+                    name: fullName,
+                    phone: phone,
+                    gender: (i % 10 === 9) ? 'female' : 'male',
+                    dob: dob,
+                    age: new Date().getFullYear() - birthYear,
+                    weight: weight,
+                    packageId: pkg.id,
+                    price: pkg.price || 3000,
+                    subscriptionType: 'time',
+                    totalSessions: null,
+                    remainingSessions: null,
+                    attendedSessions: (i % 15),
+                    sessionHistory: [],
+                    paymentStatus: isCreditPayment ? 'credit' : 'paid',
+                    debtAmount: debtAmount,
+                    status: isExpired ? 'expired' : 'active',
+                    startDate: startDate.toISOString(),
+                    endDate: endDate.toISOString(),
+                    isMock: true
+                });
+            }
+
+            const newMockCredits = [];
+            const creditAmounts = [500, 800, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4500, 6000, 7500, 9000];
+
+            for (let i = 0; i < creditsCount; i++) {
+                const fn = firstNames[(i * 2 + 5) % firstNames.length];
+                const ln = lastNames[(i * 4 + 7) % lastNames.length];
+                const fullName = `${fn} ${ln} [كريدي ${i + 1}]`;
+                const phone = `06${String(60000000 + ((i * 98765) % 39000000)).padStart(8, '0')}`;
+                const nickname = creditNicknames[i % creditNicknames.length];
+                const desc = creditDescriptions[i % creditDescriptions.length];
+                const amount = creditAmounts[i % creditAmounts.length];
+                const daysAgo = (i % 45) + 1;
+                const date = new Date(now - daysAgo * 86400000);
+
+                newMockCredits.push({
+                    id: `mock_cred_${i + 1}`,
+                    name: fullName,
+                    nickname: nickname,
+                    phone: phone,
+                    desc: desc,
+                    amount: amount,
+                    date: date.toISOString(),
+                    isMock: true
+                });
+            }
+
+            applyData(newMockCustomers, newMockCredits);
         }
-
-        appState.customers.unshift(...newMockCustomers);
-        appState.credits.unshift(...newMockCredits);
-
-        saveState();
-
-        if (window.updateFirebaseSection) {
-            window.updateFirebaseSection('customers', appState.customers);
-            window.updateFirebaseSection('credits', appState.credits);
-        }
-
-        updateMockDataUIState();
-
-        if (!silent && typeof showSuccessToast === 'function') {
-            showSuccessToast(`تمت إضافة ${customersCount} مشترك و ${creditsCount} كريدي تجريبي بنجاح! يمكنك الآن تجربة سرعة النظام.`);
-        }
-        if (typeof render === 'function') render();
-        if (typeof renderCreditsList === 'function') renderCreditsList();
     };
 
     function clearMockTestData() {
@@ -4447,9 +4620,17 @@
                 buttonText: 'دخول' }, () => {
                 openModal('staffPayoutsModal');
             }); } else { openModal('staffPayoutsModal');
-        } }; window.handleSearchView = function() {
-        appState.searchQuery = document.getElementById('searchInputView')?.value || '';
-        renderCustomers(); }; window.toggleDebtFieldView = function() {
+        } };
+    let _customerSearchDebounceTimer = null;
+    window.handleSearchView = function() {
+        if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
+        _customerSearchDebounceTimer = setTimeout(() => {
+            appState.searchQuery = document.getElementById('searchInputView')?.value || '';
+            appState.customerPage = 1;
+            renderCustomers();
+        }, 100);
+    };
+    window.toggleDebtFieldView = function() {
        const status = document.getElementById('paymentStatusView')?.value;
        const field = document.getElementById('debtAmountContainerView');
        if(!field) return; if (status === 'credit') {
@@ -4458,8 +4639,20 @@
        } else { field.style.display = 'none';
            document.getElementById('debtAmountView').required = false;
            document.getElementById('debtAmountView').value = '';
-       } }; function handleSearch() { appState.searchQuery = document.getElementById('searchInput').value; renderCustomers(); }
-    function setFilter(filter) { appState.filter = filter; render(); }
+       } };
+    function handleSearch() {
+        if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
+        _customerSearchDebounceTimer = setTimeout(() => {
+            appState.searchQuery = document.getElementById('searchInput')?.value || '';
+            appState.customerPage = 1;
+            renderCustomers();
+        }, 100);
+    }
+    function setFilter(filter) {
+        appState.filter = filter;
+        appState.customerPage = 1;
+        renderCustomers();
+    }
     function handleBarcodeScan(event) { if (event.key === 'Enter') {
             event.preventDefault(); const barcode = event.target.value.trim();
             if (barcode) { scanContext = 'sales';
@@ -4944,11 +5137,24 @@
        const count2Elem = document.getElementById('countStock2');
        const countNearExpElem = document.getElementById('countStockNearExpiry');
        const countLowStockElem = document.getElementById('countStockLowStock');
-       const countAll = appState.products.length;
-       const count1 = appState.products.filter(p => !p.stockLocation || p.stockLocation === 'stock1').length;
-       const count2 = appState.products.filter(p => p.stockLocation === 'stock2').length;
-       const countNearExp = appState.products.filter(p => getProductExpiryInfo(p).isNearExpiry).length;
-       const countLowStock = appState.products.filter(p => Number(p.stock || 0) < 5).length;
+
+       // Single-pass metrics calculation O(N) instead of 5 separate array scans
+       let countAll = appState.products.length;
+       let count1 = 0;
+       let count2 = 0;
+       let countNearExp = 0;
+       let countLowStock = 0;
+
+       const prods = appState.products;
+       for (let i = 0; i < countAll; i++) {
+           const p = prods[i];
+           if (!p) continue;
+           if (!p.stockLocation || p.stockLocation === 'stock1') count1++;
+           if (p.stockLocation === 'stock2') count2++;
+           if (getProductExpiryInfo(p).isNearExpiry) countNearExp++;
+           if (Number(p.stock || 0) < 5) countLowStock++;
+       }
+
        if (countAllElem) countAllElem.textContent = `(${countAll})`;
        if (count1Elem) count1Elem.textContent = `(${count1})`;
        if (count2Elem) count2Elem.textContent = `(${count2})`;
@@ -4956,24 +5162,25 @@
        if (countLowStockElem) countLowStockElem.textContent = countLowStock;
        const searchInput = document.getElementById('searchProductInput');
        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
-       let filteredProducts = [...appState.products];
-       // Filter by selected Stock Tab
-       if (appState.productStockFilter === 'stock1') {
-           filteredProducts = filteredProducts.filter(p => !p.stockLocation || p.stockLocation === 'stock1');
-       } else if (appState.productStockFilter === 'stock2') {
-           filteredProducts = filteredProducts.filter(p => p.stockLocation === 'stock2');
-       } else if (appState.productStockFilter === 'near_expiry') {
-           filteredProducts = filteredProducts.filter(p => getProductExpiryInfo(p).isNearExpiry);
-       } else if (appState.productStockFilter === 'low_stock') {
-           filteredProducts = filteredProducts.filter(p => Number(p.stock || 0) < 5);
+       let filteredProducts = [];
+       const stockFilter = appState.productStockFilter;
+       for (let i = 0; i < countAll; i++) {
+           const p = prods[i];
+           if (!p) continue;
+           if (stockFilter === 'stock1' && p.stockLocation && p.stockLocation !== 'stock1') continue;
+           if (stockFilter === 'stock2' && p.stockLocation !== 'stock2') continue;
+           if (stockFilter === 'near_expiry' && !getProductExpiryInfo(p).isNearExpiry) continue;
+           if (stockFilter === 'low_stock' && Number(p.stock || 0) >= 5) continue;
+           if (query) {
+               const nameMatch = (p.name || '').toLowerCase().includes(query);
+               const barcodeMatch = !nameMatch && String(p.barcode || '').trim().toLowerCase().includes(query);
+               const catMatch = !nameMatch && !barcodeMatch && (p.category || '').toLowerCase().includes(query);
+               const weightMatch = !nameMatch && !barcodeMatch && !catMatch && (p.weight || '').toLowerCase().includes(query);
+               if (!nameMatch && !barcodeMatch && !catMatch && !weightMatch) continue;
+           }
+           filteredProducts.push(p);
        }
-       // Filter by Search Query (Name, Barcode, Category, Weight)
-       if (query) { filteredProducts = filteredProducts.filter(p =>
-               (p.name || '').toLowerCase().includes(query) ||
-               String(p.barcode || '').trim().toLowerCase().includes(query) ||
-               (p.category || '').toLowerCase().includes(query) ||
-               (p.weight || '').toLowerCase().includes(query)
-           ); } container.innerHTML = filteredProducts.map(p => {
+       container.innerHTML = filteredProducts.map(p => {
            const isStock2 = p.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200"><svg class="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 21h18M3 7v14M21 7v14M6 11h4M6 15h4M14 11h4M14 15h4M9 3l3 4 3-4"></path></svg><span>Stock 2</span></span>`
                : `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200"><svg class="w-3 h-3 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg><span>Stock 1</span></span>`;
