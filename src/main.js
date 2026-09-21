@@ -497,34 +497,188 @@
   }
   window.arrayToDict = arrayToDict;
 
-  // Dedicated Section Update Utility: strictly uses UPDATE (SDK) and PATCH (REST)
-  window.updateFirebaseSection = async function(sectionPath, sectionData) {
-    let sdkOk = false;
-    let restOk = false;
-    let payloadData = sectionData;
-    if (Array.isArray(sectionData)) {
-      payloadData = arrayToDict(sectionData, 'id', sectionPath);
+  // Deduplication map and offline write queue
+  window.pendingWrites = window.pendingWrites || new Map();
+  window.firebaseWriteQueue = window.firebaseWriteQueue || [];
+
+  // Unified Incremental V2 Record-Level Writers
+  async function saveV2Record(section, id, data) {
+    if (!id) throw new Error('ID is required for saveV2Record');
+    const cleanId = cleanKey(id);
+    const writeKey = `save:${section}:${cleanId}`;
+
+    if (window.pendingWrites.has(writeKey)) {
+      return window.pendingWrites.get(writeKey);
     }
+
+    const task = (async () => {
+      try {
+        const v2Sec = section === 'caisseLogs' ? 'caisse' : section;
+        const path = `v2/${v2Sec}/${cleanId}`;
+        let sdkOk = false;
+
+        if (window.firebaseDB && window.firebaseSet && window.firebaseRef) {
+          try {
+            await window.firebaseSet(window.firebaseRef(window.firebaseDB, path), data);
+            sdkOk = true;
+          } catch (e) {
+            console.warn(`SDK saveV2Record error on ${path}:`, e);
+          }
+        }
+
+        if (!sdkOk) {
+          const baseUrl = getRTDBUrl();
+          const res = await fetch(`${baseUrl}/${path}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+          if (!res.ok) throw new Error(`REST PUT failed with status ${res.status}`);
+        }
+        return cleanId;
+      } catch (err) {
+        console.warn(`saveV2Record error (${section}/${cleanId}):`, err);
+        window.firebaseWriteQueue.push({ action: 'saveV2Record', section, id: cleanId, data, timestamp: Date.now() });
+        throw err;
+      } finally {
+        window.pendingWrites.delete(writeKey);
+      }
+    })();
+
+    window.pendingWrites.set(writeKey, task);
+    return task;
+  }
+  window.saveV2Record = saveV2Record;
+
+  async function updateV2Record(section, id, updates) {
+    if (!id) throw new Error('ID is required for updateV2Record');
+    const cleanId = cleanKey(id);
+    const writeKey = `update:${section}:${cleanId}`;
+
+    if (window.pendingWrites.has(writeKey)) {
+      return window.pendingWrites.get(writeKey);
+    }
+
+    const task = (async () => {
+      try {
+        const v2Sec = section === 'caisseLogs' ? 'caisse' : section;
+        const path = `v2/${v2Sec}/${cleanId}`;
+        let sdkOk = false;
+
+        if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+          try {
+            await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, path), updates);
+            sdkOk = true;
+          } catch (e) {
+            console.warn(`SDK updateV2Record error on ${path}:`, e);
+          }
+        }
+
+        if (!sdkOk) {
+          const baseUrl = getRTDBUrl();
+          const res = await fetch(`${baseUrl}/${path}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+          });
+          if (!res.ok) throw new Error(`REST PATCH failed with status ${res.status}`);
+        }
+        return cleanId;
+      } catch (err) {
+        console.warn(`updateV2Record error (${section}/${cleanId}):`, err);
+        window.firebaseWriteQueue.push({ action: 'updateV2Record', section, id: cleanId, updates, timestamp: Date.now() });
+        throw err;
+      } finally {
+        window.pendingWrites.delete(writeKey);
+      }
+    })();
+
+    window.pendingWrites.set(writeKey, task);
+    return task;
+  }
+  window.updateV2Record = updateV2Record;
+
+  async function deleteV2Record(section, id) {
+    if (!id) throw new Error('ID is required for deleteV2Record');
+    const cleanId = cleanKey(id);
+    const writeKey = `delete:${section}:${cleanId}`;
+
+    if (window.pendingWrites.has(writeKey)) {
+      return window.pendingWrites.get(writeKey);
+    }
+
+    const task = (async () => {
+      try {
+        const v2Sec = section === 'caisseLogs' ? 'caisse' : section;
+        const path = `v2/${v2Sec}/${cleanId}`;
+        let sdkOk = false;
+
+        if (window.firebaseDB && window.firebaseSet && window.firebaseRef) {
+          try {
+            await window.firebaseSet(window.firebaseRef(window.firebaseDB, path), null);
+            sdkOk = true;
+          } catch (e) {
+            console.warn(`SDK deleteV2Record error on ${path}:`, e);
+          }
+        }
+
+        if (!sdkOk) {
+          const baseUrl = getRTDBUrl();
+          const res = await fetch(`${baseUrl}/${path}.json`, {
+            method: 'DELETE'
+          });
+          if (!res.ok) throw new Error(`REST DELETE failed with status ${res.status}`);
+        }
+        return cleanId;
+      } catch (err) {
+        console.warn(`deleteV2Record error (${section}/${cleanId}):`, err);
+        window.firebaseWriteQueue.push({ action: 'deleteV2Record', section, id: cleanId, timestamp: Date.now() });
+        throw err;
+      } finally {
+        window.pendingWrites.delete(writeKey);
+      }
+    })();
+
+    window.pendingWrites.set(writeKey, task);
+    return task;
+  }
+  window.deleteV2Record = deleteV2Record;
+
+  // Dedicated Section Update Utility: maps items to v2/ record-level updates
+  window.updateFirebaseSection = async function(sectionPath, sectionData) {
+    if (!sectionData) return false;
+    const items = Array.isArray(sectionData) ? sectionData : (typeof sectionData === 'object' ? Object.values(sectionData) : []);
+    const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
+    const v2Updates = {};
+    items.forEach(item => {
+      if (!item || typeof item !== 'object') return;
+      const rawId = item.id || item.barcode;
+      if (rawId) {
+        const cleanId = cleanKey(rawId);
+        v2Updates[`v2/${v2Sec}/${cleanId}`] = item;
+      }
+    });
+    if (Object.keys(v2Updates).length === 0) return true;
+
     if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
       try {
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, sectionPath), payloadData);
-        sdkOk = true;
-      } catch (err) {
-        console.warn(`SDK update error for ${sectionPath}:`, err);
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
+        return true;
+      } catch (e) {
+        console.warn(`SDK updateFirebaseSection error on v2/${v2Sec}:`, e);
       }
     }
     try {
       const baseUrl = getRTDBUrl();
-      const res = await fetch(`${baseUrl}/${sectionPath}.json`, {
+      const res = await fetch(`${baseUrl}/.json`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadData)
+        body: JSON.stringify(v2Updates)
       });
-      if (res.ok) restOk = true;
+      return res.ok;
     } catch (e) {
-      console.warn(`REST PATCH error for ${sectionPath}:`, e);
+      return false;
     }
-    return sdkOk || restOk;
   };
 
   // Dedicated Section Push Utility: strictly uses PUSH (SDK) and POST (REST)
@@ -532,18 +686,19 @@
     let sdkOk = false;
     let restOk = false;
     let newKey = null;
+    const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
     if (window.firebaseDB && window.firebasePush && window.firebaseRef) {
       try {
-        const pushRef = await window.firebasePush(window.firebaseRef(window.firebaseDB, sectionPath), itemData);
+        const pushRef = await window.firebasePush(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`), itemData);
         sdkOk = true;
         newKey = pushRef?.key || null;
       } catch (err) {
-        console.warn(`SDK push error for ${sectionPath}:`, err);
+        console.warn(`SDK push error for v2/${v2Sec}:`, err);
       }
     }
     try {
       const baseUrl = getRTDBUrl();
-      const res = await fetch(`${baseUrl}/${sectionPath}.json`, {
+      const res = await fetch(`${baseUrl}/v2/${v2Sec}.json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(itemData)
@@ -554,7 +709,7 @@
         if (!newKey) newKey = json?.name || null;
       }
     } catch (e) {
-      console.warn(`REST POST error for ${sectionPath}:`, e);
+      console.warn(`REST POST error for v2/${v2Sec}:`, e);
     }
     return { success: sdkOk || restOk, key: newKey };
   };
@@ -589,198 +744,179 @@
   }
   window.getDateKey = getDateKey;
 
-  // Dedicated Item-Level Save: writes to legacy path AND V2 structure with atomic index maintenance
+  // Dedicated Item-Level Save: writes strictly to V2 structure with atomic index maintenance and pendingWrites protection
   window.saveFirebaseSectionItem = async function(sectionPath, itemData) {
     if (!itemData || typeof itemData !== 'object') return false;
-    const rawId = itemData.id || itemData.barcode;
-    if (!rawId) {
-      const pushRes = await window.pushToFirebaseSection(sectionPath, itemData);
-      return pushRes.success;
-    }
+    const rawId = itemData.id || itemData.barcode || Date.now().toString();
     const cleanId = cleanKey(rawId);
-    const itemPath = `${sectionPath}/${cleanId}`;
-    let sdkOk = false;
-    let restOk = false;
+    const writeKey = `saveSectionItem:${sectionPath}:${cleanId}`;
 
-    // 1. Save to legacy path
-    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+    if (window.pendingWrites.has(writeKey)) {
+      return window.pendingWrites.get(writeKey);
+    }
+
+    const task = (async () => {
       try {
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, itemPath), itemData);
-        sdkOk = true;
-      } catch (err) {
-        console.warn(`SDK update item error for ${itemPath}:`, err);
-      }
-    }
-    try {
-      const baseUrl = getRTDBUrl();
-      const res = await fetch(`${baseUrl}/${itemPath}.json`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(itemData)
-      });
-      if (res.ok) restOk = true;
-    } catch (e) {
-      console.warn(`REST PATCH item error for ${itemPath}:`, e);
-    }
+        const v2Updates = {};
+        const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
 
-    // 2. Dual-Write to V2 structure and update fast indexing
-    try {
-      const baseUrl = getRTDBUrl();
-      const v2Updates = {};
-      
-      if (sectionPath === 'customers') {
-        const enriched = {
-          ...itemData,
-          id: cleanId,
-          normalizedPhone: normalizePhone(itemData.phone) || null,
-          updatedAt: Date.now()
-        };
-        v2Updates[`v2/customers/${cleanId}`] = enriched;
-        if (enriched.normalizedPhone) {
-          v2Updates[`v2/customerByPhone/${enriched.normalizedPhone}`] = cleanId;
-        }
-        if (itemData.barcode) {
-          v2Updates[`v2/customerByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
-        }
-      } else if (sectionPath === 'products') {
-        v2Updates[`v2/products/${cleanId}`] = { ...itemData, id: cleanId, updatedAt: Date.now() };
-        if (itemData.barcode) {
-          v2Updates[`v2/productByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
-        }
-      } else if (sectionPath === 'sales') {
-        const dateKey = getDateKey(itemData.date);
-        const monthKey = dateKey.substring(0, 7);
-        const yearKey = dateKey.substring(0, 4);
-        const total = Number(itemData.total || 0);
-        const profit = Number(itemData.profit || 0);
-        const qty = Number(itemData.qty || 1);
+        if (sectionPath === 'customers') {
+          const enriched = {
+            ...itemData,
+            id: cleanId,
+            normalizedPhone: normalizePhone(itemData.phone) || null,
+            updatedAt: Date.now()
+          };
+          v2Updates[`v2/customers/${cleanId}`] = enriched;
+          if (enriched.normalizedPhone) {
+            v2Updates[`v2/customerByPhone/${enriched.normalizedPhone}`] = cleanId;
+          }
+          if (itemData.barcode) {
+            v2Updates[`v2/customerByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
+          }
+        } else if (sectionPath === 'products') {
+          v2Updates[`v2/products/${cleanId}`] = { ...itemData, id: cleanId, updatedAt: Date.now() };
+          if (itemData.barcode) {
+            v2Updates[`v2/productByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
+          }
+        } else if (sectionPath === 'sales') {
+          const dateKey = getDateKey(itemData.date);
+          const monthKey = dateKey.substring(0, 7);
+          const yearKey = dateKey.substring(0, 4);
+          const total = Number(itemData.total || 0);
+          const profit = Number(itemData.profit || 0);
+          const qty = Number(itemData.qty || 1);
 
-        v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit };
-        v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
+          v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit };
+          v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
 
-        // Increment stats locally in appState.v2Stats
-        window.appState = window.appState || {};
-        window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
-        const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ds.sales += total; ds.salesCount += 1; ds.profit += profit; ds.productsSold += qty; ds.cashIn += total;
-        const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ms.sales += total; ms.salesCount += 1; ms.profit += profit; ms.productsSold += qty; ms.cashIn += total;
-        const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ys.sales += total; ys.salesCount += 1; ys.profit += profit; ys.productsSold += qty; ys.cashIn += total;
+          window.appState = window.appState || {};
+          window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+          const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ds.sales += total; ds.salesCount += 1; ds.profit += profit; ds.productsSold += qty; ds.cashIn += total;
+          const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ms.sales += total; ms.salesCount += 1; ms.profit += profit; ms.productsSold += qty; ms.cashIn += total;
+          const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ys.sales += total; ys.salesCount += 1; ys.profit += profit; ys.productsSold += qty; ys.cashIn += total;
 
-        v2Updates[`v2/stats/daily/${dateKey}`] = ds;
-        v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
-        v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
-      } else if (sectionPath === 'expenses') {
-        const dateKey = getDateKey(itemData.date);
-        const monthKey = dateKey.substring(0, 7);
-        const yearKey = dateKey.substring(0, 4);
-        const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
+          v2Updates[`v2/stats/daily/${dateKey}`] = ds;
+          v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
+          v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
+        } else if (sectionPath === 'expenses') {
+          const dateKey = getDateKey(itemData.date);
+          const monthKey = dateKey.substring(0, 7);
+          const yearKey = dateKey.substring(0, 4);
+          const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
 
-        v2Updates[`v2/expenses/${cleanId}`] = { ...itemData, id: cleanId, dateKey, amount: amt };
-        v2Updates[`v2/expensesByDate/${dateKey}/${cleanId}`] = true;
+          v2Updates[`v2/expenses/${cleanId}`] = { ...itemData, id: cleanId, dateKey, amount: amt };
+          v2Updates[`v2/expensesByDate/${dateKey}/${cleanId}`] = true;
 
-        window.appState = window.appState || {};
-        window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
-        const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ds.expenses += amt; ds.cashOut += amt;
-        const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ms.expenses += amt; ms.cashOut += amt;
-        const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
-        ys.expenses += amt; ys.cashOut += amt;
+          window.appState = window.appState || {};
+          window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
+          const ds = window.appState.v2Stats.daily[dateKey] = window.appState.v2Stats.daily[dateKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ds.expenses += amt; ds.cashOut += amt;
+          const ms = window.appState.v2Stats.monthly[monthKey] = window.appState.v2Stats.monthly[monthKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ms.expenses += amt; ms.cashOut += amt;
+          const ys = window.appState.v2Stats.yearly[yearKey] = window.appState.v2Stats.yearly[yearKey] || { sales: 0, salesCount: 0, profit: 0, expenses: 0, productsSold: 0, cashIn: 0, cashOut: 0 };
+          ys.expenses += amt; ys.cashOut += amt;
 
-        v2Updates[`v2/stats/daily/${dateKey}`] = ds;
-        v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
-        v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
-      } else if (sectionPath === 'caisseLogs') {
-        v2Updates[`v2/caisse/${cleanId}`] = itemData;
-      } else if (sectionPath === 'credits') {
-        v2Updates[`v2/credits/${cleanId}`] = itemData;
-        if (itemData.customerId && itemData.status !== 'settled') {
-          v2Updates[`v2/openCreditsByCustomer/${cleanKey(itemData.customerId)}/${cleanId}`] = true;
-        }
-      } else {
-        v2Updates[`v2/${sectionPath}/${cleanId}`] = itemData;
-      }
-
-      if (Object.keys(v2Updates).length > 0) {
-        if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
-          window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates).catch(() => {});
+          v2Updates[`v2/stats/daily/${dateKey}`] = ds;
+          v2Updates[`v2/stats/monthly/${monthKey}`] = ms;
+          v2Updates[`v2/stats/yearly/${yearKey}`] = ys;
+        } else if (sectionPath === 'credits') {
+          v2Updates[`v2/credits/${cleanId}`] = itemData;
+          if (itemData.customerId && itemData.status !== 'settled') {
+            v2Updates[`v2/openCreditsByCustomer/${cleanKey(itemData.customerId)}/${cleanId}`] = true;
+          }
         } else {
-          fetch(`${baseUrl}/.json`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(v2Updates)
-          }).catch(() => {});
+          v2Updates[`v2/${v2Sec}/${cleanId}`] = itemData;
         }
-      }
-    } catch (v2Err) {
-      console.warn('V2 dual-write note:', v2Err);
-    }
 
-    return sdkOk || restOk;
+        if (Object.keys(v2Updates).length > 0) {
+          if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+            await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
+          } else {
+            const baseUrl = getRTDBUrl();
+            const res = await fetch(`${baseUrl}/.json`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(v2Updates)
+            });
+            if (!res.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
+          }
+        }
+        return true;
+      } catch (err) {
+        console.warn(`saveFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, err);
+        window.firebaseWriteQueue.push({ action: 'saveSectionItem', sectionPath, itemData, timestamp: Date.now() });
+        return false;
+      } finally {
+        window.pendingWrites.delete(writeKey);
+      }
+    })();
+
+    window.pendingWrites.set(writeKey, task);
+    return task;
   };
 
-  // Dedicated Item-Level Delete: cleans legacy AND V2 structures + indexes
+  // Dedicated Item-Level Delete: cleans V2 structures + indexes with pendingWrites protection
   window.deleteFirebaseSectionItem = async function(sectionPath, itemId) {
     if (!itemId) return false;
     const cleanId = cleanKey(itemId);
-    const itemPath = `${sectionPath}/${cleanId}`;
-    let sdkOk = false;
-    let restOk = false;
+    const writeKey = `deleteSectionItem:${sectionPath}:${cleanId}`;
 
-    // 1. Delete legacy
-    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+    if (window.pendingWrites.has(writeKey)) {
+      return window.pendingWrites.get(writeKey);
+    }
+
+    const task = (async () => {
       try {
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB, sectionPath), { [cleanId]: null });
-        sdkOk = true;
+        const v2Deletes = {};
+        const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
+        v2Deletes[`v2/${v2Sec}/${cleanId}`] = null;
+
+        if (sectionPath === 'customers') {
+          const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId));
+          if (item) {
+            const normPhone = normalizePhone(item.phone);
+            if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
+            if (item.barcode) v2Deletes[`v2/customerByBarcode/${cleanKey(item.barcode)}`] = null;
+          }
+        } else if (sectionPath === 'products') {
+          const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId));
+          if (item && item.barcode) {
+            v2Deletes[`v2/productByBarcode/${cleanKey(item.barcode)}`] = null;
+          }
+        } else if (sectionPath === 'credits') {
+          const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId));
+          if (item && item.customerId) {
+            v2Deletes[`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${cleanId}`] = null;
+          }
+        }
+
+        if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
+          await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Deletes);
+        } else {
+          const baseUrl = getRTDBUrl();
+          const res = await fetch(`${baseUrl}/.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(v2Deletes)
+          });
+          if (!res.ok) throw new Error(`REST delete failed HTTP ${res.status}`);
+        }
+        return true;
       } catch (err) {
-        console.warn(`SDK delete item error for ${itemPath}:`, err);
+        console.warn(`deleteFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, err);
+        window.firebaseWriteQueue.push({ action: 'deleteSectionItem', sectionPath, itemId: cleanId, timestamp: Date.now() });
+        return false;
+      } finally {
+        window.pendingWrites.delete(writeKey);
       }
-    }
-    try {
-      const baseUrl = getRTDBUrl();
-      const res = await fetch(`${baseUrl}/${itemPath}.json`, {
-        method: 'DELETE'
-      });
-      if (res.ok) restOk = true;
-    } catch (e) {
-      console.warn(`REST DELETE error for ${itemPath}:`, e);
-    }
+    })();
 
-    // 2. Delete V2 and related index entries
-    try {
-      const baseUrl = getRTDBUrl();
-      const v2Deletes = {};
-      const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
-      v2Deletes[`v2/${v2Sec}/${cleanId}`] = null;
-
-      if (sectionPath === 'customers') {
-        const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId));
-        if (item) {
-          const normPhone = normalizePhone(item.phone);
-          if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
-          if (item.barcode) v2Deletes[`v2/customerByBarcode/${cleanKey(item.barcode)}`] = null;
-        }
-      } else if (sectionPath === 'products') {
-        const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId));
-        if (item && item.barcode) {
-          v2Deletes[`v2/productByBarcode/${cleanKey(item.barcode)}`] = null;
-        }
-      }
-
-      if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
-        window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Deletes).catch(() => {});
-      } else {
-        fetch(`${baseUrl}/.json`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(v2Deletes)
-        }).catch(() => {});
-      }
-    } catch (e) {}
-
-    return sdkOk || restOk;
+    window.pendingWrites.set(writeKey, task);
+    return task;
   };
 
   // Fast $O(1)$ Indexed Customer Lookup by Phone
@@ -870,91 +1006,69 @@
     return null;
   };
 
-  // Push Full State to Firebase Realtime Database across every section path using UPDATE & PATCH (NEVER SET)
+  // Push Full State to Firebase Realtime Database across v2/ record paths using multi-location UPDATE & PATCH
   window.pushFullStateToFirebase = async function(customState) {
     const payload = getCleanSyncPayload(customState);
     let rtdbSuccess = false; let restSuccess = false;
     let lastErrMsg = '';
 
-    // Convert each section into an indexed dictionary by item ID
-    const customersDict = arrayToDict(payload.customers, 'id', 'cust');
-    const productsDict = arrayToDict(payload.products, 'barcode', 'prod');
-    const packagesDict = arrayToDict(payload.packages, 'id', 'pkg');
-    const salesDict = arrayToDict(payload.sales, 'id', 'sale');
-    const expensesDict = arrayToDict(payload.expenses, 'id', 'exp');
-    const caisseLogsDict = arrayToDict(payload.caisseLogs, 'id', 'caisse');
-    const coachAbsencesDict = arrayToDict(payload.coachAbsences, 'id', 'abs');
-    const staffPayoutsDict = arrayToDict(payload.staffPayouts, 'id', 'staff');
-    const creditsDict = arrayToDict(payload.credits, 'id', 'cr');
-    const suppliersDict = arrayToDict(payload.suppliers, 'id', 'sup');
-    const supplierTxDict = arrayToDict(payload.supplierTransactions, 'id', 'suptx');
-    const quickSessionsDict = arrayToDict(payload.quickSessions, 'id', 'qs');
-    const appStateObj = {
+    const v2Updates = {};
+    const mapSectionToV2 = (arr, secName) => {
+      const v2Sec = secName === 'caisseLogs' ? 'caisse' : secName;
+      if (Array.isArray(arr)) {
+        arr.forEach(item => {
+          if (!item) return;
+          const rawId = item.id || item.barcode;
+          if (rawId) {
+            v2Updates[`v2/${v2Sec}/${cleanKey(rawId)}`] = item;
+          }
+        });
+      }
+    };
+
+    mapSectionToV2(payload.customers, 'customers');
+    mapSectionToV2(payload.products, 'products');
+    mapSectionToV2(payload.packages, 'packages');
+    mapSectionToV2(payload.sales, 'sales');
+    mapSectionToV2(payload.expenses, 'expenses');
+    mapSectionToV2(payload.caisseLogs, 'caisse');
+    mapSectionToV2(payload.coachAbsences, 'coachAbsences');
+    mapSectionToV2(payload.staffPayouts, 'staffPayouts');
+    mapSectionToV2(payload.credits, 'credits');
+    mapSectionToV2(payload.suppliers, 'suppliers');
+    mapSectionToV2(payload.supplierTransactions, 'supplierTransactions');
+    mapSectionToV2(payload.quickSessions, 'quickSessions');
+    v2Updates['v2/meta'] = {
       hideFinances: customState ? customState.hideFinances : (window.appState?.hideFinances !== false),
       lastUpdated: payload.lastUpdated
     };
 
-    // 1. Primary: Realtime Database SDK - perform atomic UPDATE on root and section paths
+    if (Object.keys(v2Updates).length === 0) return { success: true };
+
     if (window.firebaseDB && window.firebaseRef && window.firebaseUpdate) {
       try {
-        const rootUpdates = {
-          'customers': customersDict,
-          'products': productsDict,
-          'packages': packagesDict,
-          'sales': salesDict,
-          'expenses': expensesDict,
-          'caisseLogs': caisseLogsDict,
-          'caisse': caisseLogsDict,
-          'treasury': caisseLogsDict,
-          'coachAbsences': coachAbsencesDict,
-          'absences': coachAbsencesDict,
-          'staffPayouts': staffPayoutsDict,
-          'credits': creditsDict,
-          'suppliers': suppliersDict,
-          'supplierTransactions': supplierTxDict,
-          'quickSessions': quickSessionsDict,
-          'appState': appStateObj,
-          'lastUpdated': payload.lastUpdated
-        };
-        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), rootUpdates);
+        await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
         rtdbSuccess = true;
       } catch (err) {
         console.warn('Realtime Database SDK update note:', err?.message || err);
         lastErrMsg = err?.message || String(err);
       }
     }
-    // 2. Direct Realtime Database REST API using PATCH on root (Fallback only if SDK is unavailable or failed)
+
     if (!rtdbSuccess) {
       try {
         const baseUrl = getRTDBUrl();
-        const patchOpts = (bodyData) => ({
+        const res = await fetch(`${baseUrl}/.json`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(bodyData)
+          body: JSON.stringify(v2Updates)
         });
-        const res = await fetch(`${baseUrl}/.json`, patchOpts({
-          customers: customersDict,
-          products: productsDict,
-          packages: packagesDict,
-          sales: salesDict,
-          expenses: expensesDict,
-          caisseLogs: caisseLogsDict,
-          coachAbsences: coachAbsencesDict,
-          staffPayouts: staffPayoutsDict,
-          credits: creditsDict,
-          suppliers: suppliersDict,
-          supplierTransactions: supplierTxDict,
-          quickSessions: quickSessionsDict,
-          appState: appStateObj,
-          lastUpdated: payload.lastUpdated
-        }));
-        if (res.ok) {
-          restSuccess = true;
-        }
+        if (res.ok) restSuccess = true;
       } catch (fetchErr) {
         console.warn('REST PATCH fallback note:', fetchErr);
       }
     }
+
     if (rtdbSuccess || restSuccess) {
       window.firebaseSyncState.lastSync = new Date();
       window.firebaseSyncState.lastError = null;
@@ -3436,6 +3550,7 @@
                 date: new Date().toISOString(),
                 type: 'time_checkin' });
             customer.attendedSessions = (customer.attendedSessions || 0) + 1;
+            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
             saveState(); playBeep();
             showSuccessToast(`تم تسجيل حضور المشترك (${customer.name}) بنجاح`);
             render(); return; } const remaining = parseInt(customer.remainingSessions) || 0;
@@ -3446,7 +3561,9 @@
         customer.sessionHistory.unshift({ date: new Date().toISOString(),
             type: 'session_deduct',
             remainingAfter: customer.remainingSessions
-        }); saveState(); playBeep(); if (customer.remainingSessions === 0) {
+        });
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
+        saveState(); playBeep(); if (customer.remainingSessions === 0) {
             showSuccessToast(`تم تسجيل الحصة الأخيرة لـ (${customer.name})! انتهت باقة الحصص.`);
         } else { showSuccessToast(`تم خصم حصة لـ (${customer.name}) - المتبقي: ${customer.remainingSessions} حصة`);
         } render(); } window.recordCustomerAttendance = recordCustomerAttendance;
@@ -3455,6 +3572,7 @@
         if (!customer) return; const current = parseInt(customer.remainingSessions) || 0;
         const nextVal = Math.max(0, current + delta);
         customer.remainingSessions = nextVal;
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
         saveState(); showSuccessToast(`تم تعديل الحصص المتبقية لـ (${customer.name}) إلى: ${nextVal}`);
         render(); } window.adjustCustomerSessions = adjustCustomerSessions;
     // Staff Payouts Period Filter State
@@ -3537,13 +3655,18 @@
                     name, staffName: name,
                     amount, type, date: finalDate,
                     notes, updatedAt: new Date().toISOString()
-                }; showSuccessToast('تم تحديث بيانات خلاص العامل وتاريخه بنجاح');
+                };
+                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('staffPayouts', appState.staffPayouts[index]);
+                showSuccessToast('تم تحديث بيانات خلاص العامل وتاريخه بنجاح');
             } cancelStaffPayoutEdit(); } else {
-            appState.staffPayouts.unshift({ id: Date.now().toString(),
+            const newPayout = { id: Date.now().toString(),
                 name, staffName: name, amount,
                 type, date: finalDate, notes,
                 createdAt: new Date().toISOString()
-            }); showSuccessToast('تم تسجيل خلاص العامل والدخول بنجاح');
+            };
+            appState.staffPayouts.unshift(newPayout);
+            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('staffPayouts', newPayout);
+            showSuccessToast('تم تسجيل خلاص العامل والدخول بنجاح');
             this.reset(); const dateInput = document.getElementById('staffPayoutDate');
             if (dateInput) dateInput.value = getLocalDateString(new Date());
         } saveState(); renderStaffPayouts();
@@ -3552,6 +3675,7 @@
         showAppConfirm('هل أنت متأكد من حذف هذه الدفعة؟', function() {
             if (!Array.isArray(appState.staffPayouts)) return;
             window.appState.staffPayouts = appState.staffPayouts.filter(s => String(s && s.id) !== String(id));
+            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('staffPayouts', id);
             saveState(); showSuccessToast('تم حذف الدفعة بنجاح');
             renderStaffPayouts(); render(); }, {
             title: 'حذف دفعة العامل',
@@ -3648,7 +3772,7 @@
             // Record into detailed transaction history
             if (!appState.supplierTransactions) appState.supplierTransactions = [];
             const isPur = items && items.trim() && items !== 'تسديد / تخفيض دين سابق';
-            appState.supplierTransactions.unshift({
+            const newTxObj = {
                 id: 'tx_' + Date.now().toString(),
                 supplierName: existing.name,
                 supplierInfo: existing.info,
@@ -3658,7 +3782,13 @@
                 paidAmount: paid, remainingDebt: debt,
                 date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
                 notes: notes || '', createdAt: new Date().toISOString()
-            }); saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
+            };
+            appState.supplierTransactions.unshift(newTxObj);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('suppliers', existing);
+                window.saveFirebaseSectionItem('supplierTransactions', newTxObj);
+            }
+            saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
             if (sDate) sDate.value = new Date().toISOString().split('T')[0];
             autoFillSupplierInfo('');
             showSuccessToast(`تم تحديث حساب المورد (${existing.name}) بنجاح. الكريدي المتبقي: ${existing.debt.toLocaleString()} دج`);
@@ -3671,14 +3801,20 @@
             notes }; appState.suppliers.unshift(newSupObj);
         // Record into detailed transaction history
         if (!appState.supplierTransactions) appState.supplierTransactions = [];
-        appState.supplierTransactions.unshift({
+        const newTxObj = {
             id: 'tx_' + Date.now().toString(),
             supplierName: name, supplierInfo: info || '',
             type: 'purchase', items: items,
             totalAmount: paid + debt, paidAmount: paid,
             remainingDebt: debt, date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
             notes: notes || '', createdAt: new Date().toISOString()
-        }); saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
+        };
+        appState.supplierTransactions.unshift(newTxObj);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('suppliers', newSupObj);
+            window.saveFirebaseSectionItem('supplierTransactions', newTxObj);
+        }
+        saveState(); this.reset(); const sDate = document.getElementById('supplierDate');
         if (sDate) sDate.value = new Date().toISOString().split('T')[0];
         showSuccessToast('تم تسجيل فاتورة / معاملة المورد بنجاح');
         renderSuppliersList();
@@ -3687,6 +3823,7 @@
             if (!Array.isArray(appState.suppliers)) return;
             appState.suppliers = appState.suppliers.filter(s => String(s && s.id) !== String(id));
             window.appState.suppliers = appState.suppliers;
+            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('suppliers', id);
             saveState(); showSuccessToast('تم حذف معاملة المورد بنجاح');
             renderSuppliersList(); }, { title: 'حذف معاملة المورد',
             confirmText: 'نعم، حذف' }); } window.deleteSupplier = deleteSupplier;
@@ -3720,7 +3857,9 @@
         items = sanitizeInputText(items, 300);
         appState.suppliers[index] = { ...appState.suppliers[index],
             name, info, items, paid, debt, date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
-            notes }; saveState(); closeModal('editSupplierModal');
+            notes };
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('suppliers', appState.suppliers[index]);
+        saveState(); closeModal('editSupplierModal');
         showSuccessToast('تم تعديل معاملة المورد بنجاح');
         renderSuppliersList(); return false; }
     window.handleEditSupplierSubmit = handleEditSupplierSubmit;
@@ -4460,6 +4599,7 @@
         const targetId = String(id).trim();
         showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
             window.appState.credits = appState.credits.filter(c => String(c && c.id).trim() !== targetId);
+            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('credits', targetId);
             saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
             renderCreditsList(); render(); // Update dashboard totals
         }, { title: 'تسديد الكريدي', confirmText: 'نعم، تم التسديد',
