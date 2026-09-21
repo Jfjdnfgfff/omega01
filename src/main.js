@@ -705,25 +705,33 @@ window.setElemRequired = setElemRequired;
     });
     if (Object.keys(v2Updates).length === 0) return true;
 
+    let sdkOk = false;
     if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
       try {
         await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
-        return true;
+        sdkOk = true;
       } catch (e) {
         console.warn(`SDK updateFirebaseSection error on v2/${v2Sec}:`, e);
       }
     }
-    try {
-      const baseUrl = getRTDBUrl();
-      const res = await fetch(`${baseUrl}/.json`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(v2Updates)
-      });
-      return res.ok;
-    } catch (e) {
-      return false;
+    if (!sdkOk) {
+      try {
+        const baseUrl = getRTDBUrl();
+        const v2RelUpdates = {};
+        Object.keys(v2Updates).forEach(k => {
+          v2RelUpdates[k.replace(/^v2\//, '')] = v2Updates[k];
+        });
+        const res = await fetch(`${baseUrl}/v2.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(v2RelUpdates)
+        });
+        return res.ok;
+      } catch (e) {
+        return false;
+      }
     }
+    return true;
   };
 
   // Dedicated Section Push Utility: strictly uses PUSH (SDK) with REST POST fallback ONLY on SDK failure
@@ -874,14 +882,25 @@ window.setElemRequired = setElemRequired;
         }
 
         if (Object.keys(v2Updates).length > 0) {
+          let sdkOk = false;
           if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
-            await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
-          } else {
+            try {
+              await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
+              sdkOk = true;
+            } catch (e) {
+              console.warn(`SDK saveFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, e);
+            }
+          }
+          if (!sdkOk) {
             const baseUrl = getRTDBUrl();
-            const res = await fetch(`${baseUrl}/.json`, {
+            const v2RelUpdates = {};
+            Object.keys(v2Updates).forEach(k => {
+              v2RelUpdates[k.replace(/^v2\//, '')] = v2Updates[k];
+            });
+            const res = await fetch(`${baseUrl}/v2.json`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(v2Updates)
+              body: JSON.stringify(v2RelUpdates)
             });
             if (!res.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
           }
@@ -935,14 +954,25 @@ window.setElemRequired = setElemRequired;
           }
         }
 
+        let sdkOk = false;
         if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
-          await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Deletes);
-        } else {
+          try {
+            await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Deletes);
+            sdkOk = true;
+          } catch (e) {
+            console.warn(`SDK deleteFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, e);
+          }
+        }
+        if (!sdkOk) {
           const baseUrl = getRTDBUrl();
-          const res = await fetch(`${baseUrl}/.json`, {
+          const v2RelDeletes = {};
+          Object.keys(v2Deletes).forEach(k => {
+            v2RelDeletes[k.replace(/^v2\//, '')] = v2Deletes[k];
+          });
+          const res = await fetch(`${baseUrl}/v2.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(v2Deletes)
+            body: JSON.stringify(v2RelDeletes)
           });
           if (!res.ok) throw new Error(`REST delete failed HTTP ${res.status}`);
         }
@@ -2300,6 +2330,9 @@ window.setElemRequired = setElemRequired;
                 sessionCount: sessionCount,
                 price: price, clients: clientsData.map(c => ({ activity: c.activity, price: Number(c.price || 0) }))
             }; appState.quickSessions.unshift(newQuickSession);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('quickSessions', newQuickSession);
+            }
             if (Array.isArray(appState.customers)) {
                 appState.customers = appState.customers.filter(c => c && c.subscriptionType !== 'session' && !c.name?.startsWith('حصة '));
             } if (typeof saveState === 'function') saveState();
@@ -5450,8 +5483,15 @@ window.setElemRequired = setElemRequired;
                 const currentEnd = new Date(c.endDate);
                 currentEnd.setDate(currentEnd.getDate() + numDays);
                 c.endDate = currentEnd.toISOString();
+                if (window.saveFirebaseSectionItem) {
+                    window.saveFirebaseSectionItem('customers', c);
+                }
             } }); if (!appState.coachAbsences) appState.coachAbsences = [];
-        appState.coachAbsences.unshift({ id: Date.now().toString(), date: formattedDate, days: numDays });
+        const newAbsence = { id: Date.now().toString(), date: formattedDate, days: numDays };
+        appState.coachAbsences.unshift(newAbsence);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('coachAbsences', newAbsence);
+        }
         saveState(); closeModal('coachAbsenceModal');
         showSuccessToast('تم تمديد اشتراك المشتركين بنجاح');
         this.reset(); const dateInput = document.getElementById('absenceDate');
