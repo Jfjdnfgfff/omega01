@@ -79,6 +79,135 @@
         errElem.innerHTML = `<strong>تنبيه Realtime Database:</strong> ${escapeHTML(details)}`;
       } else { errElem.classList.add('hidden');
       } } } window.updateFirebaseUIBadge = updateFirebaseUIBadge;
+
+  // Centralized RequestAnimationFrame Render Scheduler (prevents redundant rendering passes)
+  let renderScheduled = false;
+  function scheduleRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        renderScheduled = false;
+        if (typeof window.render === 'function') window.render();
+      });
+    } else {
+      setTimeout(() => {
+        renderScheduled = false;
+        if (typeof window.render === 'function') window.render();
+      }, 16);
+    }
+  }
+  window.scheduleRender = scheduleRender;
+
+  // Realtime Cursors and Lazy Loaded Section Registry
+  window.firebaseCursors = window.firebaseCursors || {
+    sales: { oldestKey: null, newestKey: null, hasMore: true },
+    expenses: { oldestKey: null, newestKey: null, hasMore: true },
+    customers: { oldestKey: null, newestKey: null, hasMore: true },
+    products: { oldestKey: null, newestKey: null, hasMore: true },
+    credits: { oldestKey: null, newestKey: null, hasMore: true },
+    caisseLogs: { oldestKey: null, newestKey: null, hasMore: true },
+    staffPayouts: { oldestKey: null, newestKey: null, hasMore: true },
+    coachAbsences: { oldestKey: null, newestKey: null, hasMore: true },
+    supplierTransactions: { oldestKey: null, newestKey: null, hasMore: true }
+  };
+  window.firebaseLoadedSections = window.firebaseLoadedSections || {};
+  window.firebaseLoadingPromises = window.firebaseLoadingPromises || {};
+
+  window.lazyLoadSection = async function(sectionName, force = false) {
+    if (!sectionName) return [];
+    if (window.firebaseLoadedSections[sectionName] && !force) {
+      return window.appState[sectionName] || [];
+    }
+    if (window.firebaseLoadingPromises[sectionName]) {
+      return window.firebaseLoadingPromises[sectionName];
+    }
+
+    const loadPromise = (async () => {
+      try {
+        const v2Sec = sectionName === 'caisseLogs' ? 'caisse' : sectionName;
+        const limit = (sectionName === 'packages' || sectionName === 'suppliers') ? 100 : 50;
+        let items = [];
+
+        if (window.firebaseDB && window.firebaseRef && window.firebaseGet && window.firebaseQuery && window.firebaseLimitToLast && window.firebaseOrderByKey) {
+          let q;
+          if (sectionName === 'packages' || sectionName === 'suppliers') {
+            q = window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`);
+          } else {
+            q = window.firebaseQuery(
+              window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
+              window.firebaseOrderByKey(),
+              window.firebaseLimitToLast(limit)
+            );
+          }
+          let snap = await window.firebaseGet(q);
+          if (snap.exists()) {
+            const data = snap.val();
+            items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+          } else {
+            // Migration / legacy fallback
+            let legQ;
+            if (sectionName === 'packages' || sectionName === 'suppliers') {
+              legQ = window.firebaseRef(window.firebaseDB, sectionName);
+            } else {
+              legQ = window.firebaseQuery(
+                window.firebaseRef(window.firebaseDB, sectionName),
+                window.firebaseOrderByKey(),
+                window.firebaseLimitToLast(limit)
+              );
+            }
+            const legSnap = await window.firebaseGet(legQ);
+            if (legSnap.exists()) {
+              const data = legSnap.val();
+              items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+            }
+          }
+        } else {
+          const baseUrl = getRTDBUrl();
+          const url = (sectionName === 'packages' || sectionName === 'suppliers')
+            ? `${baseUrl}/v2/${v2Sec}.json`
+            : `${baseUrl}/v2/${v2Sec}.json?orderBy="$key"&limitToLast=${limit}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && typeof data === 'object') {
+              items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+            }
+          }
+        }
+
+        // Initialize cursor for this section
+        if (window.firebaseCursors && window.firebaseCursors[sectionName]) {
+          if (items.length > 0) {
+            const keys = items.map(i => String(i._rtdbKey || i.id || i.barcode || '')).filter(Boolean);
+            if (keys.length > 0) {
+              window.firebaseCursors[sectionName].oldestKey = keys[0];
+              window.firebaseCursors[sectionName].newestKey = keys[keys.length - 1];
+              window.firebaseCursors[sectionName].hasMore = (items.length >= limit);
+            }
+          } else {
+            window.firebaseCursors[sectionName].hasMore = false;
+          }
+        }
+
+        window.firebaseLoadedSections[sectionName] = true;
+        if (items.length > 0) {
+          window.applyFirebaseSectionUpdate(sectionName, items, `LazyLoad ${sectionName}`);
+        }
+        scheduleRender();
+        return items;
+      } catch (err) {
+        console.warn(`Lazy loading error for ${sectionName}:`, err);
+        return [];
+      } finally {
+        delete window.firebaseLoadingPromises[sectionName];
+      }
+    })();
+
+    window.firebaseLoadingPromises[sectionName] = loadPromise;
+    return loadPromise;
+  };
+
   // Global Engine to Apply Incoming Firebase Data to Application State
   window.applyFirebaseDataToAppState = function(rawPayload, sourceLabel) {
     if (!rawPayload || typeof rawPayload !== 'object') return false;
@@ -203,10 +332,8 @@
     window.appState.supplierTransactions = mergedSupplierTx.length > 0 ? mergedSupplierTx : (window.appState.supplierTransactions || []);
     window.appState.quickSessions = mergedQuickSessions.length > 0 ? mergedQuickSessions : (window.appState.quickSessions || []);
     window.appState.lastUpdated = rawPayload.lastUpdated || new Date().toISOString();
-    try { localStorage.setItem('sm_appState', JSON.stringify(window.appState));
-    } catch (e) {} if (typeof window.render === 'function') {
-      window.render();
-    } window.firebaseSyncState = window.firebaseSyncState || {};
+    scheduleRender();
+    window.firebaseSyncState = window.firebaseSyncState || {};
     window.firebaseSyncState.rtdb = 'connected';
     window.firebaseSyncState.lastSync = new Date();
     window.firebaseSyncState.lastError = null;
@@ -236,7 +363,7 @@
       if (sectionData.daily) Object.assign(window.appState.v2Stats.daily, sectionData.daily);
       if (sectionData.monthly) Object.assign(window.appState.v2Stats.monthly, sectionData.monthly);
       if (sectionData.yearly) Object.assign(window.appState.v2Stats.yearly, sectionData.yearly);
-      if (typeof window.render === 'function') window.render();
+      scheduleRender();
       return true;
     }
 
@@ -276,20 +403,7 @@
     }
 
     window.appState[sectionName] = merged;
-    if (typeof scheduleLocalStorageSave === 'function') {
-      scheduleLocalStorageSave();
-    } else {
-      try { localStorage.setItem('sm_appState', JSON.stringify(window.appState)); } catch(e) {}
-    }
-
-    // Debounced render
-    if (!window.renderScheduled) {
-      window.renderScheduled = true;
-      requestAnimationFrame(() => {
-        window.renderScheduled = false;
-        if (typeof window.render === 'function') window.render();
-      });
-    }
+    scheduleRender();
 
     window.firebaseSyncState = window.firebaseSyncState || {};
     window.firebaseSyncState.rtdb = 'connected';
@@ -872,91 +986,92 @@
       const baseUrl = getRTDBUrl();
       const safeFetch = (path) => fetch(`${baseUrl}/${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      // Fetch bounded recent slices in parallel rather than the entire massive database
+      // Lazy Architecture Startup: Load only Dashboard stats, package tiers, and meta health
       const [
         meta,
         v2Stats,
         v2Packages,
-        v2Cust,
-        v2Prods,
-        v2Sales,
-        v2Exp,
-        v2Caisse,
-        v2Credits,
-        v2Suppliers,
-        v2StaffPayouts,
-        v2CoachAbsences,
         appStateCfg
       ] = await Promise.all([
-        safeFetch('v2/meta.json'),
+        safeFetch('v2/meta/health.json'),
         safeFetch('v2/stats.json'),
         safeFetch('v2/packages.json'),
-        safeFetch('v2/customers.json?orderBy="$key"&limitToLast=60'),
-        safeFetch('v2/products.json?orderBy="$key"&limitToLast=100'),
-        safeFetch('v2/sales.json?orderBy="$key"&limitToLast=50'),
-        safeFetch('v2/expenses.json?orderBy="$key"&limitToLast=50'),
-        safeFetch('v2/caisse.json?orderBy="$key"&limitToLast=50'),
-        safeFetch('v2/credits.json?orderBy="$key"&limitToLast=100'),
-        safeFetch('v2/suppliers.json'),
-        safeFetch('v2/staffPayouts.json?orderBy="$key"&limitToLast=50'),
-        safeFetch('v2/coachAbsences.json?orderBy="$key"&limitToLast=50'),
         safeFetch('appState.json')
       ]);
 
       window.__firebaseAlreadyFetched = true;
-      const combined = {
-        packages: v2Packages || null,
-        customers: v2Cust || null,
-        products: v2Prods || null,
-        sales: v2Sales || null,
-        expenses: v2Exp || null,
-        caisseLogs: v2Caisse || null,
-        credits: v2Credits || null,
-        suppliers: v2Suppliers || null,
-        staffPayouts: v2StaffPayouts || null,
-        coachAbsences: v2CoachAbsences || null,
-        stats: v2Stats || null,
-        appState: appStateCfg || null
-      };
+      window.appState = window.appState || {};
+
+      if (v2Packages) {
+        window.applyFirebaseSectionUpdate('packages', v2Packages, 'Startup Packages Sync');
+      }
 
       if (v2Stats) {
-        window.appState = window.appState || {};
         window.appState.v2Stats = v2Stats;
       }
 
-      window.applyFirebaseDataToAppState(combined, 'Fast V2 Sync Fetch');
+      if (appStateCfg && typeof appStateCfg === 'object') {
+        if (typeof appStateCfg.hideFinances === 'boolean') {
+          window.appState.hideFinances = appStateCfg.hideFinances;
+        }
+      }
+
+      scheduleRender();
       return true;
     } catch (err) {
-      console.warn('Initial fetch note:', err);
+      console.warn('Initial startup fetch note:', err);
     }
     return false;
   };
-  // Test connection button handler
+  // Test connection button handler - tests lightweight health endpoint without loading or pushing full database
   window.testFirebaseConnection = async function() {
     const syncBtn = document.getElementById('firebaseManualSyncBtn');
     if (syncBtn) {
       syncBtn.disabled = true;
-      syncBtn.innerHTML = `<span>جاري فحص الاتصال والمزامنة...</span>`;
+      syncBtn.innerHTML = `<span>جاري فحص الاتصال...</span>`;
     }
-    // Fetch latest from cloud
+    let connected = false;
+    let errorMsg = '';
     try {
-      const fetchResp = await fetch(`${getRTDBUrl()}/.json`);
-      if (fetchResp.ok) {
-        const cloudData = await fetchResp.json();
-        if (cloudData) {
-          window.applyFirebaseDataToAppState(cloudData, 'Manual Sync Load');
-        }
+      const baseUrl = getRTDBUrl();
+      const testResp = await fetch(`${baseUrl}/v2/meta/health.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ping: Date.now(), status: 'healthy' })
+      });
+      if (testResp.ok) {
+        connected = true;
+      } else {
+        errorMsg = `HTTP ${testResp.status}`;
       }
-    } catch (e) {}
-    const res = await window.pushFullStateToFirebase();
-    if (res.success) {
+    } catch (e) {
+      errorMsg = e?.message || 'تعذر الاتصال بالشبكة';
+    }
+
+    if (!connected && window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+      try {
+        await window.firebaseGet(window.firebaseRef(window.firebaseDB, 'v2/meta/health'));
+        connected = true;
+      } catch (e) {
+        errorMsg = e?.message || errorMsg;
+      }
+    }
+
+    if (connected) {
+      window.firebaseSyncState = window.firebaseSyncState || {};
+      window.firebaseSyncState.rtdb = 'connected';
+      window.firebaseSyncState.lastSync = new Date();
+      window.firebaseSyncState.lastError = null;
+      updateFirebaseUIBadge('connected', 'Firebase: الاتصال نشط وسريع');
       if (typeof showSuccessToast === 'function') {
-        showSuccessToast('تم تحميل ومزامنة كامل البيانات مع Realtime Database بنجاح!');
+        showSuccessToast('تم فحص الاتصال بـ Firebase بنجاح (الاتصال نشط وسليم)');
       }
     } else {
+      window.firebaseSyncState.lastError = errorMsg;
       if (typeof showErrorToast === 'function') {
-        showErrorToast('فشل الحفظ في Realtime Database: ' + (res.error || 'تحقق من تفعيل القواعد'));
+        showErrorToast('فشل اختبار الاتصال بـ Firebase: ' + (errorMsg || 'يرجى التحقق من القواعد'));
       }
+      updateFirebaseUIBadge('error', 'Firebase: تعذر الاتصال', errorMsg);
     }
     if (syncBtn) {
       syncBtn.disabled = false;
@@ -1023,28 +1138,16 @@
           return [];
         };
 
-        // Bounded & indexed section configurations pointing to flat V2 schema
-        const sectionListeners = [
-          { name: 'customers', q: query(ref(database, 'v2/customers'), limitToLast(60)) },
-          { name: 'products', q: query(ref(database, 'v2/products'), limitToLast(100)) },
-          { name: 'packages', q: ref(database, 'v2/packages') },
-          { name: 'credits', q: query(ref(database, 'v2/credits'), limitToLast(100)) },
-          { name: 'sales', q: query(ref(database, 'v2/sales'), limitToLast(50)) },
-          { name: 'caisseLogs', q: query(ref(database, 'v2/caisse'), limitToLast(50)) },
-          { name: 'expenses', q: query(ref(database, 'v2/expenses'), limitToLast(50)) },
-          { name: 'coachAbsences', q: query(ref(database, 'v2/coachAbsences'), limitToLast(50)) },
-          { name: 'suppliers', q: ref(database, 'v2/suppliers') },
-          { name: 'supplierTransactions', q: query(ref(database, 'v2/supplierTransactions'), limitToLast(50)) },
-          { name: 'staffPayouts', q: query(ref(database, 'v2/staffPayouts'), limitToLast(50)) },
-          { name: 'quickSessions', q: query(ref(database, 'v2/quickSessions'), limitToLast(50)) },
+        // Ultra-Lightweight Essential Realtime Listeners (Stats for Dashboard, recent Sales and Caisse for POS)
+        // All heavy data collections (customers, products, expenses, credits, etc.) are lazy-loaded on demand
+        const realTimeListeners = [
           { name: 'stats', q: ref(database, 'v2/stats') },
-          { name: 'appState', q: ref(database, 'appState') }
+          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(30)) },
+          { name: 'caisseLogs', q: query(ref(database, 'v2/caisse'), orderByKey(), limitToLast(30)) }
         ];
 
-        let connectedCount = 0;
-        sectionListeners.forEach(sec => {
+        realTimeListeners.forEach(sec => {
           onValue(sec.q, (snapshot) => {
-            connectedCount++;
             if (snapshot.exists()) {
               window.applyFirebaseSectionUpdate(sec.name, snapshot.val(), `Realtime ${sec.name}`);
             }
@@ -1060,22 +1163,23 @@
           });
         });
 
-        // Ultra-Fast Cursor-Based Pagination: Loads older historical records on demand without loading everything
+        // Ultra-Fast Cursor-Based Pagination: Loads older historical records using orderByKey() & endBefore() without scanning/sorting in memory
         window.loadOlderHistoricalData = async function(sectionName = 'sales', limitCount = 50) {
           try {
-            const list = Array.isArray(window.appState[sectionName]) ? window.appState[sectionName] : [];
-            let oldestKey = null;
-            if (list.length > 0) {
-              const sorted = [...list].sort((a, b) => {
-                const ta = a.createdAt || (a.date ? new Date(a.date).getTime() : 0);
-                const tb = b.createdAt || (b.date ? new Date(b.date).getTime() : 0);
-                if (ta && tb && ta !== tb) return ta - tb;
-                const ka = String(a._rtdbKey || a.id || '');
-                const kb = String(b._rtdbKey || b.id || '');
-                return ka.localeCompare(kb);
-              });
-              const oldest = sorted[0];
-              oldestKey = oldest ? (oldest._rtdbKey || oldest.id) : null;
+            const cursor = window.firebaseCursors[sectionName] || { oldestKey: null, hasMore: true };
+            if (cursor.hasMore === false) {
+              if (typeof showInfoToast === 'function') {
+                showInfoToast(`لا توجد سجلات أقدم إضافية لـ ${sectionName}`);
+              }
+              return 0;
+            }
+
+            let oldestKey = cursor.oldestKey;
+            if (!oldestKey) {
+              const list = Array.isArray(window.appState[sectionName]) ? window.appState[sectionName] : [];
+              if (list.length > 0) {
+                oldestKey = list[0]._rtdbKey || list[0].id || list[0].barcode || null;
+              }
             }
 
             const v2Sec = sectionName === 'caisseLogs' ? 'caisse' : sectionName;
@@ -1099,13 +1203,23 @@
 
             if (snap && snap.exists()) {
               const data = snap.val();
-              const items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+              const keys = Object.keys(data);
+              const items = keys.map(k => ({ ...data[k], _rtdbKey: k }));
+
+              cursor.oldestKey = keys[0];
+              if (items.length < limitCount) {
+                cursor.hasMore = false;
+              }
+              window.firebaseCursors[sectionName] = cursor;
+
               window.applyFirebaseSectionUpdate(sectionName, items, 'Cursor Pagination Fetch');
               if (typeof showSuccessToast === 'function') {
                 showSuccessToast(`تم تحميل ${items.length} سجل أقدم لـ ${sectionName} بنجاح`);
               }
               return items.length;
             } else {
+              cursor.hasMore = false;
+              window.firebaseCursors[sectionName] = cursor;
               if (typeof showInfoToast === 'function') {
                 showInfoToast(`لا توجد سجلات أقدم إضافية لـ ${sectionName}`);
               }
@@ -1539,6 +1653,7 @@
 
         if (view === 'products') {
             if (pv) { pv.classList.remove('hidden'); pv.classList.add('flex'); }
+            if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('products');
             const sellDateElem = document.getElementById('sellDate');
             if (sellDateElem && !sellDateElem.value) {
                 sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
@@ -1548,6 +1663,7 @@
             if (ev) {
                 ev.classList.remove('hidden');
                 ev.classList.add('flex');
+                if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('expenses');
                 const expDate = document.getElementById('expenseDateView');
                 if (expDate && !expDate.value) {
                     expDate.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
@@ -1559,6 +1675,7 @@
             }
         } else if (view === 'customers') {
             if (dv) { dv.classList.remove('hidden'); dv.classList.add('flex'); }
+            if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('customers');
             const subSection = document.getElementById('subscribers-section');
             if (subSection) {
                 subSection.scrollIntoView({ behavior: 'auto' });
@@ -1569,17 +1686,22 @@
             if (crv) {
                 crv.classList.remove('hidden');
                 crv.classList.add('flex');
+                if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('credits');
                 if (typeof renderCreditsList === 'function') renderCreditsList();
                 window.scrollTo(0, 0);
             }
         } else if (view === 'caisse') {
             if (caisseV) {
+                if (typeof window.lazyLoadSection === 'function') {
+                    window.lazyLoadSection('caisseLogs');
+                    window.lazyLoadSection('sales');
+                }
                 const openCaisseInternal = () => {
                     caisseV.classList.remove('hidden');
                     caisseV.classList.add('flex');
                     if (typeof initCaisseView === 'function') initCaisseView();
                     window.scrollTo(0, 0);
-                    if (typeof render === 'function') render();
+                    scheduleRender();
                 };
                 if (appState.hideFinances) {
                     promptWithPassword({
@@ -1599,7 +1721,7 @@
             if (dv) { dv.classList.remove('hidden'); dv.classList.add('flex'); }
             window.scrollTo(0, 0);
         }
-        if (typeof render === 'function') render();
+        scheduleRender();
     }
     window.toggleView = toggleView; function openBulkImportModal() {
         promptWithPassword({ title: 'استيراد بالباركود',
@@ -1638,6 +1760,16 @@
         const el = document.getElementById(id);
         if (!el) { console.warn(`Modal element with id '${id}' not found.`);
             return; } el.classList.add('active');
+        if (typeof window.lazyLoadSection === 'function') {
+            if (id === 'coachAbsenceModal') window.lazyLoadSection('coachAbsences');
+            else if (id === 'addCustomerModal' || id === 'editCustomerModal') { window.lazyLoadSection('packages'); window.lazyLoadSection('customers'); }
+            else if (id === 'staffPayoutsModal') { window.lazyLoadSection('staffPayouts'); window.lazyLoadSection('suppliers'); window.lazyLoadSection('supplierTransactions'); }
+            else if (id === 'expensesModal') window.lazyLoadSection('expenses');
+            else if (id === 'packagesModal') window.lazyLoadSection('packages');
+            else if (id === 'quickSessionModal') window.lazyLoadSection('quickSessions');
+            else if (id === 'bulkImportModal') window.lazyLoadSection('products');
+            else if (id === 'addCreditModal' || id === 'editCreditModal') window.lazyLoadSection('credits');
+        }
         if (id === 'coachAbsenceModal') { const dateInput = document.getElementById('absenceDate');
             if (dateInput && !dateInput.value) {
                 dateInput.value = new Date().toISOString().split('T')[0];
@@ -6209,19 +6341,26 @@
             if (dStat) {
                 if (dStat.sales !== undefined) todaySales = dStat.sales;
                 if (dStat.salesCount !== undefined) todaySalesCount = dStat.salesCount;
+                if (dStat.subIncome !== undefined && todaySubIncome === 0) todaySubIncome = dStat.subIncome;
             }
             if (mStat) {
                 if (mStat.sales !== undefined) monthlySales = mStat.sales;
                 if (mStat.profit !== undefined) monthlyProductProfit = mStat.profit;
                 if (mStat.expenses !== undefined) monthlyExpenses = mStat.expenses;
+                if (mStat.subIncome !== undefined && monthlySubIncome === 0) monthlySubIncome = mStat.subIncome;
             }
             if (yStat) {
                 if (yStat.sales !== undefined) yearlySales = yStat.sales;
+                if (yStat.subIncome !== undefined && yearlySubIncome === 0) yearlySubIncome = yStat.subIncome;
             }
             if (v2Stats.allTime) {
                 if (v2Stats.allTime.sales !== undefined) allTimeSales = v2Stats.allTime.sales;
                 if (v2Stats.allTime.profit !== undefined) allTimeProductProfit = v2Stats.allTime.profit;
                 if (v2Stats.allTime.expenses !== undefined) totalExpenses = v2Stats.allTime.expenses;
+                if (v2Stats.allTime.subIncome !== undefined && totalIncome === 0) totalIncome = v2Stats.allTime.subIncome;
+                if (v2Stats.allTime.debt !== undefined && totalDebt === 0) totalDebt = v2Stats.allTime.debt;
+                if (v2Stats.allTime.activeCount !== undefined && activeCount === 0) activeCount = v2Stats.allTime.activeCount;
+                if (v2Stats.allTime.nearExpiryCount !== undefined && nearExpiryCount === 0) nearExpiryCount = v2Stats.allTime.nearExpiryCount;
             }
         }
         const totalRevenue = totalIncome + allTimeSales;
