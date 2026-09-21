@@ -3973,6 +3973,15 @@
         }, 80);
     }
 
+    if (!localStorage.getItem('sm_mock_seeded_1000_subscribers_v1')) {
+        localStorage.setItem('sm_mock_seeded_1000_subscribers_v1', 'true');
+        setTimeout(() => {
+            if (typeof window.generateMockTestData === 'function') {
+                window.generateMockTestData(1000, 0, false);
+            }
+        }, 500);
+    }
+
     // ==========================================
     // WORKER TRANSACTIONS & LEDGER (DAILY / MONTHLY / YEARLY)
     // ==========================================
