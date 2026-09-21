@@ -879,7 +879,7 @@ window.setElemRequired = setElemRequired;
   window.applyExpenseStats = applyExpenseStats;
 
   // Dedicated Item-Level Save: writes strictly to V2 structure with atomic index maintenance and pendingWrites protection
-  window.saveFirebaseSectionItem = async function(sectionPath, itemData) {
+  window.saveFirebaseSectionItem = async function(sectionPath, itemData, previousItem) {
     if (!itemData || typeof itemData !== 'object') return false;
     const rawId = itemData.id || itemData.barcode || Date.now().toString();
     const cleanId = cleanKey(rawId);
@@ -917,37 +917,47 @@ window.setElemRequired = setElemRequired;
           const dateKey = getDateKey(itemData.date);
           const total = Number(itemData.total || 0);
           const profit = Number(itemData.profit || 0);
+          const qty = Number(itemData.qty || 1);
 
-          v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit };
+          v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit, qty };
           v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
 
           window._processedStats = window._processedStats || new Map();
           const statKey = `sale:${cleanId}`;
-          const oldProcessed = window._processedStats.get(statKey);
 
           let oldSale = null;
-          let shouldApply = true;
-
-          if (oldProcessed) {
-            if (oldProcessed.total === total && oldProcessed.profit === profit && oldProcessed.qty === Number(itemData.qty || 1) && oldProcessed.date === itemData.date) {
-              shouldApply = false;
-            } else {
-              oldSale = oldProcessed;
-            }
+          if (previousItem && typeof previousItem === 'object') {
+            oldSale = previousItem;
+          } else if (window._processedStats.has(statKey)) {
+            oldSale = window._processedStats.get(statKey);
           } else {
             const existing = (window.appState?.sales || []).filter(s => String(s.id) === String(cleanId));
             if (existing.length > 1) {
               oldSale = existing[1];
             } else if (existing.length === 1 && existing[0] !== itemData) {
               oldSale = existing[0];
+            } else if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+              try {
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/sales/${cleanId}`);
+                if (snap && typeof snap.val === 'function' && snap.exists()) {
+                  oldSale = snap.val();
+                }
+              } catch (e) {
+                console.warn('Firebase get oldSale note:', e);
+              }
             }
           }
 
-          if (shouldApply) {
-            const statsUpdates = applySaleStats(itemData, oldSale);
-            Object.assign(v2Updates, statsUpdates);
-            window._processedStats.set(statKey, { total, profit, qty: Number(itemData.qty || 1), date: itemData.date });
+          if (oldSale) {
+            const oldDateKey = getDateKey(oldSale.date);
+            if (oldDateKey !== dateKey) {
+              v2Updates[`v2/salesByDate/${oldDateKey}/${cleanId}`] = null;
+            }
           }
+
+          const statsUpdates = applySaleStats(itemData, oldSale);
+          Object.assign(v2Updates, statsUpdates);
+          window._processedStats.set(statKey, { total, profit, qty, date: itemData.date });
         } else if (sectionPath === 'expenses') {
           const dateKey = getDateKey(itemData.date);
           const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
@@ -957,31 +967,40 @@ window.setElemRequired = setElemRequired;
 
           window._processedStats = window._processedStats || new Map();
           const statKey = `expense:${cleanId}`;
-          const oldProcessed = window._processedStats.get(statKey);
 
           let oldExpense = null;
-          let shouldApply = true;
-
-          if (oldProcessed) {
-            if (oldProcessed.amount === amt && oldProcessed.date === itemData.date) {
-              shouldApply = false;
-            } else {
-              oldExpense = oldProcessed;
-            }
+          if (previousItem && typeof previousItem === 'object') {
+            oldExpense = previousItem;
+          } else if (window._processedStats.has(statKey)) {
+            oldExpense = window._processedStats.get(statKey);
           } else {
             const existing = (window.appState?.expenses || []).filter(e => String(e.id) === String(cleanId));
             if (existing.length > 1) {
               oldExpense = existing[1];
             } else if (existing.length === 1 && existing[0] !== itemData) {
               oldExpense = existing[0];
+            } else if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+              try {
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/expenses/${cleanId}`);
+                if (snap && typeof snap.val === 'function' && snap.exists()) {
+                  oldExpense = snap.val();
+                }
+              } catch (e) {
+                console.warn('Firebase get oldExpense note:', e);
+              }
             }
           }
 
-          if (shouldApply) {
-            const statsUpdates = applyExpenseStats(itemData, oldExpense);
-            Object.assign(v2Updates, statsUpdates);
-            window._processedStats.set(statKey, { amount: amt, date: itemData.date });
+          if (oldExpense) {
+            const oldDateKey = getDateKey(oldExpense.date);
+            if (oldDateKey !== dateKey) {
+              v2Updates[`v2/expensesByDate/${oldDateKey}/${cleanId}`] = null;
+            }
           }
+
+          const statsUpdates = applyExpenseStats(itemData, oldExpense);
+          Object.assign(v2Updates, statsUpdates);
+          window._processedStats.set(statKey, { amount: amt, date: itemData.date });
         } else if (sectionPath === 'credits') {
           v2Updates[`v2/credits/${cleanId}`] = itemData;
           if (itemData.customerId && itemData.status !== 'settled') {
@@ -1030,7 +1049,7 @@ window.setElemRequired = setElemRequired;
   };
 
   // Dedicated Item-Level Delete: cleans V2 structures + indexes with pendingWrites protection
-  window.deleteFirebaseSectionItem = async function(sectionPath, itemId) {
+  window.deleteFirebaseSectionItem = async function(sectionPath, itemId, previousItem) {
     if (!itemId) return false;
     const cleanId = cleanKey(itemId);
     const writeKey = `deleteSectionItem:${sectionPath}:${cleanId}`;
@@ -1065,9 +1084,25 @@ window.setElemRequired = setElemRequired;
         } else if (sectionPath === 'sales') {
           window._processedStats = window._processedStats || new Map();
           const statKey = `sale:${cleanId}`;
-          const recorded = window._processedStats.get(statKey);
-          const saleInState = (window.appState?.sales || []).find(s => String(s.id) === String(itemId));
-          const saleToDelete = recorded || saleInState;
+          let saleToDelete = null;
+
+          if (previousItem && typeof previousItem === 'object') {
+            saleToDelete = previousItem;
+          } else if (window._processedStats.has(statKey)) {
+            saleToDelete = window._processedStats.get(statKey);
+          } else {
+            saleToDelete = (window.appState?.sales || []).find(s => String(s.id) === String(itemId));
+            if (!saleToDelete && window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+              try {
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/sales/${cleanId}`);
+                if (snap && typeof snap.val === 'function' && snap.exists()) {
+                  saleToDelete = snap.val();
+                }
+              } catch (e) {
+                console.warn('Firebase get delete sale note:', e);
+              }
+            }
+          }
 
           if (saleToDelete) {
             const dateKey = getDateKey(saleToDelete.date);
@@ -1079,9 +1114,25 @@ window.setElemRequired = setElemRequired;
         } else if (sectionPath === 'expenses') {
           window._processedStats = window._processedStats || new Map();
           const statKey = `expense:${cleanId}`;
-          const recorded = window._processedStats.get(statKey);
-          const expInState = (window.appState?.expenses || []).find(e => String(e.id) === String(itemId));
-          const expToDelete = recorded || expInState;
+          let expToDelete = null;
+
+          if (previousItem && typeof previousItem === 'object') {
+            expToDelete = previousItem;
+          } else if (window._processedStats.has(statKey)) {
+            expToDelete = window._processedStats.get(statKey);
+          } else {
+            expToDelete = (window.appState?.expenses || []).find(e => String(e.id) === String(itemId));
+            if (!expToDelete && window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+              try {
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/expenses/${cleanId}`);
+                if (snap && typeof snap.val === 'function' && snap.exists()) {
+                  expToDelete = snap.val();
+                }
+              } catch (e) {
+                console.warn('Firebase get delete expense note:', e);
+              }
+            }
+          }
 
           if (expToDelete) {
             const dateKey = getDateKey(expToDelete.date);
@@ -3071,7 +3122,7 @@ window.setElemRequired = setElemRequired;
             if (typeof logActivity === 'function') logActivity('expense', 'حذف مصروف', `حذف المصروف: ${expDesc}`);
             window.appState.expenses = appState.expenses.filter(ex => String(ex && ex.id) !== String(id));
             if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('expenses', id);
+                window.deleteFirebaseSectionItem('expenses', id, deletedExp);
             }
             saveState(); showSuccessToast('تم حذف المصروف بنجاح');
             if (window.renderExpensesListView) window.renderExpensesListView();
@@ -6449,7 +6500,7 @@ window.setElemRequired = setElemRequired;
             if (typeof logActivity === 'function') logActivity('sale', 'إلغاء عملية بيع', `إلغاء البيع واسترجاع الكمية: ${sale ? sale.prodName || sale.name : saleId}`);
             appState.sales.splice(idx, 1);
             if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('sales', saleId);
+                window.deleteFirebaseSectionItem('sales', saleId, sale);
             }
             saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
             render(); if (typeof updateFullReportSalesSection === 'function') {
