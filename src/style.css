@@ -113,11 +113,32 @@ button, a {
 input[type="date"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
   opacity: 0.85;
-  padding: 4px;
+  padding: 2px;
   margin: 0 4px;
-  font-size: 16px;
   filter: invert(0.2);
+  /* صغر العرض والارتفاع بالبكسل لأيقونة التاريخ المدمجة */
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  max-width: 12px !important;
+  max-height: 12px !important;
 }
+
+/* تصغير أيقونات التاريخ (SVGs) في البرنامج بالبكسل */
+.date-icon-svg, 
+svg.date-icon-svg,
+svg:has(path[d*="M8 7V3m8 4V3"]) {
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  max-width: 12px !important;
+  max-height: 12px !important;
+  display: inline-block !important;
+  vertical-align: middle !important;
+}
+
 input[type="date"] {
   font-variant-numeric: tabular-nums;
   direction: ltr;
@@ -127,10 +148,34 @@ input[type="date"] {
 
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 
-/* Media Queries for Screen Breakpoints */
+/* Media Queries for Screen Breakpoints & Responsiveness on Phone and PC */
 @media (max-width: 768px) {
   #headerScrollLeftBtn, #headerScrollRightBtn {
     display: none !important;
+  }
+  
+  /* تحسين استجابة الجداول على الهواتف والأجهزة اللوحية لحمايتها من الخروج عن نطاق الشاشة */
+  table {
+    display: block !important;
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  
+  thead, tbody, tr {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+  }
+  
+  /* تحسين تجربة الأزرار وحقول الإدخال على شاشات الموبايل */
+  input, select, textarea, button {
+    font-size: 14px !important;
+  }
+
+  /* جعل الأقسام والشبكات متجاوبة تماماً مع شاشات الجوال الصغيرة جداً */
+  .grid {
+    gap: 0.5rem !important;
   }
 }
 
@@ -156,6 +201,21 @@ input[type="date"] {
   /* Prevent text overflow in stats cards */
   .tracking-tighter {
     letter-spacing: -0.02em;
+  }
+}
+
+/* تحسين تجربة التصفح على أجهزة البيسي واللاب توب (Desktop/PC Large Screens) */
+@media (min-width: 1024px) {
+  /* تفادي تمدد المحتوى بشكل عريض جداً على شاشات الـ PC والحفاظ على توازن بصري راقي */
+  #appContainer {
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.08) !important;
+    border-left: 1px solid #e2e8f0;
+    border-right: 1px solid #e2e8f0;
+  }
+  
+  /* تحسين حجم الفونت والأزرار لزيادة دقة وسهولة القراءة على أجهزة البيسي */
+  body {
+    font-size: 16px;
   }
 }
 
