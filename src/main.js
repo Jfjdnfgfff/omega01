@@ -515,6 +515,14 @@
   window.__firebaseAlreadyFetched = false;
   window.fetchAndLoadFirebaseData = async function(force) {
     if (window.__firebaseAlreadyFetched && !force) return true;
+
+    // Check if we have local storage data
+    const hasLocalData = localStorage.getItem('sm_appState') !== null;
+    if (hasLocalData && !force) {
+        console.log('Skipping initial Firebase fetch as local data exists.');
+        return true;
+    }
+
     try {
       const baseUrl = getRTDBUrl();
       if (!rootShared || force) {
