@@ -8642,12 +8642,12 @@ window.setElemRequired = setElemRequired;
                 const parsed = parseDiffItem(diff);
                 const icon = getFieldIcon(parsed.fieldName);
                 return `
-                    <span class="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-xl border bg-blue-50 text-blue-950 border-blue-200 shadow-2xs">
+                    <span class="inline-flex items-center flex-wrap gap-1 text-[11px] font-bold px-2 py-1 rounded-xl border bg-blue-50 text-blue-950 border-blue-200 shadow-2xs max-w-full break-words">
                         <span>${icon} <strong>${escapeHTML(parsed.fieldName)}:</strong></span>
                         <span class="text-blue-600 font-bold">من</span>
-                        <span class="text-blue-800 font-extrabold">${escapeHTML(parsed.beforeVal)}</span>
+                        <span class="text-blue-800 font-extrabold break-all">${escapeHTML(parsed.beforeVal)}</span>
                         <span class="text-blue-600 font-bold">إلى</span>
-                        <span class="text-blue-950 font-black">${escapeHTML(parsed.afterVal)}</span>
+                        <span class="text-blue-950 font-black break-all">${escapeHTML(parsed.afterVal)}</span>
                     </span>
                 `;
             }).join(' ');
@@ -8657,37 +8657,37 @@ window.setElemRequired = setElemRequired;
                 const icon = getFieldIcon(parsed.fieldName);
 
                 return `
-                    <div class="flex items-center justify-between gap-2 p-2.5 bg-blue-50/50 rounded-xl border border-blue-200 shadow-2xs transition-colors">
-                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-300 text-blue-950 font-black text-xs">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 p-2 bg-blue-50/50 rounded-xl border border-blue-200 shadow-2xs transition-colors w-full min-w-0">
+                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-300 text-blue-950 font-black text-xs w-fit">
                             <span>${icon}</span>
                             <span>${escapeHTML(parsed.fieldName)}</span>
                         </div>
-                        <div class="text-xs font-bold text-blue-950 text-right dir-rtl flex-1 leading-normal overflow-x-auto">
+                        <div class="text-xs font-bold text-blue-950 text-right dir-rtl flex-1 leading-normal break-words min-w-0 w-full sm:w-auto">
                             <span class="text-blue-600 font-bold mx-1">من</span>
-                            <span class="font-extrabold text-blue-800 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200">${escapeHTML(parsed.beforeVal)}</span>
+                            <span class="font-extrabold text-blue-800 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200 inline-block max-w-full break-words">${escapeHTML(parsed.beforeVal)}</span>
                             <span class="text-blue-600 font-bold mx-1">إلى</span>
-                            <span class="font-black text-blue-950 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300">${escapeHTML(parsed.afterVal)}</span>
+                            <span class="font-black text-blue-950 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300 inline-block max-w-full break-words">${escapeHTML(parsed.afterVal)}</span>
                         </div>
                     </div>
                 `;
             }).join('');
 
             return `
-                <div class="mt-1 space-y-1">
-                    <p class="text-xs font-extrabold text-slate-800 leading-normal">${mainSummary}</p>
-                    <div class="flex flex-wrap gap-1 mt-1">${badgeList}</div>
+                <div class="mt-1 space-y-1 w-full min-w-0">
+                    <p class="text-xs font-extrabold text-slate-800 leading-relaxed break-words">${mainSummary}</p>
+                    <div class="flex flex-wrap gap-1 mt-1 w-full min-w-0">${badgeList}</div>
 
-                    <button type="button" onclick="event.stopPropagation(); toggleActivityLogDetail('${safeId}')" class="mt-2 text-xs font-black text-blue-600 hover:text-blue-800 flex items-center gap-1.5 py-1 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all border border-blue-200 shadow-2xs cursor-pointer">
-                        <span>🔍 اضغط لرؤية تفاصيل التغييرات (من ⬅️ إلى) (${diffs.length})</span>
-                        <svg id="log_arrow_${safeId}" class="w-3.5 h-3.5 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    <button type="button" onclick="event.stopPropagation(); toggleActivityLogDetail('${safeId}')" class="mt-2 text-xs font-black text-blue-600 hover:text-blue-800 flex items-center justify-between sm:justify-start gap-1.5 py-1.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all border border-blue-200 shadow-2xs cursor-pointer w-full sm:w-auto">
+                        <span class="truncate">🔍 اضغط لرؤية تفاصيل التغييرات (من ⬅️ إلى) (${diffs.length})</span>
+                        <svg id="log_arrow_${safeId}" class="w-3.5 h-3.5 shrink-0 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
 
-                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-blue-50/30 border border-blue-200/90 rounded-2xl space-y-2 shadow-inner">
+                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-blue-50/30 border border-blue-200/90 rounded-2xl space-y-2 shadow-inner w-full min-w-0">
                         <div class="text-[11px] font-black text-blue-900 border-b border-blue-200 pb-1.5 flex items-center justify-between">
                             <span>التعديلات المنجزة (من ⬅️ إلى بالعربية):</span>
                             <span class="text-blue-700 font-extrabold">${diffs.length} حقول</span>
                         </div>
-                        <div class="space-y-1.5 mt-2">
+                        <div class="space-y-1.5 mt-2 w-full min-w-0">
                             ${rowsHtml}
                         </div>
                     </div>
@@ -8695,7 +8695,7 @@ window.setElemRequired = setElemRequired;
             `;
         }
         
-        return `<p class="text-xs text-slate-600 font-medium leading-normal mt-0.5">${safeText}</p>`;
+        return `<p class="text-xs text-slate-600 font-medium leading-relaxed break-words mt-0.5">${safeText}</p>`;
     }
 
     function renderActivityLogModal() {
@@ -8766,26 +8766,33 @@ window.setElemRequired = setElemRequired;
                 : '';
 
             return `
-            <div class="flex items-start justify-between p-3.5 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all gap-3">
-                <div class="flex items-start gap-3 min-w-0 flex-1">
-                    <div class="w-10 h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-base shrink-0 mt-0.5">
-                        ${cfg.icon}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2 flex-wrap mb-0.5">
-                            <span class="px-2 py-0.5 rounded-md text-[10px] font-black ${cfg.color} border">${cfg.label}</span>
-                            <h4 class="font-bold text-slate-800 text-xs sm:text-sm">${escapeHTML(item.title || '')}</h4>
+            <div class="p-3 sm:p-4 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all w-full min-w-0 overflow-hidden space-y-2">
+                <!-- Top Row: Icon, Category Badge, Title, Amount & Delete Action -->
+                <div class="flex items-start justify-between gap-2 min-w-0 w-full">
+                    <div class="flex items-start gap-2.5 min-w-0 flex-1">
+                        <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-sm sm:text-base shrink-0 mt-0.5">
+                            ${cfg.icon}
                         </div>
-                        ${formatActivityDetailsHtml(item.details || '', safeId)}
-                        <span class="text-[10px] text-slate-400 font-bold block mt-1.5">${formattedDate}</span>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
+                                <span class="px-2 py-0.5 rounded-md text-[10px] font-black ${cfg.color} border shrink-0">${cfg.label}</span>
+                                <h4 class="font-bold text-slate-800 text-xs sm:text-sm break-words leading-snug">${escapeHTML(item.title || '')}</h4>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        ${amtBadge}
+                        <button type="button" onclick="event.stopPropagation(); deleteActivityLog('${safeId}')" class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
+                            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
                     </div>
                 </div>
 
-                <div class="flex items-center gap-2 shrink-0">
-                    ${amtBadge}
-                    <button type="button" onclick="event.stopPropagation(); deleteActivityLog('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
+                <!-- Full Width Details & Timestamp -->
+                <div class="w-full min-w-0 text-right dir-rtl">
+                    ${formatActivityDetailsHtml(item.details || '', safeId)}
+                    <span class="text-[10px] text-slate-400 font-bold block mt-1.5">${formattedDate}</span>
                 </div>
             </div>
             `;
