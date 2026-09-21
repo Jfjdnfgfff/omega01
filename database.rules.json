@@ -1,27 +1,72 @@
 {
   "rules": {
+    "/* SECURITY NOTE */": "These rules currently allow read/write access for development and offline-first client operations. For hardened production environments, require Firebase Authentication: '.read': 'auth != null', '.write': 'auth != null'",
     ".read": true,
     ".write": true,
     "customers": {
-      ".indexOn": ["startDate", "endDate", "phone", "status", "paymentStatus"]
+      ".indexOn": ["startDate", "endDate", "phone", "status", "paymentStatus", "createdAt", "updatedAt"]
     },
     "credits": {
-      ".indexOn": ["date", "name", "phone"]
+      ".indexOn": ["date", "name", "phone", "customerId", "createdAt"]
     },
     "sales": {
-      ".indexOn": ["date", "customerId"]
+      ".indexOn": ["date", "dateKey", "customerId", "createdAt", "barcode", "category", "stockLocation"]
     },
     "products": {
-      ".indexOn": ["barcode", "category", "stockLocation"]
+      ".indexOn": ["barcode", "category", "stockLocation", "name", "createdAt"]
     },
     "expenses": {
-      ".indexOn": ["date", "category"]
+      ".indexOn": ["date", "dateKey", "category", "createdAt"]
     },
     "caisseLogs": {
-      ".indexOn": ["date", "type"]
+      ".indexOn": ["date", "dateKey", "type", "createdAt"]
     },
     "coachAbsences": {
-      ".indexOn": ["date", "coachName"]
+      ".indexOn": ["date", "coachName", "createdAt"]
+    },
+    "suppliers": {
+      ".indexOn": ["name", "phone", "createdAt"]
+    },
+    "supplierTransactions": {
+      ".indexOn": ["supplierId", "date", "dateKey", "createdAt"]
+    },
+    "staffPayouts": {
+      ".indexOn": ["staffId", "date", "dateKey", "createdAt"]
+    },
+    "v2": {
+      "customers": {
+        ".indexOn": ["phone", "barcode", "status", "paymentStatus", "startDate", "endDate", "createdAt", "updatedAt"]
+      },
+      "products": {
+        ".indexOn": ["barcode", "category", "stockLocation", "name", "createdAt", "updatedAt"]
+      },
+      "sales": {
+        ".indexOn": ["createdAt", "dateKey", "customerId", "barcode", "category", "stockLocation", "paymentMethod"]
+      },
+      "expenses": {
+        ".indexOn": ["createdAt", "dateKey", "category"]
+      },
+      "credits": {
+        ".indexOn": ["customerId", "createdAt", "dateKey", "status"]
+      },
+      "suppliers": {
+        ".indexOn": ["name", "phone", "createdAt"]
+      },
+      "supplierTransactions": {
+        ".indexOn": ["supplierId", "dateKey", "createdAt"]
+      },
+      "staff": {
+        ".indexOn": ["name", "phone", "role"]
+      },
+      "staffPayouts": {
+        ".indexOn": ["staffId", "dateKey", "createdAt"]
+      },
+      "coachAbsences": {
+        ".indexOn": ["coachName", "dateKey", "createdAt"]
+      },
+      "caisse": {
+        ".indexOn": ["dateKey", "type", "createdAt"]
+      }
     }
   }
 }
