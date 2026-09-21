@@ -8003,7 +8003,7 @@ window.setElemRequired = setElemRequired;
             remainingDebt = sup.debt; sup.date = new Date(dateStr).toISOString();
             if (sup.items) { sup.items += `\n• [${new Date(dateStr).toLocaleDateString('ar-DZ')}] فرسيمو وتسديد دفعة: ${amount.toLocaleString()} دج`;
             } } if (!appState.supplierTransactions) appState.supplierTransactions = [];
-        appState.supplierTransactions.unshift({
+        const tx = {
             id: 'tx_' + Date.now().toString(),
             supplierName: supplierName, type: 'payment',
             items: `فرسيمو وتسديد دفعة مالية بقيمة ${amount.toLocaleString()} دج`,
@@ -8011,7 +8011,13 @@ window.setElemRequired = setElemRequired;
             remainingDebt: remainingDebt, date: new Date(dateStr).toISOString(),
             notes: notes || 'فرسيمو دفع مباشر لتسوية الكريدي',
             createdAt: new Date().toISOString()
-        }); saveState(); closeModal('quickSupplierVersementModal');
+        };
+        appState.supplierTransactions.unshift(tx);
+        if (window.saveFirebaseSectionItem) {
+            if (sup) window.saveFirebaseSectionItem('suppliers', sup);
+            window.saveFirebaseSectionItem('supplierTransactions', tx);
+        }
+        saveState(); closeModal('quickSupplierVersementModal');
         showSuccessToast(`تم تسجيل فرسيمو بقيمة ${amount.toLocaleString()} دج للمورد (${supplierName}) بنجاح`);
         renderSuppliersList();
         return false;
@@ -8211,6 +8217,9 @@ window.setElemRequired = setElemRequired;
         };
 
         appState.staffPayouts.unshift(newPayout);
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('staffPayouts', newPayout);
+        }
         if (typeof logActivity === 'function') logActivity('payout', 'تسجيل خلاص عامل', `العامل: ${name} - النوع: ${type}`, amount);
         saveState();
 
@@ -8296,7 +8305,7 @@ window.setElemRequired = setElemRequired;
         }
 
         if (!appState.supplierTransactions) appState.supplierTransactions = [];
-        appState.supplierTransactions.unshift({
+        const tx = {
             id: 'tx_' + Date.now(),
             supplierName: name,
             supplierInfo: info,
@@ -8308,7 +8317,13 @@ window.setElemRequired = setElemRequired;
             date: new Date(dateStr).toISOString(),
             notes: notes,
             createdAt: new Date().toISOString()
-        });
+        };
+        appState.supplierTransactions.unshift(tx);
+
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('suppliers', sup);
+            window.saveFirebaseSectionItem('supplierTransactions', tx);
+        }
 
         saveState();
         if (itemsInput) itemsInput.value = '';
@@ -8593,6 +8608,12 @@ window.setElemRequired = setElemRequired;
             afterVal = rawValue.substring(4).trim();
         }
 
+        // Format dates simply without ISO artifacts
+        if (fieldName.includes('تاريخ') || fieldName.includes('الميلاد') || fieldName.includes('الانتهاء') || fieldName.includes('dob') || fieldName.includes('endDate')) {
+            if (beforeVal && beforeVal.includes('T')) beforeVal = beforeVal.split('T')[0];
+            if (afterVal && afterVal.includes('T')) afterVal = afterVal.split('T')[0];
+        }
+
         return { fieldName, beforeVal, afterVal, rawValue };
     }
 
@@ -8612,9 +8633,10 @@ window.setElemRequired = setElemRequired;
                 return `
                     <span class="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-xl border bg-blue-50 text-blue-950 border-blue-200 shadow-2xs">
                         <span>${icon} <strong>${escapeHTML(parsed.fieldName)}:</strong></span>
-                        <span class="text-slate-400 line-through text-[10px]">${escapeHTML(parsed.beforeVal)}</span>
-                        <span class="text-blue-600 font-extrabold text-xs">⬅️</span>
-                        <span class="text-blue-900 font-black">${escapeHTML(parsed.afterVal)}</span>
+                        <span class="text-blue-600 font-bold">من</span>
+                        <span class="text-blue-800 font-extrabold">${escapeHTML(parsed.beforeVal)}</span>
+                        <span class="text-blue-600 font-bold">إلى</span>
+                        <span class="text-blue-950 font-black">${escapeHTML(parsed.afterVal)}</span>
                     </span>
                 `;
             }).join(' ');
@@ -8624,16 +8646,16 @@ window.setElemRequired = setElemRequired;
                 const icon = getFieldIcon(parsed.fieldName);
 
                 return `
-                    <div class="flex items-center justify-between gap-2 p-2.5 bg-white rounded-xl border border-blue-100 shadow-2xs hover:border-blue-300 transition-colors">
-                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 text-blue-900 font-black text-xs">
+                    <div class="flex items-center justify-between gap-2 p-2.5 bg-blue-50/50 rounded-xl border border-blue-200 shadow-2xs transition-colors">
+                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-300 text-blue-950 font-black text-xs">
                             <span>${icon}</span>
                             <span>${escapeHTML(parsed.fieldName)}</span>
                         </div>
-                        <div class="text-xs font-bold text-slate-800 text-right dir-rtl flex-1 leading-normal overflow-x-auto">
-                            <span class="text-slate-500 font-medium">من</span>
-                            <span class="font-extrabold text-slate-700 mx-1 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">${escapeHTML(parsed.beforeVal)}</span>
-                            <span class="text-blue-700 font-black mx-1">إلى</span>
-                            <span class="font-black text-blue-900 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200/80">${escapeHTML(parsed.afterVal)}</span>
+                        <div class="text-xs font-bold text-blue-950 text-right dir-rtl flex-1 leading-normal overflow-x-auto">
+                            <span class="text-blue-600 font-bold mx-1">من</span>
+                            <span class="font-extrabold text-blue-800 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200">${escapeHTML(parsed.beforeVal)}</span>
+                            <span class="text-blue-600 font-bold mx-1">إلى</span>
+                            <span class="font-black text-blue-950 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300">${escapeHTML(parsed.afterVal)}</span>
                         </div>
                     </div>
                 `;
@@ -8649,8 +8671,8 @@ window.setElemRequired = setElemRequired;
                         <svg id="log_arrow_${safeId}" class="w-3.5 h-3.5 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
 
-                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-slate-50/90 border border-slate-200/90 rounded-2xl space-y-2 shadow-inner">
-                        <div class="text-[11px] font-black text-slate-600 border-b border-slate-200 pb-1.5 flex items-center justify-between">
+                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-blue-50/30 border border-blue-200/90 rounded-2xl space-y-2 shadow-inner">
+                        <div class="text-[11px] font-black text-blue-900 border-b border-blue-200 pb-1.5 flex items-center justify-between">
                             <span>التعديلات المنجزة (من ⬅️ إلى بالعربية):</span>
                             <span class="text-blue-700 font-extrabold">${diffs.length} حقول</span>
                         </div>
