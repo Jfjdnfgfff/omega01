@@ -2962,6 +2962,558 @@ window.setElemRequired = setElemRequired;
                     </div>
                 </div>
             `; }).join(''); } window.renderExpensesListModal = renderExpensesListModal;
+    // ==========================================
+    // EXPENSES DETAILED MONTHLY & YEARLY BREAKDOWN
+    // ==========================================
+    window.expensesDetailedState = {
+        year: new Date().getFullYear(),
+        tab: 'monthly',
+        filterMonth: null,
+        filterYear: null
+    };
+
+    const ARABIC_MONTHS = [
+        'جانفي (شهر 1)', 'فيفري (شهر 2)', 'مارس (شهر 3)', 'أفريل (شهر 4)',
+        'ماي (شهر 5)', 'جوان (شهر 6)', 'جويلية (شهر 7)', 'أوت (شهر 8)',
+        'سبتمبر (شهر 9)', 'أكتوبر (شهر 10)', 'نوفمبر (شهر 11)', 'ديسمبر (شهر 12)'
+    ];
+    const ARABIC_MONTHS_SHORT = [
+        'جانفي', 'فيفري', 'مارس', 'أفريل', 'ماي', 'جوان',
+        'جويلية', 'أوت', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+    ];
+
+    window.setExpensesDetailedTab = function(tab) {
+        window.expensesDetailedState.tab = tab;
+        const monthlyBtn = document.getElementById('expenseTabMonthlyBtn');
+        const yearlyBtn = document.getElementById('expenseTabYearlyBtn');
+        const monthlyContainer = document.getElementById('expensesMonthlyDetailsContainer');
+        const yearlyContainer = document.getElementById('expensesYearlyDetailsContainer');
+        const yearSelectWrapper = document.getElementById('expenseYearSelectWrapper');
+
+        if (tab === 'monthly') {
+            if (monthlyBtn) {
+                monthlyBtn.className = 'px-3.5 py-1.5 rounded-xl bg-white text-blue-700 shadow-2xs font-black transition-all cursor-pointer';
+            }
+            if (yearlyBtn) {
+                yearlyBtn.className = 'px-3.5 py-1.5 rounded-xl text-slate-600 hover:text-slate-900 transition-all cursor-pointer';
+            }
+            if (monthlyContainer) monthlyContainer.classList.remove('hidden');
+            if (yearlyContainer) yearlyContainer.classList.add('hidden');
+            if (yearSelectWrapper) yearSelectWrapper.classList.remove('hidden');
+        } else {
+            if (yearlyBtn) {
+                yearlyBtn.className = 'px-3.5 py-1.5 rounded-xl bg-white text-blue-700 shadow-2xs font-black transition-all cursor-pointer';
+            }
+            if (monthlyBtn) {
+                monthlyBtn.className = 'px-3.5 py-1.5 rounded-xl text-slate-600 hover:text-slate-900 transition-all cursor-pointer';
+            }
+            if (yearlyContainer) yearlyContainer.classList.remove('hidden');
+            if (monthlyContainer) monthlyContainer.classList.add('hidden');
+            if (yearSelectWrapper) yearSelectWrapper.classList.add('hidden');
+        }
+        if (typeof window.renderExpensesDetailedTotals === 'function') {
+            window.renderExpensesDetailedTotals();
+        }
+    };
+
+    window.changeExpensesDetailedYear = function(year) {
+        window.expensesDetailedState.year = parseInt(year, 10) || new Date().getFullYear();
+        if (typeof window.renderExpensesDetailedTotals === 'function') {
+            window.renderExpensesDetailedTotals();
+        }
+    };
+
+    window.filterExpensesByMonth = function(year, monthIdx) {
+        window.expensesDetailedState.filterYear = parseInt(year, 10);
+        window.expensesDetailedState.filterMonth = parseInt(monthIdx, 10);
+        if (typeof window.renderExpensesListView === 'function') {
+            window.renderExpensesListView();
+        }
+        const listElem = document.getElementById('expensesListView');
+        if (listElem) {
+            listElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    };
+
+    window.clearExpensesMonthFilter = function() {
+        window.expensesDetailedState.filterYear = null;
+        window.expensesDetailedState.filterMonth = null;
+        if (typeof window.renderExpensesListView === 'function') {
+            window.renderExpensesListView();
+        }
+    };
+
+    window.renderExpensesDetailedTotals = function() {
+        const allExpenses = Array.isArray(appState.expenses) ? appState.expenses : [];
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth();
+
+        // 1. Gather all unique years
+        const yearsSet = new Set();
+        yearsSet.add(currentYear);
+        allExpenses.forEach(ex => {
+            if (ex && ex.date) {
+                const d = new Date(ex.date);
+                if (!isNaN(d.getFullYear())) {
+                    yearsSet.add(d.getFullYear());
+                }
+            }
+        });
+        const sortedYears = Array.from(yearsSet).sort((a, b) => b - a);
+
+        // Ensure selected year is valid
+        if (!window.expensesDetailedState.year || !yearsSet.has(window.expensesDetailedState.year)) {
+            window.expensesDetailedState.year = sortedYears[0] || currentYear;
+        }
+        const selYear = window.expensesDetailedState.year;
+
+        // Populate Year dropdown
+        const yearSelect = document.getElementById('selectExpenseDetailedYear');
+        if (yearSelect) {
+            yearSelect.innerHTML = sortedYears.map(y => `<option value="${y}" ${y === selYear ? 'selected' : ''}>سنة ${y}</option>`).join('');
+        }
+
+        // Active Month Filter Banner
+        const banner = document.getElementById('activeExpenseMonthFilterBanner');
+        const bannerLabel = document.getElementById('activeExpenseMonthFilterLabel');
+        if (banner && bannerLabel) {
+            if (window.expensesDetailedState.filterMonth !== null && window.expensesDetailedState.filterYear !== null) {
+                banner.classList.remove('hidden');
+                banner.classList.add('flex');
+                bannerLabel.innerText = `${ARABIC_MONTHS_SHORT[window.expensesDetailedState.filterMonth]} ${window.expensesDetailedState.filterYear}`;
+            } else {
+                banner.classList.add('hidden');
+                banner.classList.remove('flex');
+            }
+        }
+
+        // ==========================================
+        // 2. Build Monthly Data for Selected Year
+        // ==========================================
+        const monthlyData = Array.from({ length: 12 }, (_, i) => ({
+            month: i,
+            name: ARABIC_MONTHS[i],
+            shortName: ARABIC_MONTHS_SHORT[i],
+            total: 0,
+            count: 0,
+            daily: 0,
+            home: 0,
+            fixed_monthly: 0,
+            general: 0,
+            maintenance: 0,
+            supplies: 0,
+            other: 0
+        }));
+
+        let yearTotal = 0;
+        let yearCount = 0;
+        let yearDaily = 0;
+        let yearHome = 0;
+        let yearFixed = 0;
+        let yearGeneral = 0;
+        let yearMaintenance = 0;
+        let yearSupplies = 0;
+        let yearOther = 0;
+
+        allExpenses.forEach(ex => {
+            if (!ex || !ex.date) return;
+            const d = new Date(ex.date);
+            if (d.getFullYear() === selYear) {
+                const m = d.getMonth();
+                const amt = Number(ex.amount) || 0;
+                const cat = getExpenseCategory(ex);
+
+                yearTotal += amt;
+                yearCount++;
+                monthlyData[m].total += amt;
+                monthlyData[m].count++;
+
+                if (cat === 'daily') { monthlyData[m].daily += amt; yearDaily += amt; }
+                else if (cat === 'home') { monthlyData[m].home += amt; yearHome += amt; }
+                else if (cat === 'fixed_monthly') { monthlyData[m].fixed_monthly += amt; yearFixed += amt; }
+                else if (cat === 'maintenance') { monthlyData[m].maintenance += amt; yearMaintenance += amt; }
+                else if (cat === 'supplies') { monthlyData[m].supplies += amt; yearSupplies += amt; }
+                else if (cat === 'other') { monthlyData[m].other += amt; yearOther += amt; }
+                else { monthlyData[m].general += amt; yearGeneral += amt; }
+            }
+        });
+
+        // Find max month in selected year
+        let maxMonthIdx = 0;
+        let maxMonthAmt = 0;
+        monthlyData.forEach((m, idx) => {
+            if (m.total > maxMonthAmt) {
+                maxMonthAmt = m.total;
+                maxMonthIdx = idx;
+            }
+        });
+
+        // Average calculation
+        const monthsPassedInYear = (selYear === currentYear) ? (currentMonth + 1) : 12;
+        const monthlyAvg = monthsPassedInYear > 0 ? Math.round(yearTotal / monthsPassedInYear) : 0;
+
+        // Render Tab 1: Monthly Container
+        const monthlyContainer = document.getElementById('expensesMonthlyDetailsContainer');
+        if (monthlyContainer) {
+            monthlyContainer.innerHTML = `
+                <!-- Yearly Key KPI Metrics -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/80 p-3.5 sm:p-4 rounded-2xl border border-slate-200/80">
+                    <div class="space-y-0.5">
+                        <div class="text-[11px] font-bold text-slate-500">إجمالي مصاريف سنة ${selYear}</div>
+                        <div class="text-base sm:text-xl font-black text-blue-900" dir="ltr">${yearTotal.toLocaleString()} <span class="text-xs font-bold text-slate-500">دج</span></div>
+                    </div>
+                    <div class="space-y-0.5">
+                        <div class="text-[11px] font-bold text-slate-500">المتوسط الشهري للسنة</div>
+                        <div class="text-base sm:text-xl font-black text-slate-800" dir="ltr">${monthlyAvg.toLocaleString()} <span class="text-xs font-bold text-slate-500">دج</span></div>
+                    </div>
+                    <div class="space-y-0.5">
+                        <div class="text-[11px] font-bold text-slate-500">أعلى شهر صرفاً</div>
+                        <div class="text-xs sm:text-sm font-black text-red-600 truncate">${maxMonthAmt > 0 ? `${ARABIC_MONTHS_SHORT[maxMonthIdx]} (${maxMonthAmt.toLocaleString()} دج)` : 'لا يوجد'}</div>
+                    </div>
+                    <div class="space-y-0.5">
+                        <div class="text-[11px] font-bold text-slate-500">إجمالي العمليات المسجلة</div>
+                        <div class="text-base sm:text-xl font-black text-slate-900">${yearCount} <span class="text-xs font-bold text-slate-500">عملية</span></div>
+                    </div>
+                </div>
+
+                <!-- Category Breakdown Bar for Selected Year -->
+                <div class="bg-white border border-slate-200/80 p-3.5 sm:p-4 rounded-2xl shadow-2xs space-y-2">
+                    <div class="text-xs font-bold text-slate-700 flex items-center justify-between">
+                        <span>توزيع مصاريف سنة ${selYear} حسب الأصناف:</span>
+                        <span class="text-slate-400 text-[11px]">${yearCount} عمليات</span>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1">
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">مصاريف يومية</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearDaily.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearDaily / yearTotal) * 100) : 0}%</span>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">منزل في القاعة</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearHome.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearHome / yearTotal) * 100) : 0}%</span>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">فواتير دائمة</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearFixed.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearFixed / yearTotal) * 100) : 0}%</span>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">عامة وتجهيزات</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearGeneral.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearGeneral / yearTotal) * 100) : 0}%</span>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">صيانة وإصلاح</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearMaintenance.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearMaintenance / yearTotal) * 100) : 0}%</span>
+                        </div>
+                        <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                            <span class="block text-[10px] text-slate-500 font-bold">نظافة ومستلزمات</span>
+                            <span class="block text-xs sm:text-sm font-black text-slate-800">${yearSupplies.toLocaleString()} دج</span>
+                            <span class="block text-[10px] text-blue-600 font-bold">${yearTotal > 0 ? Math.round((yearSupplies / yearTotal) * 100) : 0}%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 12 Months Cards Grid -->
+                <div class="space-y-2 pt-2">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-black text-slate-800 flex items-center gap-1.5">
+                            <span>تفصيل أشهر سنة ${selYear} (12 شهر)</span>
+                        </h3>
+                        <span class="text-xs text-slate-400 font-medium">اضغط على أي شهر لعرض سجل مصاريفه مباشرة</span>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                        ${monthlyData.map(m => {
+                            const pct = yearTotal > 0 ? Math.round((m.total / yearTotal) * 100) : 0;
+                            const isCurrent = (selYear === currentYear && m.month === currentMonth);
+                            const isFiltered = (window.expensesDetailedState.filterYear === selYear && window.expensesDetailedState.filterMonth === m.month);
+
+                            return `
+                                <div class="bg-white border ${isFiltered ? 'border-blue-500 ring-2 ring-blue-500/20 shadow-md' : (isCurrent ? 'border-blue-300 bg-gradient-to-b from-blue-50/40 to-white' : 'border-slate-200/90')} p-3.5 rounded-2xl flex flex-col justify-between hover:border-blue-400 hover:shadow-xs transition-all">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-1.5">
+                                            <span class="font-black text-slate-800 text-xs sm:text-sm flex items-center gap-1">
+                                                <span>${m.name}</span>
+                                                ${isCurrent ? '<span class="text-[9px] bg-blue-600 text-white font-bold px-1.5 py-0.2 rounded-md">الشهر الحالي</span>' : ''}
+                                            </span>
+                                            <span class="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-lg">${m.count} عملية</span>
+                                        </div>
+
+                                        <div class="flex items-baseline justify-between mb-2">
+                                            <span class="text-base sm:text-lg font-black text-slate-900" dir="ltr">${m.total.toLocaleString()} <span class="text-[11px] font-normal text-slate-500">دج</span></span>
+                                            <span class="text-xs font-bold ${pct > 0 ? 'text-blue-600' : 'text-slate-400'}">${pct}% من السنة</span>
+                                        </div>
+
+                                        <!-- Progress bar -->
+                                        <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden mb-2.5">
+                                            <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-300" style="width: ${Math.min(pct, 100)}%"></div>
+                                        </div>
+
+                                        <!-- Mini Breakdown -->
+                                        <div class="space-y-1 text-[11px] text-slate-600 bg-slate-50/70 p-2 rounded-xl border border-slate-100 mb-2">
+                                            <div class="flex justify-between items-center">
+                                                <span class="text-slate-500 font-medium">يومية:</span>
+                                                <span class="font-bold text-slate-800">${m.daily.toLocaleString()} دج</span>
+                                            </div>
+                                            <div class="flex justify-between items-center">
+                                                <span class="text-slate-500 font-medium">منزل:</span>
+                                                <span class="font-bold text-slate-800">${m.home.toLocaleString()} دج</span>
+                                            </div>
+                                            <div class="flex justify-between items-center">
+                                                <span class="text-slate-500 font-medium">فواتير دائمة:</span>
+                                                <span class="font-bold text-slate-800">${m.fixed_monthly.toLocaleString()} دج</span>
+                                            </div>
+                                            <div class="flex justify-between items-center">
+                                                <span class="text-slate-500 font-medium">عامة وصيانة:</span>
+                                                <span class="font-bold text-slate-800">${(m.general + m.maintenance + m.supplies).toLocaleString()} دج</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Filter Button -->
+                                    <button type="button" onclick="filterExpensesByMonth(${selYear}, ${m.month})" class="w-full py-1.5 ${isFiltered ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700'} rounded-xl text-[11px] font-bold transition-all text-center flex items-center justify-center gap-1 cursor-pointer">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                        <span>${isFiltered ? '✓ معروض في السجل' : 'عرض فواتير هذا الشهر'}</span>
+                                    </button>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+
+                <!-- Detailed Table Matrix for 12 Months -->
+                <div class="mt-4 bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs">
+                    <div class="p-3.5 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
+                        <span class="text-xs font-black text-slate-800">جدول مصفوفة تفاصيل المصاريف الشهرية - سنة ${selYear}</span>
+                        <span class="text-[11px] text-slate-500 font-bold">المبالغ بالدينار الجزائري (دج)</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right text-xs">
+                            <thead class="bg-slate-100/70 text-slate-700 font-bold border-b border-slate-200">
+                                <tr>
+                                    <th class="p-3 whitespace-nowrap">الشهر</th>
+                                    <th class="p-3 whitespace-nowrap text-blue-700">الإجمالي</th>
+                                    <th class="p-3 whitespace-nowrap text-slate-600">يومية</th>
+                                    <th class="p-3 whitespace-nowrap text-slate-600">منزل</th>
+                                    <th class="p-3 whitespace-nowrap text-slate-600">فواتير دائمة</th>
+                                    <th class="p-3 whitespace-nowrap text-slate-600">عامة وتجهيزات</th>
+                                    <th class="p-3 whitespace-nowrap text-slate-600">صيانة ونظافة</th>
+                                    <th class="p-3 whitespace-nowrap text-center">العمليات</th>
+                                    <th class="p-3 whitespace-nowrap text-center">إجراء</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${monthlyData.map(m => {
+                                    const isCurrent = (selYear === currentYear && m.month === currentMonth);
+                                    return `
+                                        <tr class="${isCurrent ? 'bg-blue-50/30 font-semibold' : 'hover:bg-slate-50'} transition-colors">
+                                            <td class="p-3 whitespace-nowrap font-bold text-slate-800 flex items-center gap-1.5">
+                                                <span>${m.name}</span>
+                                                ${isCurrent ? '<span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span>' : ''}
+                                            </td>
+                                            <td class="p-3 whitespace-nowrap font-black text-blue-900" dir="ltr">${m.total.toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-slate-700">${m.daily.toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-slate-700">${m.home.toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-slate-700">${m.fixed_monthly.toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-slate-700">${m.general.toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-slate-700">${(m.maintenance + m.supplies).toLocaleString()} دج</td>
+                                            <td class="p-3 whitespace-nowrap text-center font-bold text-slate-500">${m.count}</td>
+                                            <td class="p-3 whitespace-nowrap text-center">
+                                                <button type="button" onclick="filterExpensesByMonth(${selYear}, ${m.month})" class="text-[11px] text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer">
+                                                    عرض بالسجل
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                            <tfoot class="bg-slate-50 font-black text-slate-900 border-t-2 border-slate-200">
+                                <tr>
+                                    <td class="p-3">مجموع سنة ${selYear}</td>
+                                    <td class="p-3 text-blue-900" dir="ltr">${yearTotal.toLocaleString()} دج</td>
+                                    <td class="p-3">${yearDaily.toLocaleString()} دج</td>
+                                    <td class="p-3">${yearHome.toLocaleString()} دج</td>
+                                    <td class="p-3">${yearFixed.toLocaleString()} دج</td>
+                                    <td class="p-3">${yearGeneral.toLocaleString()} دج</td>
+                                    <td class="p-3">${(yearMaintenance + yearSupplies).toLocaleString()} دج</td>
+                                    <td class="p-3 text-center">${yearCount}</td>
+                                    <td class="p-3 text-center">-</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ==========================================
+        // 3. Build Yearly Data (Tab 2)
+        // ==========================================
+        const yearlyContainer = document.getElementById('expensesYearlyDetailsContainer');
+        if (yearlyContainer) {
+            let allTimeGrandTotal = 0;
+            const yearlyStatsMap = {};
+
+            sortedYears.forEach(y => {
+                yearlyStatsMap[y] = {
+                    year: y,
+                    total: 0,
+                    count: 0,
+                    daily: 0,
+                    home: 0,
+                    fixed_monthly: 0,
+                    general: 0,
+                    maintenance: 0,
+                    supplies: 0
+                };
+            });
+
+            allExpenses.forEach(ex => {
+                if (!ex || !ex.date) return;
+                const d = new Date(ex.date);
+                const y = d.getFullYear();
+                const amt = Number(ex.amount) || 0;
+                const cat = getExpenseCategory(ex);
+
+                allTimeGrandTotal += amt;
+                if (!yearlyStatsMap[y]) {
+                    yearlyStatsMap[y] = {
+                        year: y, total: 0, count: 0,
+                        daily: 0, home: 0, fixed_monthly: 0,
+                        general: 0, maintenance: 0, supplies: 0
+                    };
+                }
+                yearlyStatsMap[y].total += amt;
+                yearlyStatsMap[y].count++;
+
+                if (cat === 'daily') yearlyStatsMap[y].daily += amt;
+                else if (cat === 'home') yearlyStatsMap[y].home += amt;
+                else if (cat === 'fixed_monthly') yearlyStatsMap[y].fixed_monthly += amt;
+                else if (cat === 'maintenance') yearlyStatsMap[y].maintenance += amt;
+                else if (cat === 'supplies') yearlyStatsMap[y].supplies += amt;
+                else yearlyStatsMap[y].general += amt;
+            });
+
+            const yearlyArray = sortedYears.map(y => yearlyStatsMap[y]);
+
+            yearlyContainer.innerHTML = `
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-black text-slate-800">المقارنة والمجاميع السنوية الشاملة لكافة السنوات</h3>
+                        <span class="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1 rounded-xl">
+                            الإجمالي التراكمي العام: ${allTimeGrandTotal.toLocaleString()} دج
+                        </span>
+                    </div>
+
+                    <!-- Year Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        ${yearlyArray.map(ystat => {
+                            const isCur = (ystat.year === currentYear);
+                            const mCount = isCur ? (currentMonth + 1) : 12;
+                            const yMonthlyAvg = mCount > 0 ? Math.round(ystat.total / mCount) : 0;
+                            const yPct = allTimeGrandTotal > 0 ? Math.round((ystat.total / allTimeGrandTotal) * 100) : 0;
+
+                            return `
+                                <div class="bg-white border ${isCur ? 'border-blue-400 ring-2 ring-blue-500/10' : 'border-slate-200'} p-4 rounded-2xl shadow-xs space-y-3">
+                                    <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-base font-black text-slate-900">سنة ${ystat.year}</span>
+                                            ${isCur ? '<span class="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-lg">السنة الحالية</span>' : ''}
+                                        </div>
+                                        <span class="text-xs font-bold text-slate-400">${ystat.count} عملية</span>
+                                    </div>
+
+                                    <div class="space-y-1">
+                                        <div class="text-xs text-slate-500 font-medium">إجمالي مصاريف العام:</div>
+                                        <div class="text-xl font-black text-blue-950" dir="ltr">${ystat.total.toLocaleString()} <span class="text-xs text-slate-500 font-normal">دج</span></div>
+                                        <div class="text-xs text-slate-500">المتوسط الشهري: <strong class="text-slate-800">${yMonthlyAvg.toLocaleString()} دج</strong> / شهر</div>
+                                    </div>
+
+                                    <!-- Category distribution breakdown -->
+                                    <div class="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-1 text-xs">
+                                        <div class="flex justify-between text-slate-600">
+                                            <span>مصاريف يومية:</span>
+                                            <strong class="text-slate-800">${ystat.daily.toLocaleString()} دج</strong>
+                                        </div>
+                                        <div class="flex justify-between text-slate-600">
+                                            <span>منزل في القاعة:</span>
+                                            <strong class="text-slate-800">${ystat.home.toLocaleString()} دج</strong>
+                                        </div>
+                                        <div class="flex justify-between text-slate-600">
+                                            <span>فواتير دائمة:</span>
+                                            <strong class="text-slate-800">${ystat.fixed_monthly.toLocaleString()} دج</strong>
+                                        </div>
+                                        <div class="flex justify-between text-slate-600">
+                                            <span>عامة وتجهيزات:</span>
+                                            <strong class="text-slate-800">${(ystat.general + ystat.maintenance + ystat.supplies).toLocaleString()} دج</strong>
+                                        </div>
+                                    </div>
+
+                                    <button type="button" onclick="changeExpensesDetailedYear(${ystat.year}); setExpensesDetailedTab('monthly');" class="w-full py-2 bg-blue-50 hover:bg-blue-600 text-blue-700 hover:text-white rounded-xl text-xs font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer">
+                                        <span>عرض تفاصيل أشهر سنة ${ystat.year}</span>
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                                    </button>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+
+                    <!-- Yearly Comparison Table -->
+                    <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+                        <div class="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                            <span class="text-xs font-black text-slate-800">جدول مقارنة السنوات المالية للمصاريف</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-right text-xs">
+                                <thead class="bg-slate-100/70 text-slate-700 font-bold border-b border-slate-200">
+                                    <tr>
+                                        <th class="p-3 whitespace-nowrap">السنة</th>
+                                        <th class="p-3 whitespace-nowrap text-blue-700">إجمالي المصاريف</th>
+                                        <th class="p-3 whitespace-nowrap">المتوسط الشهري</th>
+                                        <th class="p-3 whitespace-nowrap">يومية</th>
+                                        <th class="p-3 whitespace-nowrap">منزل</th>
+                                        <th class="p-3 whitespace-nowrap">فواتير دائمة</th>
+                                        <th class="p-3 whitespace-nowrap">عامة وتجهيزات</th>
+                                        <th class="p-3 whitespace-nowrap text-center">العمليات</th>
+                                        <th class="p-3 whitespace-nowrap text-center">النسبة من الإجمالي</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    ${yearlyArray.map(ystat => {
+                                        const isCur = (ystat.year === currentYear);
+                                        const mCount = isCur ? (currentMonth + 1) : 12;
+                                        const yMonthlyAvg = mCount > 0 ? Math.round(ystat.total / mCount) : 0;
+                                        const yPct = allTimeGrandTotal > 0 ? Math.round((ystat.total / allTimeGrandTotal) * 100) : 0;
+
+                                        return `
+                                            <tr class="${isCur ? 'bg-blue-50/30 font-semibold' : 'hover:bg-slate-50'} transition-colors">
+                                                <td class="p-3 whitespace-nowrap font-black text-slate-900">${ystat.year}</td>
+                                                <td class="p-3 whitespace-nowrap font-black text-blue-900" dir="ltr">${ystat.total.toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap font-bold text-slate-700">${yMonthlyAvg.toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap text-slate-700">${ystat.daily.toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap text-slate-700">${ystat.home.toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap text-slate-700">${ystat.fixed_monthly.toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap text-slate-700">${(ystat.general + ystat.maintenance + ystat.supplies).toLocaleString()} دج</td>
+                                                <td class="p-3 whitespace-nowrap text-center font-bold text-slate-500">${ystat.count}</td>
+                                                <td class="p-3 whitespace-nowrap text-center">
+                                                    <span class="inline-block bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded-full">${yPct}%</span>
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    };
+
     window.renderExpensesListView = function() {
         const container = document.getElementById('expensesListView');
         if (!container) return; const allExpenses = Array.isArray(appState.expenses) ? appState.expenses : [];
@@ -3031,6 +3583,12 @@ window.setElemRequired = setElemRequired;
         if (generalTotalElem) generalTotalElem.innerHTML = `${generalTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (generalMonthElem) generalMonthElem.innerText = `${generalMonth.toLocaleString()} دج`;
         if (generalYearElem) generalYearElem.innerText = `${generalYear.toLocaleString()} دج`;
+
+        // Render the detailed monthly & yearly totals
+        if (typeof window.renderExpensesDetailedTotals === 'function') {
+            window.renderExpensesDetailedTotals();
+        }
+
         // 2. Filter & Render List
         const searchInput = document.getElementById('searchExpenseInput');
         const catFilter = document.getElementById('filterExpenseCategoryView');
@@ -3040,6 +3598,17 @@ window.setElemRequired = setElemRequired;
         let filtered = allExpenses.filter(ex => {
             const cat = getExpenseCategory(ex);
             if (selectedCat !== 'all' && cat !== selectedCat) return false;
+
+            // Month/Year drill-down filter
+            if (window.expensesDetailedState && window.expensesDetailedState.filterMonth !== null && window.expensesDetailedState.filterYear !== null) {
+                if (ex.date) {
+                    const d = new Date(ex.date);
+                    if (d.getFullYear() !== window.expensesDetailedState.filterYear || d.getMonth() !== window.expensesDetailedState.filterMonth) {
+                        return false;
+                    }
+                }
+            }
+
             if (q) { const combined = `${ex.desc || ''} ${getExpenseCategoryDetails(cat).label}`.toLowerCase();
                 if (!combined.includes(q)) return false;
             } return true; }); if (countBadge) {
@@ -6096,50 +6665,125 @@ window.setElemRequired = setElemRequired;
             qtyInput.select(); }
         showSuccessToast(`تم اختيار (${product.name}) — أدخل الكمية المطلوبة ثم اضغط تأكيد البيع`);
         isProcessingBarcode = false; } window.chooseStockForSale = chooseStockForSale;
-    async function executeProductSale(product, requestedQty, coachName) {
-        if (!product) { isProcessingBarcode = false;
-            return false; } if (product.stockLocation === 'stock2') {
+    function setQuickSellQty(qty) {
+        const input = document.getElementById('sellProdQty');
+        if (input) {
+            input.value = Math.max(0.001, parseFloat(qty) || 1);
+            if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
+        }
+    }
+    window.setQuickSellQty = setQuickSellQty;
+
+    function changeQuickSellQty(delta) {
+        const input = document.getElementById('sellProdQty');
+        if (input) {
+            let current = parseFloat(input.value) || 1;
+            let next = Math.max(1, Math.round(current + delta));
+            input.value = next;
+            if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
+        }
+    }
+    window.changeQuickSellQty = changeQuickSellQty;
+
+    async function executeProductSale(product, requestedQty, coachName, customDate) {
+        if (!product) {
+            isProcessingBarcode = false;
+            return false;
+        }
+        if (product.stockLocation === 'stock2') {
             showErrorToast('عفواً! Stock 2 هو مستودع تخزين ولا يمكن البيع منه مباشرة. يرجى تحويل الكمية إلى Stock 1 أولاً.');
-            isProcessingBarcode = false; return false;
-        } const isStock2Prod = product.stockLocation === 'stock2';
-        const stockLocTitle = isStock2Prod ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
-        if (Number(product.stock || 0) <= 0) {
-            showErrorToast(`انتهت كمية هذا المنتج من Stock 1!`);
-            isProcessingBarcode = false; return false;
-        } try { const qtyInput = document.getElementById('sellProdQty');
-            let qty = requestedQty !== undefined ? Number(requestedQty) : ((qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1);
+            isProcessingBarcode = false;
+            return false;
+        }
+        const currentStock = Number(product.stock || 0);
+        if (currentStock <= 0) {
+            showErrorToast(`انتهت كمية [${product.name}] من Stock 1!`);
+            isProcessingBarcode = false;
+            return false;
+        }
+        try {
+            const qtyInput = document.getElementById('sellProdQty');
+            let qty = (requestedQty !== undefined && requestedQty !== null && Number(requestedQty) > 0)
+                ? Number(requestedQty)
+                : ((qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1);
+
             const coachInput = document.getElementById('sellCoachName');
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
-            if (Number(product.stock || 0) < qty) {
-                showErrorToast(`الكمية المطلوبة (${qty}) غير متوفرة في Stock 1 (${product.stock || 0})`);
-                return false; } let salePrice = Number(product.price || 0);
+
+            if (currentStock < qty) {
+                showErrorToast(`الكمية المطلوبة (${qty}) غير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
+                return false;
+            }
+
+            // Date parsing
+            let dateStr = customDate;
+            if (!dateStr) {
+                const dateVal = getElemVal('sellDate') || '';
+                if (dateVal) {
+                    const now = new Date();
+                    const parts = dateVal.split('-');
+                    if (parts.length === 3) {
+                        const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), now.getHours(), now.getMinutes(), now.getSeconds());
+                        dateStr = !isNaN(dt.getTime()) ? dt.toISOString() : new Date().toISOString();
+                    } else {
+                        dateStr = new Date(dateVal).toISOString();
+                    }
+                } else {
+                    dateStr = new Date().toISOString();
+                }
+            }
+
+            let salePrice = Number(product.price || 0);
             let saleCost = Number(product.cost || 0) * qty;
-            let saleTotal = salePrice * qty; let saleProfit = saleTotal - saleCost;
+            let saleTotal = salePrice * qty;
+            let saleProfit = saleTotal - saleCost;
             let coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
             let prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
             let saleLabel = product.name;
-            product.stock = Number(product.stock || 0) - qty;
+
+            // Deduct quantity from stock
+            product.stock = currentStock - qty;
+
             if (!appState.sales) appState.sales = [];
-            const newSale = { id: Date.now().toString(),
-                prodId: product.id, prodName: saleLabel,
+            const newSale = {
+                id: Date.now().toString(),
+                prodId: product.id,
+                prodName: saleLabel,
                 category: prodCategory,
                 stockLocation: product.stockLocation || 'stock1',
-                stockName: 'مخزون 1', qty: qty,
-                price: salePrice, cost: saleCost,
-                total: saleTotal, profit: saleProfit,
+                stockName: 'مخزون 1',
+                qty: qty,
+                price: salePrice,
+                cost: saleCost,
+                total: saleTotal,
+                profit: saleProfit,
                 coachName: coachVal,
                 coachCommission: coachCommission,
-                date: new Date().toISOString() };
+                date: dateStr
+            };
+
             appState.sales.unshift(newSale);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('sales', newSale);
                 window.saveFirebaseSectionItem('products', product);
             }
             saveState();
-            playBeep(); showSuccessToast(`تم بيع (${qty}) من ${product.name} وخصمها من Stock 1`);
+
+            if (typeof logActivity === 'function') {
+                logActivity('sale', 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} - الإجمالي: ${saleTotal} دج`, saleTotal);
+            }
+
+            playBeep();
+            showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] بنجاح بدون تأكيد! (المتبقي: ${product.stock})`);
+
+            if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
+            if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
             if (typeof render === 'function') render();
-            return true; } finally {
-            isProcessingBarcode = false; } }
+            return true;
+        } finally {
+            isProcessingBarcode = false;
+        }
+    }
     window.executeProductSale = executeProductSale;
     async function processBarcode(barcode) {
         barcode = String(barcode ?? '').trim();
@@ -6175,37 +6819,51 @@ window.setElemRequired = setElemRequired;
                 return; } if (scanContext === 'sales') {
                 const prodStock1 = candidateProducts.find(p => !p.stockLocation || p.stockLocation === 'stock1');
                 const prodStock2 = candidateProducts.find(p => p.stockLocation === 'stock2');
-                if (prodStock1) { if (Number(prodStock1.stock || 0) <= 0) {
+                if (prodStock1) {
+                    if (Number(prodStock1.stock || 0) <= 0) {
                         if (prodStock2 && Number(prodStock2.stock || 0) > 0) {
                             showErrorToast(`نفدت الكمية من Stock 1! توجد كمية (${prodStock2.stock}) بالمستودع (Stock 2). يرجى تحويلها إلى Stock 1 أولاً لبيعها.`);
-                        } else { showErrorToast(`انتهت كمية ${prodStock1.name} من Stock 1!`);
-                        } await closeBarcodeCamera();
+                        } else {
+                            showErrorToast(`انتهت كمية [${prodStock1.name}] من Stock 1!`);
+                        }
+                        await closeBarcodeCamera();
                         isProcessingBarcode = false;
-                        return; }
-                    // Select product in the manual sales form so user can enter quantity manually
-                    const sellProdIdSelect = document.getElementById('sellProdId');
-                    if (sellProdIdSelect) {
-                        sellProdIdSelect.value = prodStock1.id;
-                        if (typeof updateStockInfoDisplay === 'function') {
-                            updateStockInfoDisplay();
-                        } } const sellBarcodeInput = document.getElementById('sellBarcode');
+                        return;
+                    }
+
+                    // Direct Sale with chosen quantity without extra confirmation
+                    const qtyInput = document.getElementById('sellProdQty');
+                    const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
+
+                    if (Number(prodStock1.stock || 0) < chosenQty) {
+                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوبة للبيع (${chosenQty})!`);
+                        await closeBarcodeCamera();
+                        isProcessingBarcode = false;
+                        return;
+                    }
+
+                    await executeProductSale(prodStock1, chosenQty);
+
+                    const sellBarcodeInput = document.getElementById('sellBarcode');
                     if (sellBarcodeInput) {
-                        sellBarcodeInput.value = prodStock1.barcode || barcode;
-                    } const qtyInput = document.getElementById('sellProdQty');
-                    if (qtyInput) { qtyInput.focus();
-                        qtyInput.select(); }
+                        sellBarcodeInput.value = '';
+                        sellBarcodeInput.focus();
+                    }
                     await closeBarcodeCamera();
-                    playBeep(); showSuccessToast(`تم اختيار (${prodStock1.name}) — أدخل الكمية المطلوبة ثم اضغط تأكيد البيع`);
                     isProcessingBarcode = false;
-                    return; } else if (prodStock2) {
+                    return;
+                } else if (prodStock2) {
                     showErrorToast(`عفواً! المنتج (${prodStock2.name}) متوفر في المستودع (Stock 2) فقط (${prodStock2.stock} قطعة). لا يمكن البيع المباشر من المستودع، يرجى تحويل الكمية إلى Stock 1 أولاً.`);
                     await closeBarcodeCamera();
                     isProcessingBarcode = false;
-                    return; } else {
+                    return;
+                } else {
                     showErrorToast('المنتج غير مسجل في Stock 1!');
                     await closeBarcodeCamera();
                     isProcessingBarcode = false;
-                    return; } } else if (scanContext === 'inventory_search' || scanContext === 'search') {
+                    return;
+                }
+            } else if (scanContext === 'inventory_search' || scanContext === 'search') {
                 // Inventory Search scan
                 await closeBarcodeCamera();
                 const product = candidateProducts[0];
@@ -6911,14 +7569,17 @@ window.setElemRequired = setElemRequired;
 
                 <!-- Action Buttons -->
                 <div class="flex items-center gap-2 pt-2">
-                    <button onclick="openEditModal('${c.id}')" class="w-11 h-11 rounded-2xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors shrink-0" title="تعديل المشترك">
+                    <button type="button" onclick="openEditModal('${c.id}')" class="w-11 h-11 rounded-2xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors shrink-0 cursor-pointer" title="تعديل المشترك">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                     </button>
-                    <button onclick="toggleFreeze('${c.id}')" class="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center">
+                    <button type="button" onclick="toggleFreeze('${c.id}')" class="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center cursor-pointer">
                         ${c.status === 'frozen' ? 'إلغاء التجميد' : 'تجميد'}
                     </button>
-                    <button onclick="openMessageModal('${c.id}')" class="flex-1 py-3 bg-[#2563eb] hover:bg-blue-700 text-white rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center shadow-md shadow-blue-100">
+                    <button type="button" onclick="openMessageModal('${c.id}')" class="flex-1 py-3 bg-[#2563eb] hover:bg-blue-700 text-white rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center shadow-md shadow-blue-100 cursor-pointer">
                         مراسلة
+                    </button>
+                    <button type="button" onclick="deleteCustomer('${c.id}')" class="w-11 h-11 rounded-2xl bg-red-50 hover:bg-red-500 hover:text-white text-red-600 flex items-center justify-center transition-all shrink-0 cursor-pointer border border-red-100 hover:border-red-500 active:scale-95 shadow-2xs" title="حذف المشترك">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                     </button>
                 </div>
             </div>
@@ -9215,7 +9876,7 @@ window.setElemRequired = setElemRequired;
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }

@@ -12,7 +12,23 @@
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
   <script>
-    // Ensure critical inline event handlers have safe stubs if clicked before module completes
+    // Ensure critical inline event handlers have safe global stubs immediately
+    window.setQuickSellQty = function(qty) {
+      var input = document.getElementById('sellProdQty');
+      if (input) {
+        input.value = Math.max(0.001, parseFloat(qty) || 1);
+        if (typeof window.updateStockInfoDisplay === 'function') window.updateStockInfoDisplay();
+      }
+    };
+    window.changeQuickSellQty = function(delta) {
+      var input = document.getElementById('sellProdQty');
+      if (input) {
+        var current = parseFloat(input.value) || 1;
+        var next = Math.max(1, Math.round(current + delta));
+        input.value = next;
+        if (typeof window.updateStockInfoDisplay === 'function') window.updateStockInfoDisplay();
+      }
+    };
     window.generateMockTestData = window.generateMockTestData || function() {
       console.warn('generateMockTestData is loading...');
     };
@@ -762,7 +778,7 @@
                         <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
                         نقطة البيع السريعة (POS)
                       </h2>
-                      <form id="sellProductForm" class="bg-gradient-to-br from-blue-50 to-white p-5 rounded-2xl border border-blue-100 shadow-sm space-y-4">
+                      <form id="sellProductForm" class="bg-gradient-to-br from-blue-50/70 to-white p-5 rounded-2xl border border-blue-100 shadow-sm space-y-4">
                           <!-- Sell Stock Indicator: Stock 1 active only -->
                           <div>
                               <label class="block text-[10px] text-blue-900 mb-1.5 font-bold flex items-center justify-between">
@@ -770,43 +786,90 @@
                                   <span id="sellStockLocationBadge" class="text-[9px] px-2.5 py-1 rounded-md font-extrabold bg-blue-100 text-blue-800 border border-blue-200">Stock 1 (صالة البيع)</span>
                               </label>
                               <div class="p-2.5 bg-blue-50/90 rounded-xl border border-blue-200 text-xs font-bold text-blue-900 flex items-center gap-2 shadow-2xs">
-                                  <span class="text-lg"></span>
+                                  <span class="text-lg">⚡</span>
                                   <div>
                                       <div class="text-slate-900">البيع المباشر مسموح فقط من <strong class="text-blue-700">Stock 1</strong></div>
-                                      <div class="text-[10px] text-slate-500 font-medium mt-0.5">Stock 2 هو مستودع تخزين (يتم تحويل البضائع منه إلى Stock 1 للبيع)</div>
+                                      <div class="text-[10px] text-slate-500 font-medium mt-0.5">حدد الكمية أولاً ثم مرر الباركود ليتم البيع فوراً بدون تأكيد</div>
                                   </div> </div>
                               <input type="hidden" id="sellStockLocation" value="stock1">
-                          </div> <div>
-                              <label class="block text-[10px] text-slate-500 mb-1 font-bold">مسح الباركود</label>
+                          </div>
+
+                          <!-- Step 1: Quantity Selection (اختر أو اكتب الكمية أولاً) -->
+                          <div id="sellQtyContainer" class="p-3 bg-white rounded-xl border-2 border-indigo-200/80 shadow-2xs space-y-2">
+                              <div class="flex items-center justify-between">
+                                  <label class="block text-xs text-indigo-950 font-black flex items-center gap-1.5">
+                                      <span class="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] inline-flex items-center justify-center font-bold">1</span>
+                                      <span>الكمية للبيع (حدد الكمية أولاً):</span>
+                                  </label>
+                                  <span class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">المسح يبيع بهذه الكمية</span>
+                              </div>
+                              <div class="flex gap-2 items-center">
+                                  <button type="button" onclick="window.changeQuickSellQty(-1)" class="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-base flex items-center justify-center transition-all active:scale-95 border border-slate-200 cursor-pointer">-</button>
+                                  <input type="number" id="sellProdQty" step="any" required min="0.001" value="1" placeholder="1" class="flex-1 text-center border-2 border-indigo-300 rounded-xl px-3 py-2 text-base outline-none focus:border-indigo-600 bg-white font-black text-indigo-950 shadow-inner">
+                                  <button type="button" onclick="window.changeQuickSellQty(1)" class="w-10 h-10 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black text-base flex items-center justify-center transition-all active:scale-95 border border-indigo-200 cursor-pointer">+</button>
+                              </div>
+                              <!-- Quick Quantity Presets -->
+                              <div class="flex items-center gap-1.5 pt-1 overflow-x-auto pb-0.5">
+                                  <span class="text-[10px] text-slate-400 font-bold shrink-0">كميات سريعة:</span>
+                                  <button type="button" onclick="window.setQuickSellQty(1)" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">1</button>
+                                  <button type="button" onclick="window.setQuickSellQty(2)" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">2</button>
+                                  <button type="button" onclick="window.setQuickSellQty(3)" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">3</button>
+                                  <button type="button" onclick="window.setQuickSellQty(5)" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">5</button>
+                                  <button type="button" onclick="window.setQuickSellQty(10)" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">10</button>
+                              </div>
+                          </div>
+
+                          <!-- Step 2: Barcode Scan - Sells immediately with the quantity chosen above -->
+                          <div class="p-3 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-xl border-2 border-blue-300/80 shadow-2xs space-y-2">
+                              <div class="flex items-center justify-between">
+                                  <label class="block text-xs text-blue-950 font-black flex items-center gap-1.5">
+                                      <span class="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] inline-flex items-center justify-center font-bold">2</span>
+                                      <span>مسح الباركود (بيع فوري ومباشر):</span>
+                                  </label>
+                                  <span class="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                      <span>بيع تلقائي مباشر</span>
+                                  </span>
+                              </div>
                               <div class="flex gap-2 items-center w-full">
-                                  <input type="text" id="sellBarcode" autofocus placeholder="مرر الباركود هنا..." class="flex-1 min-w-0 border border-blue-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white shadow-xs" onkeypress="handleBarcodeScan(event)">
+                                  <input type="text" id="sellBarcode" autofocus placeholder="مرر الباركود هنا للبيع الفوري..." class="flex-1 min-w-0 border-2 border-blue-300 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-600 bg-white font-mono font-bold shadow-xs text-slate-800" onkeypress="handleBarcodeScan(event)">
                                   <button type="button" id="startCameraBtn" onclick="openBarcodeCamera('sales')" class="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2.5 rounded-xl border border-blue-600 transition-all font-bold text-xs flex items-center gap-1.5 shadow-xs" title="مسح بالكاميرا">
                                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                                       <span>الكاميرا</span>
                                   </button>
-                              </div> </div>
-                          <div>
-                              <label class="block text-[10px] text-slate-500 mb-1 font-bold">المنتج (اختيار يدوي)</label>
-                              <select id="sellProdId" required class="w-full border border-blue-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white cursor-pointer shadow-sm font-bold text-slate-800">
-                                  <option value="">اختر المنتج...</option>
-                              </select> </div>
-                          <div id="sellQtyContainer">
-                              <label class="block text-[10px] text-slate-500 mb-1 font-bold">الكمية المباعة</label>
-                              <input type="number" id="sellProdQty" step="any" required min="0.001" value="1" placeholder="مثال: 50" class="w-full border border-blue-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white shadow-sm font-bold text-slate-800">
+                              </div>
+                              <div class="text-[11px] text-blue-700 font-medium flex items-center gap-1">
+                                  <svg class="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                  <span>عند تمرير قارئ الباركود يتم البيع والخصم من Stock 1 مباشرة بدون الحاجة للضغط على أي زر.</span>
+                              </div>
+                          </div>
+
+                          <!-- Fallback: Manual Product Selection -->
+                          <div class="pt-2 border-t border-slate-200/80 space-y-3">
+                              <div class="flex items-center justify-between">
+                                  <label class="block text-[11px] text-slate-600 font-bold">أو اختيار المنتج يدوياً (في حال عدم وجود باركود):</label>
+                              </div>
+                              <select id="sellProdId" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm outline-none focus:border-blue-500 bg-white cursor-pointer shadow-xs font-bold text-slate-800">
+                                  <option value="">-- اختر المنتج يدوياً --</option>
+                              </select>
                           </div>
                           <div id="stockInfo" class="text-xs text-blue-800 font-bold p-2.5 bg-blue-50/90 rounded-xl border border-blue-200 hidden">
-                          </div> <div>
-                              <label class="block text-[10px] text-slate-500 mb-1 font-bold">المدرب / المسؤول عن البيع (اختياري)</label>
-                              <input type="text" id="sellCoachName" list="coachesList" placeholder="اكتب اسم المدرب أو اختر..." class="w-full border border-blue-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 bg-white shadow-sm">
-                              <datalist id="coachesList"></datalist>
-                          </div> <div>
-                              <label class="block text-[10px] text-slate-500 mb-1 font-bold flex items-center gap-1">
-                                  <svg class="w-3.5 h-3.5 text-blue-600 inline date-icon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                  <span>تاريخ البيع</span>
-                              </label>
-                              <input type="date" id="sellDate" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                           </div>
-                          <button type="submit" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors shadow-md shadow-blue-200 mt-2">تأكيد البيع وخصم المخزون</button>
+                          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                  <label class="block text-[10px] text-slate-500 mb-1 font-bold">المدرب / المسؤول (اختياري)</label>
+                                  <input type="text" id="sellCoachName" list="coachesList" placeholder="اكتب اسم المدرب..." class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500 bg-white shadow-xs">
+                                  <datalist id="coachesList"></datalist>
+                              </div>
+                              <div>
+                                  <label class="block text-[10px] text-slate-500 mb-1 font-bold flex items-center gap-1">
+                                      <svg class="w-3.5 h-3.5 text-blue-600 inline date-icon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                      <span>تاريخ البيع</span>
+                                  </label>
+                                  <input type="date" id="sellDate" class="w-full bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold shadow-xs outline-none focus:border-blue-500">
+                              </div>
+                          </div>
+                          <button type="submit" class="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs sm:text-sm font-bold transition-all shadow-md active:scale-98 mt-1">تأكيد البيع اليدوي</button>
                       </form> </div> <div>
                       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                           <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
@@ -908,7 +971,11 @@
                   <div id="filterTabsView" class="flex gap-2 overflow-x-auto pb-2 hide-scrollbar"></div>
                   <div class="space-y-3 max-h-[calc(100vh-320px)] min-h-[400px] overflow-y-auto pr-2 hide-scrollbar">
                       <div id="customersGridView" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
-                  </div> </div> </div> </div>
+                  </div>
+              </div>
+          </div>
+      </div>
+  </div>
   <div id="expensesView" class="hidden flex-1 flex-col relative z-0">
       <div class="px-4 md:px-8 py-6 max-w-7xl mx-auto w-full">
           <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
@@ -1041,6 +1108,57 @@
                 <span>الإجمالي الكلي:</span>
                 <span id="generalExpensesTotal" class="text-slate-800 font-black">0 دج</span>
               </div> </div> </div>
+
+          <!-- NEW: Detailed Monthly & Yearly Totals Section (مجاميع وتفاصيل المصاريف الشهرية والسنوية) -->
+          <div id="expensesDetailedSection" class="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm mb-6 transition-all">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-5">
+              <div class="space-y-1">
+                <h2 class="text-lg md:text-xl font-black text-slate-900 flex items-center gap-2">
+                  <span class="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                  </span>
+                  <span>مجاميع وتفاصيل المصاريف الشهرية والسنوية</span>
+                </h2>
+                <p class="text-xs text-slate-500 font-medium">جدول وإحصائيات تفصيلية لتوزيع التكاليف والمصاريف على مدار أشهر السنة ومقارنة السنوات بالأصناف والنسب</p>
+              </div>
+
+              <!-- Controls: Tabs & Year Selector -->
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <!-- Tab toggle -->
+                <div class="inline-flex p-1 bg-slate-100/90 rounded-2xl border border-slate-200 text-xs font-bold shadow-2xs">
+                  <button type="button" id="expenseTabMonthlyBtn" onclick="setExpensesDetailedTab('monthly')" class="px-3.5 py-1.5 rounded-xl bg-white text-blue-700 shadow-2xs font-black transition-all cursor-pointer">التفصيل الشهري</button>
+                  <button type="button" id="expenseTabYearlyBtn" onclick="setExpensesDetailedTab('yearly')" class="px-3.5 py-1.5 rounded-xl text-slate-600 hover:text-slate-900 transition-all cursor-pointer">المقارنة السنوية</button>
+                </div>
+
+                <!-- Year Selector for Monthly Tab -->
+                <div id="expenseYearSelectWrapper" class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-2xl">
+                  <label for="selectExpenseDetailedYear" class="text-xs font-bold text-slate-600 whitespace-nowrap">السنة:</label>
+                  <select id="selectExpenseDetailedYear" onchange="changeExpensesDetailedYear(this.value)" class="bg-white border border-slate-200 rounded-xl px-2.5 py-1 text-xs font-black text-slate-800 outline-none focus:border-blue-500 shadow-2xs cursor-pointer">
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Active Month Filter Banner (if filtered by month) -->
+            <div id="activeExpenseMonthFilterBanner" class="hidden items-center justify-between bg-blue-50 border border-blue-200 rounded-2xl px-4 py-2.5 mb-5 text-xs font-bold text-blue-900 animate-fadeIn">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse"></span>
+                <span>تصفية السجل مفعلة على: <strong id="activeExpenseMonthFilterLabel" class="text-blue-950 font-black"></strong></span>
+              </div>
+              <button type="button" onclick="clearExpensesMonthFilter()" class="text-blue-700 hover:text-blue-900 bg-white hover:bg-blue-100/50 px-3 py-1 rounded-xl border border-blue-200 text-[11px] font-black transition-all cursor-pointer">إلغاء التصفية وعرض كل المصاريف</button>
+            </div>
+
+            <!-- Tab 1: Monthly Detailed Breakdown Container -->
+            <div id="expensesMonthlyDetailsContainer" class="space-y-4">
+              <!-- Dynamically rendered -->
+            </div>
+
+            <!-- Tab 2: Yearly Summary Comparison Container -->
+            <div id="expensesYearlyDetailsContainer" class="hidden space-y-4">
+              <!-- Dynamically rendered -->
+            </div>
+          </div>
+
           <div class="flex flex-col lg:flex-row gap-6 lg:gap-8 mt-4">
               <div class="lg:w-1/3 space-y-4">
                   <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -1096,7 +1214,7 @@
                                   <button type="button" onclick="setExpenseDatePreset('yesterday', 'view')" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors">أمس</button>
                               </div>
                           </div>
-                          <input type="date" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                          <input type="date" id="expenseDateView" required onclick="try { this.showPicker(); } catch(e) {}" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-800">
                       </div>
                       <button type="submit" class="w-full py-3 bg-slate-900 hover:bg-black active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2">
                           <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
@@ -1130,7 +1248,7 @@
                   <div class="space-y-2 h-[calc(100vh-350px)] min-h-[300px] overflow-y-auto pr-2 hide-scrollbar">
                       <div id="expensesListView"></div>
                   </div> </div> </div> </div>
-  </div> </div>
+  </div>
   <div id="messageModal" class="modal-overlay" onclick="handleOverlayClick(event, 'messageModal')">
       <div class="modal-content relative">
           <button onclick="closeModal('messageModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 transition-colors">
@@ -1255,7 +1373,13 @@
                   <label class="block text-xs font-semibold text-slate-700 mb-1.5">المبلغ المتبقي (كريدي) بالدينار</label>
                   <input type="number" id="editDebtAmount" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-slate-800 transition-all" dir="ltr" style="text-align: right;">
               </div>
-              <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-100 transition-all mt-6">حفظ التغييرات</button>
+              <div class="flex gap-2.5 mt-6">
+                  <button type="submit" class="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-100 transition-all cursor-pointer">حفظ التغييرات</button>
+                  <button type="button" onclick="const cid = document.getElementById('editCustId').value; closeModal('editCustomerModal'); if (cid) deleteCustomer(cid);" class="px-4 py-3 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 hover:border-red-600 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer" title="حذف هذا المشترك">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                      <span>حذف المشترك</span>
+                  </button>
+              </div>
           </form> </div> </div>
   <!-- Staff Payouts & Suppliers Modal (قسم خلاص العمال والموردين) -->
   <div id="staffPayoutsModal" class="modal-overlay" onclick="handleOverlayClick(event, 'staffPayoutsModal')">
@@ -1708,7 +1832,7 @@
                           </div>
                       </div>
                       <div class="relative flex items-center">
-                          <input type="date" id="expenseDateModal" required onclick="try { this.showPicker(); } catch(e) {}" class="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                          <input type="date" id="expenseDateModal" required onclick="try { this.showPicker(); } catch(e) {}" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none focus:border-blue-500 font-bold text-slate-800">
                       </div>
                   </div>
                   <button type="submit" class="w-full py-3 bg-slate-900 hover:bg-black active:scale-[0.99] text-white rounded-xl text-sm font-bold shadow-md shadow-slate-200 transition-all flex items-center justify-center gap-2">
