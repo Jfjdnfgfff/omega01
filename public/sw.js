@@ -29,8 +29,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Do not intercept non-GET, Firebase database calls, Google Drive, or WebSockets
+  // Do not intercept non-GET, dev HMR, Firebase database calls, Google Drive, or WebSockets
   if (req.method !== 'GET') return;
+  if (url.pathname.startsWith('/@') || url.pathname.includes('node_modules') || url.search.includes('t=')) return;
   if (url.hostname.includes('firebaseio.com') ||
       url.hostname.includes('googleapis.com') ||
       url.hostname.includes('accounts.google.com')) {

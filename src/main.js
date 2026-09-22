@@ -39,7 +39,7 @@ window.setElemRequired = setElemRequired;
 
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
-  import { getDatabase, ref, set, update, push, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
+  import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -404,7 +404,7 @@ window.setElemRequired = setElemRequired;
 
     // Fast deduplication map
     const map = new Map();
-    const idProp = (sectionName === 'products') ? 'barcode' : 'id';
+    const idProp = 'id';
     
     // Add existing first (if we have bounded streaming, don't drop older items unless replaced)
     for (let i = 0; i < existing.length; i++) {
@@ -928,7 +928,7 @@ window.setElemRequired = setElemRequired;
               oldSale = existing[0];
             } else if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
               try {
-                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/sales/${cleanId}`);
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/sales/${cleanId}`));
                 if (snap && typeof snap.val === 'function' && snap.exists()) {
                   oldSale = snap.val();
                 }
@@ -971,7 +971,7 @@ window.setElemRequired = setElemRequired;
               oldExpense = existing[0];
             } else if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
               try {
-                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/expenses/${cleanId}`);
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/expenses/${cleanId}`));
                 if (snap && typeof snap.val === 'function' && snap.exists()) {
                   oldExpense = snap.val();
                 }
@@ -1084,7 +1084,7 @@ window.setElemRequired = setElemRequired;
             saleToDelete = (window.appState?.sales || []).find(s => String(s.id) === String(itemId));
             if (!saleToDelete && window.firebaseDB && window.firebaseRef && window.firebaseGet) {
               try {
-                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/sales/${cleanId}`);
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/sales/${cleanId}`));
                 if (snap && typeof snap.val === 'function' && snap.exists()) {
                   saleToDelete = snap.val();
                 }
@@ -1114,7 +1114,7 @@ window.setElemRequired = setElemRequired;
             expToDelete = (window.appState?.expenses || []).find(e => String(e.id) === String(itemId));
             if (!expToDelete && window.firebaseDB && window.firebaseRef && window.firebaseGet) {
               try {
-                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB), `v2/expenses/${cleanId}`);
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/expenses/${cleanId}`));
                 if (snap && typeof snap.val === 'function' && snap.exists()) {
                   expToDelete = snap.val();
                 }
@@ -1388,6 +1388,7 @@ window.setElemRequired = setElemRequired;
         window.firebaseSet = set;
         window.firebaseUpdate = update;
         window.firebasePush = push;
+        window.firebaseRemove = remove;
         window.firebaseRef = ref;
         window.firebaseOnValue = onValue;
         window.firebaseGet = get;
@@ -5925,6 +5926,12 @@ window.setElemRequired = setElemRequired;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
         promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
             appState.credits = []; window.appState.credits = [];
+            if (window.firebaseDB && window.firebaseRef && window.firebaseSet) {
+                try {
+                    window.firebaseSet(window.firebaseRef(window.firebaseDB, 'v2/credits'), null);
+                    window.firebaseSet(window.firebaseRef(window.firebaseDB, 'v2/openCreditsByCustomer'), null);
+                } catch(e) { console.warn('Delete all credits Firebase note:', e); }
+            }
             if (typeof logActivity === 'function') {
                 logActivity('credit', 'حذف جميع سجلات الكريدي', `تم مسح جميع سجلات الديون والكريدي بالكامل (${count} سجل)`);
             }
