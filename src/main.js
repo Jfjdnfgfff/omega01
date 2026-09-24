@@ -146,7 +146,7 @@ window.setElemRequired = setElemRequired;
               exportDate: new Date().toISOString(),
               appVersion: '2.3.0',
               dbNamespace: getDbPrefix(),
-              localStorageState: localStorage.getItem('sm_appState') ? JSON.parse(localStorage.getItem('sm_appState')) : null,
+              localStorageState: window.appState || null,
               allLocalStorage: { ...localStorage }
           };
           const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupObj, null, 2));
@@ -489,7 +489,7 @@ window.setElemRequired = setElemRequired;
     // Fast deduplication map
     const map = new Map();
     
-    // Add existing first (preserve newer local state, exclude deleted)
+    // Add existing first (exclude deleted)
     for (let i = 0; i < existing.length; i++) {
       const it = existing[i];
       if (it) {
@@ -503,7 +503,7 @@ window.setElemRequired = setElemRequired;
         map.set(key, it);
       }
     }
-    // Overlay incoming items: do not overwrite if existing item has a newer local updatedAt, and skip deleted items
+    // Overlay incoming items: fresh updates from Firebase take immediate precedence
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (it) {
@@ -514,12 +514,7 @@ window.setElemRequired = setElemRequired;
         }
         const key = String(it.id || it._rtdbKey || it.barcode || (it.phone ? cleanPhone(it.phone) : '') || i);
         if (!it.id) it.id = key;
-        const prev = map.get(key);
-        if (prev && prev.updatedAt && it.updatedAt && Number(prev.updatedAt) > Number(it.updatedAt)) {
-          // Keep newer local edit
-          continue;
-        }
-        map.set(key, { ...(prev || {}), ...it, id: it.id || key });
+        map.set(key, { ...it, id: it.id || key });
       }
     }
 
@@ -1683,12 +1678,19 @@ window.setElemRequired = setElemRequired;
           return [];
         };
 
-        // Ultra-Lightweight Essential Realtime Listeners (Stats for Dashboard, recent Sales and Caisse for POS)
-        // All heavy data collections (customers, products, expenses, credits, etc.) are lazy-loaded on demand
+        // Realtime Listeners for instant Live Sync across tabs, browsers, and devices
         const realTimeListeners = [
           { name: 'stats', q: ref(database, 'v2/stats') },
-          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(30)) },
-          { name: 'caisseLogs', q: query(ref(database, 'v2/caisse'), orderByKey(), limitToLast(30)) }
+          { name: 'products', q: ref(database, 'v2/products') },
+          { name: 'customers', q: ref(database, 'v2/customers') },
+          { name: 'sales', q: ref(database, 'v2/sales') },
+          { name: 'expenses', q: ref(database, 'v2/expenses') },
+          { name: 'credits', q: ref(database, 'v2/credits') },
+          { name: 'suppliers', q: ref(database, 'v2/suppliers') },
+          { name: 'packages', q: ref(database, 'v2/packages') },
+          { name: 'staffPayouts', q: ref(database, 'v2/staffPayouts') },
+          { name: 'coachAbsences', q: ref(database, 'v2/coachAbsences') },
+          { name: 'caisseLogs', q: ref(database, 'v2/caisse') }
         ];
 
         realTimeListeners.forEach(sec => {
@@ -1698,7 +1700,7 @@ window.setElemRequired = setElemRequired;
             }
             window.firebaseSyncState.rtdb = 'connected';
             window.firebaseSyncState.lastSync = new Date();
-            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (وضع V2 فائق السرعة)');
+            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (مباشر Realtime)');
             window.dispatchEvent(new Event('firebaseReady'));
           }, (error) => {
             console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
@@ -1973,11 +1975,13 @@ window.setElemRequired = setElemRequired;
             window.appState.activityLogs = [];
             saveState(); localStorage.clear();
             showSuccessToast("تم مسح جميع البيانات بنجاح");
-        } } const defaultPackages = []; let initialLocalState = {};
-    try { const saved = localStorage.getItem('sm_appState');
-      if (saved) initialLocalState = JSON.parse(saved) || {};
-    } catch (e) {} window.appState = window.appState || {};
-    const baseSource = window.appState; const ensureSrcArr = (key) => (Array.isArray(baseSource[key]) && baseSource[key].length > 0 ? baseSource[key] : (Array.isArray(initialLocalState[key]) ? initialLocalState[key] : []));
+        } } const defaultPackages = [];
+    try {
+      localStorage.removeItem('sm_appState');
+    } catch (e) {}
+    window.appState = window.appState || {};
+    const baseSource = window.appState;
+    const ensureSrcArr = (key) => (Array.isArray(baseSource[key]) ? baseSource[key] : []);
     window.appState.customers = ensureSrcArr('customers');
     window.appState.packages = ensureSrcArr('packages');
     window.appState.coachAbsences = ensureSrcArr('coachAbsences');
@@ -2052,40 +2056,15 @@ window.setElemRequired = setElemRequired;
     window.getPackageMap = getPackageMap;
 
     function saveLocalStorageImmediate() {
+      // Local storage caching disabled per user request to guarantee immediate real-time sync across sessions
       try {
-        const s = appState || {};
-        const localCache = {
-          hideFinances: s.hideFinances !== false,
-          packages: Array.isArray(s.packages) ? s.packages : [],
-          customers: Array.isArray(s.customers) ? s.customers.slice(0, 2000) : [],
-          products: Array.isArray(s.products) ? s.products.slice(0, 2000) : [],
-          sales: Array.isArray(s.sales) ? s.sales.slice(0, 1000) : [],
-          expenses: Array.isArray(s.expenses) ? s.expenses.slice(0, 1000) : [],
-          caisseLogs: Array.isArray(s.caisseLogs) ? s.caisseLogs.slice(0, 1000) : [],
-          credits: Array.isArray(s.credits) ? s.credits.slice(0, 1000) : [],
-          suppliers: Array.isArray(s.suppliers) ? s.suppliers : [],
-          supplierTransactions: Array.isArray(s.supplierTransactions) ? s.supplierTransactions.slice(0, 500) : [],
-          staffPayouts: Array.isArray(s.staffPayouts) ? s.staffPayouts.slice(0, 500) : [],
-          coachAbsences: Array.isArray(s.coachAbsences) ? s.coachAbsences.slice(0, 500) : [],
-          quickSessions: Array.isArray(s.quickSessions) ? s.quickSessions.slice(0, 500) : [],
-          activityLogs: Array.isArray(s.activityLogs) ? s.activityLogs.slice(0, 500) : [],
-          v2Stats: s.v2Stats || null,
-          lastCachedAt: Date.now()
-        };
-        localStorage.setItem('sm_appState', JSON.stringify(localCache));
-      } catch (storageErr) {
-        console.warn('saveLocalStorageImmediate notice:', storageErr);
-      }
+        localStorage.removeItem('sm_appState');
+      } catch (e) {}
     }
     window.saveLocalStorageImmediate = saveLocalStorageImmediate;
 
-    // Debounced LocalStorage Engine
-    let __localStorageSaveTimer = null;
     function scheduleLocalStorageSave() {
-      if (__localStorageSaveTimer) clearTimeout(__localStorageSaveTimer);
-      __localStorageSaveTimer = setTimeout(() => {
-        saveLocalStorageImmediate();
-      }, 300);
+      // No-op to prevent storing stale data
     }
     window.addEventListener('beforeunload', () => {
       saveLocalStorageImmediate();
