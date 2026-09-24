@@ -84,6 +84,85 @@ window.setElemRequired = setElemRequired;
   }
   window.togglePrivacy = togglePrivacy;
 
+  function getDbPrefix() {
+      return localStorage.getItem('omega_db_namespace') || 'v2';
+  }
+  window.getDbPrefix = getDbPrefix;
+
+  function openGitHubAiSyncModal() {
+      const ns = getDbPrefix();
+      const isAiStudio = ns === 'v2_aistudio' || window.location.hostname.includes('aistudio') || window.location.hostname.includes('webcontainer');
+      const badge = document.getElementById('syncCurrentEnvBadge');
+      if (badge) {
+          badge.textContent = isAiStudio ? 'AI Studio (تطوير وعزل)' : 'GitHub Pages (إنتاج رئيسي)';
+      }
+      const btnProd = document.getElementById('btnEnvProd');
+      const btnAi = document.getElementById('btnEnvAiStudio');
+      if (btnProd && btnAi) {
+          if (ns === 'v2') {
+              btnProd.className = 'p-3 rounded-xl border text-center font-bold transition-all bg-blue-50 border-blue-300 text-blue-900';
+              btnAi.className = 'p-3 rounded-xl border text-center font-bold transition-all bg-white border-slate-200 text-slate-700 hover:border-blue-300';
+          } else {
+              btnProd.className = 'p-3 rounded-xl border text-center font-bold transition-all bg-white border-slate-200 text-slate-700 hover:border-blue-300';
+              btnAi.className = 'p-3 rounded-xl border text-center font-bold transition-all bg-blue-50 border-blue-300 text-blue-900';
+          }
+      }
+      openModal('githubAiSyncModal');
+  }
+  window.openGitHubAiSyncModal = openGitHubAiSyncModal;
+
+  function setDbNamespace(ns) {
+      localStorage.setItem('omega_db_namespace', ns);
+      showSuccessToast(`تم تبديل مسار قاعدة البيانات إلى: ${ns}`);
+      openGitHubAiSyncModal();
+  }
+  window.setDbNamespace = setDbNamespace;
+
+  function clearServiceWorkerAndHardRefresh() {
+      if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then((registrations) => {
+              for (let reg of registrations) {
+                  reg.unregister();
+              }
+          });
+      }
+      if ('caches' in window) {
+          caches.keys().then((names) => {
+              for (let name of names) {
+                  caches.delete(name);
+              }
+          });
+      }
+      showSuccessToast('تم مسح الكاش وإلغاء Service Worker بنجاح. جاري تحديث التطبيق...');
+      setTimeout(() => {
+          window.location.reload(true);
+      }, 1200);
+  }
+  window.clearServiceWorkerAndHardRefresh = clearServiceWorkerAndHardRefresh;
+
+  function exportGitHubAiBackup() {
+      try {
+          const backupObj = {
+              exportDate: new Date().toISOString(),
+              appVersion: '2.3.0',
+              dbNamespace: getDbPrefix(),
+              localStorageState: localStorage.getItem('sm_appState') ? JSON.parse(localStorage.getItem('sm_appState')) : null,
+              allLocalStorage: { ...localStorage }
+          };
+          const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupObj, null, 2));
+          const downloadAnchor = document.createElement('a');
+          downloadAnchor.setAttribute("href", dataStr);
+          downloadAnchor.setAttribute("download", `omega_gym_backup_${getDbPrefix()}_${new Date().toISOString().slice(0,10)}.json`);
+          document.body.appendChild(downloadAnchor);
+          downloadAnchor.click();
+          downloadAnchor.remove();
+          showSuccessToast('تم تصدير النسخة الاحتياطية للترحيل الآمن بين GitHub و AI Studio بنجاح');
+      } catch (e) {
+          showErrorToast('فشل تصدير النسخة الاحتياطية: ' + e.message);
+      }
+  }
+  window.exportGitHubAiBackup = exportGitHubAiBackup;
+
   function getRTDBUrl() {
     return (firebaseConfig && firebaseConfig.databaseURL)
       ? firebaseConfig.databaseURL.replace(/\/$/, '')
@@ -168,8 +247,14 @@ window.setElemRequired = setElemRequired;
     const loadPromise = (async () => {
       try {
         const v2Sec = sectionName === 'caisseLogs' ? 'caisse' : sectionName;
-        const limit = (sectionName === 'packages' || sectionName === 'suppliers') ? 100 : 50;
+        const limit = (sectionName === 'packages' || sectionName === 'suppliers') ? 200 : 500;
         let items = [];
+
+        const mapFirebaseItem = (k, v) => ({
+          ...v,
+          id: (v && v.id !== undefined && v.id !== null) ? v.id : k,
+          _rtdbKey: k
+        });
 
         if (window.firebaseDB && window.firebaseRef && window.firebaseGet && window.firebaseQuery && window.firebaseLimitToLast && window.firebaseOrderByKey) {
           const q = window.firebaseQuery(
@@ -180,7 +265,7 @@ window.setElemRequired = setElemRequired;
           let snap = await window.firebaseGet(q);
           if (snap.exists()) {
             const data = snap.val();
-            items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+            items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
           } else {
             // Migration / legacy fallback
             const legQ = window.firebaseQuery(
@@ -191,7 +276,7 @@ window.setElemRequired = setElemRequired;
             const legSnap = await window.firebaseGet(legQ);
             if (legSnap.exists()) {
               const data = legSnap.val();
-              items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+              items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
             }
           }
         } else {
@@ -201,7 +286,7 @@ window.setElemRequired = setElemRequired;
           if (res.ok) {
             const data = await res.json();
             if (data && typeof data === 'object') {
-              items = Object.entries(data).map(([k, v]) => ({ ...v, _rtdbKey: k }));
+              items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
             }
           }
         }
@@ -404,22 +489,38 @@ window.setElemRequired = setElemRequired;
 
     // Fast deduplication map
     const map = new Map();
-    const idProp = 'id';
     
-    // Add existing first (if we have bounded streaming, don't drop older items unless replaced)
+    // Add existing first (preserve newer local state, exclude deleted)
     for (let i = 0; i < existing.length; i++) {
       const it = existing[i];
       if (it) {
-        const key = String(it[idProp] || it.id || it.barcode || i);
+        const idStr = String(it.id || '');
+        const rtdbKey = String(it._rtdbKey || '');
+        if (typeof window.isItemDeleted === 'function' && (window.isItemDeleted(sectionName, idStr) || (rtdbKey && window.isItemDeleted(sectionName, rtdbKey)))) {
+          continue;
+        }
+        const key = String(it.id || it._rtdbKey || it.barcode || (it.phone ? cleanPhone(it.phone) : '') || i);
+        if (!it.id) it.id = key;
         map.set(key, it);
       }
     }
-    // Overlay incoming items
+    // Overlay incoming items: do not overwrite if existing item has a newer local updatedAt, and skip deleted items
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (it) {
-        const key = String(it[idProp] || it.id || it.barcode || i);
-        map.set(key, it);
+        const idStr = String(it.id || '');
+        const rtdbKey = String(it._rtdbKey || '');
+        if (typeof window.isItemDeleted === 'function' && (window.isItemDeleted(sectionName, idStr) || (rtdbKey && window.isItemDeleted(sectionName, rtdbKey)))) {
+          continue;
+        }
+        const key = String(it.id || it._rtdbKey || it.barcode || (it.phone ? cleanPhone(it.phone) : '') || i);
+        if (!it.id) it.id = key;
+        const prev = map.get(key);
+        if (prev && prev.updatedAt && it.updatedAt && Number(prev.updatedAt) > Number(it.updatedAt)) {
+          // Keep newer local edit
+          continue;
+        }
+        map.set(key, { ...(prev || {}), ...it, id: it.id || key });
       }
     }
 
@@ -717,6 +818,48 @@ window.setElemRequired = setElemRequired;
   }
   window.cleanKey = cleanKey;
 
+  // Deleted Items Tombstone Registry (prevents deleted items like credits from resurrecting on reload or sync)
+  window.registerDeletedItemId = function(sectionPath, id) {
+    if (!sectionPath || !id) return;
+    try {
+      if (!window._deletedItemIds) {
+        const saved = localStorage.getItem('sm_deleted_ids');
+        window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
+      }
+      const key = `${sectionPath}:${String(id).trim()}`;
+      window._deletedItemIds.add(key);
+      const arr = Array.from(window._deletedItemIds).slice(-3000);
+      localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
+    } catch(e) {}
+  };
+
+  window.unregisterDeletedItemId = function(sectionPath, id) {
+    if (!sectionPath || !id) return;
+    try {
+      if (!window._deletedItemIds) {
+        const saved = localStorage.getItem('sm_deleted_ids');
+        window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
+      }
+      const key = `${sectionPath}:${String(id).trim()}`;
+      window._deletedItemIds.delete(key);
+      const arr = Array.from(window._deletedItemIds);
+      localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
+    } catch(e) {}
+  };
+
+  window.isItemDeleted = function(sectionPath, id) {
+    if (!sectionPath || !id) return false;
+    try {
+      if (!window._deletedItemIds) {
+        const saved = localStorage.getItem('sm_deleted_ids');
+        window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
+      }
+      return window._deletedItemIds.has(`${sectionPath}:${String(id).trim()}`);
+    } catch(e) {
+      return false;
+    }
+  };
+
   function normalizePhone(phone) {
     if (!phone) return '';
     const digits = String(phone).replace(/\D/g, '');
@@ -868,26 +1011,19 @@ window.setElemRequired = setElemRequired;
   }
   window.applyExpenseStats = applyExpenseStats;
 
-  // Recursive sanitizer to prevent Firebase SDK "contains undefined in property" exceptions
-  function stripUndefined(obj) {
-    if (obj === null || obj === undefined) return null;
-    if (typeof obj !== 'object') return obj;
-    if (Array.isArray(obj)) return obj.map(stripUndefined);
-    const res = {};
-    for (const [k, v] of Object.entries(obj)) {
-      if (v !== undefined) {
-        res[k] = stripUndefined(v);
-      }
-    }
-    return res;
-  }
-  window.stripUndefined = stripUndefined;
-
-  // Dedicated Item-Level Save: writes concurrently to BOTH Root and V2 structures for 100% seamless persistence
+  // Dedicated Item-Level Save: writes strictly to V2 structure + legacy mirrors with atomic index maintenance and pendingWrites protection
   window.saveFirebaseSectionItem = async function(sectionPath, itemData, previousItem) {
     if (!itemData || typeof itemData !== 'object') return false;
-    const rawId = itemData.id || itemData.barcode || Date.now().toString();
+    const rawId = itemData.id || itemData._rtdbKey || itemData.barcode || Date.now().toString();
     const cleanId = cleanKey(rawId);
+    if (!itemData.id) itemData.id = cleanId;
+
+    if (typeof window.unregisterDeletedItemId === 'function') {
+      window.unregisterDeletedItemId(sectionPath, cleanId);
+      window.unregisterDeletedItemId(sectionPath, rawId);
+      if (itemData._rtdbKey) window.unregisterDeletedItemId(sectionPath, itemData._rtdbKey);
+    }
+
     const writeKey = `saveSectionItem:${sectionPath}:${cleanId}`;
 
     if (window.pendingWrites.has(writeKey)) {
@@ -898,45 +1034,38 @@ window.setElemRequired = setElemRequired;
       try {
         const v2Updates = {};
         const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
-        const rootSec = sectionPath === 'caisse' ? 'caisseLogs' : sectionPath;
-        const sanitizedItem = stripUndefined(itemData);
 
         if (sectionPath === 'customers') {
           const enriched = {
-            ...sanitizedItem,
+            ...itemData,
             id: cleanId,
-            normalizedPhone: normalizePhone(sanitizedItem.phone) || null,
+            normalizedPhone: normalizePhone(itemData.phone) || null,
             updatedAt: Date.now()
           };
           v2Updates[`v2/customers/${cleanId}`] = enriched;
           v2Updates[`customers/${cleanId}`] = enriched;
           if (enriched.normalizedPhone) {
             v2Updates[`v2/customerByPhone/${enriched.normalizedPhone}`] = cleanId;
-            v2Updates[`customerByPhone/${enriched.normalizedPhone}`] = cleanId;
           }
-          if (sanitizedItem.barcode) {
-            const bKey = cleanKey(sanitizedItem.barcode);
-            v2Updates[`v2/customerByBarcode/${bKey}`] = cleanId;
-            v2Updates[`customerByBarcode/${bKey}`] = cleanId;
+          if (itemData.barcode) {
+            v2Updates[`v2/customerByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
           }
         } else if (sectionPath === 'products') {
-          const prodItem = { ...sanitizedItem, id: cleanId, updatedAt: Date.now() };
-          v2Updates[`v2/products/${cleanId}`] = prodItem;
-          v2Updates[`products/${cleanId}`] = prodItem;
-          if (sanitizedItem.barcode) {
-            const bKey = cleanKey(sanitizedItem.barcode);
-            v2Updates[`v2/productByBarcode/${bKey}`] = cleanId;
-            v2Updates[`productByBarcode/${bKey}`] = cleanId;
+          const enrichedProd = { ...itemData, id: cleanId, updatedAt: Date.now() };
+          v2Updates[`v2/products/${cleanId}`] = enrichedProd;
+          v2Updates[`products/${cleanId}`] = enrichedProd;
+          if (itemData.barcode) {
+            v2Updates[`v2/productByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
           }
         } else if (sectionPath === 'sales') {
-          const dateKey = getDateKey(sanitizedItem.date);
-          const total = Number(sanitizedItem.total || 0);
-          const profit = Number(sanitizedItem.profit || 0);
-          const qty = Number(sanitizedItem.qty || 1);
-          const saleItem = { ...sanitizedItem, id: cleanId, dateKey, total, profit, qty };
+          const dateKey = getDateKey(itemData.date);
+          const total = Number(itemData.total || 0);
+          const profit = Number(itemData.profit || 0);
+          const qty = Number(itemData.qty || 1);
+          const enrichedSale = { ...itemData, id: cleanId, dateKey, total, profit, qty };
 
-          v2Updates[`v2/sales/${cleanId}`] = saleItem;
-          v2Updates[`sales/${cleanId}`] = saleItem;
+          v2Updates[`v2/sales/${cleanId}`] = enrichedSale;
+          v2Updates[`sales/${cleanId}`] = enrichedSale;
           v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
 
           window._processedStats = window._processedStats || new Map();
@@ -972,16 +1101,16 @@ window.setElemRequired = setElemRequired;
             }
           }
 
-          const statsUpdates = applySaleStats(sanitizedItem, oldSale);
+          const statsUpdates = applySaleStats(itemData, oldSale);
           Object.assign(v2Updates, statsUpdates);
-          window._processedStats.set(statKey, { total, profit, qty, date: sanitizedItem.date });
+          window._processedStats.set(statKey, { total, profit, qty, date: itemData.date });
         } else if (sectionPath === 'expenses') {
-          const dateKey = getDateKey(sanitizedItem.date);
-          const amt = parseFloat(String(sanitizedItem.amount || 0).replace(/,/g, '')) || 0;
-          const expItem = { ...sanitizedItem, id: cleanId, dateKey, amount: amt };
+          const dateKey = getDateKey(itemData.date);
+          const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
+          const enrichedExp = { ...itemData, id: cleanId, dateKey, amount: amt };
 
-          v2Updates[`v2/expenses/${cleanId}`] = expItem;
-          v2Updates[`expenses/${cleanId}`] = expItem;
+          v2Updates[`v2/expenses/${cleanId}`] = enrichedExp;
+          v2Updates[`expenses/${cleanId}`] = enrichedExp;
           v2Updates[`v2/expensesByDate/${dateKey}/${cleanId}`] = true;
 
           window._processedStats = window._processedStats || new Map();
@@ -1017,28 +1146,31 @@ window.setElemRequired = setElemRequired;
             }
           }
 
-          const statsUpdates = applyExpenseStats(sanitizedItem, oldExpense);
+          const statsUpdates = applyExpenseStats(itemData, oldExpense);
           Object.assign(v2Updates, statsUpdates);
-          window._processedStats.set(statKey, { amount: amt, date: sanitizedItem.date });
+          window._processedStats.set(statKey, { amount: amt, date: itemData.date });
         } else if (sectionPath === 'credits') {
-          v2Updates[`v2/credits/${cleanId}`] = sanitizedItem;
-          v2Updates[`credits/${cleanId}`] = sanitizedItem;
-          if (sanitizedItem.customerId && sanitizedItem.status !== 'settled') {
-            v2Updates[`v2/openCreditsByCustomer/${cleanKey(sanitizedItem.customerId)}/${cleanId}`] = true;
+          v2Updates[`v2/credits/${cleanId}`] = itemData;
+          v2Updates[`credits/${cleanId}`] = itemData;
+          if (itemData.customerId && itemData.status !== 'settled') {
+            v2Updates[`v2/openCreditsByCustomer/${cleanKey(itemData.customerId)}/${cleanId}`] = true;
           }
+        } else if (sectionPath === 'packages') {
+          v2Updates[`v2/packages/${cleanId}`] = itemData;
+          v2Updates[`packages/${cleanId}`] = itemData;
         } else {
-          v2Updates[`v2/${v2Sec}/${cleanId}`] = sanitizedItem;
-          v2Updates[`${rootSec}/${cleanId}`] = sanitizedItem;
+          v2Updates[`v2/${v2Sec}/${cleanId}`] = itemData;
+          v2Updates[`${v2Sec}/${cleanId}`] = itemData;
         }
 
-        v2Updates['lastUpdated'] = new Date().toISOString();
+        // Clean undefined values to prevent Firebase SDK crashes
+        const cleanPayload = JSON.parse(JSON.stringify(v2Updates));
 
-        if (Object.keys(v2Updates).length > 0) {
+        if (Object.keys(cleanPayload).length > 0) {
           let sdkOk = false;
           if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
             try {
-              const cleanUpdates = stripUndefined(v2Updates);
-              await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), cleanUpdates);
+              await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), cleanPayload);
               sdkOk = true;
             } catch (e) {
               console.warn(`SDK saveFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, e);
@@ -1046,13 +1178,19 @@ window.setElemRequired = setElemRequired;
           }
           if (!sdkOk) {
             const baseUrl = getRTDBUrl();
-            const cleanUpdates = stripUndefined(v2Updates);
             const res = await fetch(`${baseUrl}/.json`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(cleanUpdates)
+              body: JSON.stringify(cleanPayload)
             });
-            if (!res.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
+            if (!res.ok) {
+              const singleRes = await fetch(`${baseUrl}/v2/${v2Sec}/${cleanId}.json`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(itemData)
+              });
+              if (!singleRes.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
+            }
           }
         }
         return true;
@@ -1069,11 +1207,22 @@ window.setElemRequired = setElemRequired;
     return task;
   };
 
-  // Dedicated Item-Level Delete: cleans BOTH V2 and Root structures + indexes with pendingWrites protection
+  // Dedicated Item-Level Delete: cleans V2 structures + indexes with pendingWrites protection
   window.deleteFirebaseSectionItem = async function(sectionPath, itemId, previousItem) {
     if (!itemId) return false;
     const cleanId = cleanKey(itemId);
     const writeKey = `deleteSectionItem:${sectionPath}:${cleanId}`;
+
+    if (typeof window.registerDeletedItemId === 'function') {
+      window.registerDeletedItemId(sectionPath, itemId);
+      window.registerDeletedItemId(sectionPath, cleanId);
+      if (previousItem && previousItem._rtdbKey) {
+        window.registerDeletedItemId(sectionPath, previousItem._rtdbKey);
+      }
+      if (previousItem && previousItem.id) {
+        window.registerDeletedItemId(sectionPath, previousItem.id);
+      }
+    }
 
     if (window.pendingWrites.has(writeKey)) {
       return window.pendingWrites.get(writeKey);
@@ -1083,35 +1232,38 @@ window.setElemRequired = setElemRequired;
       try {
         const v2Deletes = {};
         const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
-        const rootSec = sectionPath === 'caisse' ? 'caisseLogs' : sectionPath;
         v2Deletes[`v2/${v2Sec}/${cleanId}`] = null;
-        v2Deletes[`${rootSec}/${cleanId}`] = null;
+        v2Deletes[`${v2Sec}/${cleanId}`] = null;
+        v2Deletes[`appState/${v2Sec}/${cleanId}`] = null;
+
+        const rtdbKey = previousItem && previousItem._rtdbKey ? cleanKey(previousItem._rtdbKey) : null;
+        if (rtdbKey && rtdbKey !== cleanId) {
+          v2Deletes[`v2/${v2Sec}/${rtdbKey}`] = null;
+          v2Deletes[`${v2Sec}/${rtdbKey}`] = null;
+          v2Deletes[`appState/${v2Sec}/${rtdbKey}`] = null;
+        }
 
         if (sectionPath === 'customers') {
-          const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId));
+          const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId) || String(c._rtdbKey) === String(itemId)) || previousItem;
           if (item) {
             const normPhone = normalizePhone(item.phone);
-            if (normPhone) {
-              v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
-              v2Deletes[`customerByPhone/${normPhone}`] = null;
-            }
-            if (item.barcode) {
-              const bKey = cleanKey(item.barcode);
-              v2Deletes[`v2/customerByBarcode/${bKey}`] = null;
-              v2Deletes[`customerByBarcode/${bKey}`] = null;
-            }
+            if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
+            if (item.barcode) v2Deletes[`v2/customerByBarcode/${cleanKey(item.barcode)}`] = null;
           }
         } else if (sectionPath === 'products') {
-          const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId));
+          const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId) || String(p._rtdbKey) === String(itemId)) || previousItem;
           if (item && item.barcode) {
-            const bKey = cleanKey(item.barcode);
-            v2Deletes[`v2/productByBarcode/${bKey}`] = null;
-            v2Deletes[`productByBarcode/${bKey}`] = null;
+            v2Deletes[`v2/productByBarcode/${cleanKey(item.barcode)}`] = null;
           }
         } else if (sectionPath === 'credits') {
-          const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId));
+          const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId) || String(c._rtdbKey) === String(itemId)) || previousItem;
           if (item && item.customerId) {
             v2Deletes[`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${cleanId}`] = null;
+            if (rtdbKey) v2Deletes[`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${rtdbKey}`] = null;
+          }
+          if (String(itemId).startsWith('cr_auto_')) {
+            const custId = String(itemId).replace('cr_auto_', '');
+            v2Deletes[`v2/openCreditsByCustomer/${cleanKey(custId)}/${cleanId}`] = null;
           }
         } else if (sectionPath === 'sales') {
           window._processedStats = window._processedStats || new Map();
@@ -1175,8 +1327,6 @@ window.setElemRequired = setElemRequired;
           }
         }
 
-        v2Deletes['lastUpdated'] = new Date().toISOString();
-
         let sdkOk = false;
         if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
           try {
@@ -1186,15 +1336,35 @@ window.setElemRequired = setElemRequired;
             console.warn(`SDK deleteFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, e);
           }
         }
-        if (!sdkOk) {
+        // Direct REST deletion calls to wipe exact nodes in Firebase
+        try {
           const baseUrl = getRTDBUrl();
-          const res = await fetch(`${baseUrl}/.json`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(v2Deletes)
+          const endpointsToDelete = [
+            `v2/${v2Sec}/${cleanId}.json`,
+            `${v2Sec}/${cleanId}.json`,
+            `appState/${v2Sec}/${cleanId}.json`
+          ];
+          if (rtdbKey && rtdbKey !== cleanId) {
+            endpointsToDelete.push(`v2/${v2Sec}/${rtdbKey}.json`, `${v2Sec}/${rtdbKey}.json`);
+          }
+          if (sectionPath === 'credits') {
+            const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId) || String(c._rtdbKey) === String(itemId)) || previousItem;
+            if (item && item.customerId) {
+              endpointsToDelete.push(`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${cleanId}.json`);
+              if (rtdbKey) endpointsToDelete.push(`v2/openCreditsByCustomer/${cleanKey(item.customerId)}/${rtdbKey}.json`);
+            }
+            if (String(itemId).startsWith('cr_auto_')) {
+              const custId = String(itemId).replace('cr_auto_', '');
+              endpointsToDelete.push(`v2/openCreditsByCustomer/${cleanKey(custId)}/${cleanId}.json`);
+            }
+          }
+          endpointsToDelete.forEach(ep => {
+            fetch(`${baseUrl}/${ep}`, { method: 'DELETE' }).catch(() => {});
           });
-          if (!res.ok) throw new Error(`REST delete failed HTTP ${res.status}`);
+        } catch (restErr) {
+          console.warn('REST delete endpoints note:', restErr);
         }
+
         return true;
       } catch (err) {
         console.warn(`deleteFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, err);
@@ -1313,50 +1483,25 @@ window.setElemRequired = setElemRequired;
       const baseUrl = getRTDBUrl();
       const safeFetch = (path) => fetch(`${baseUrl}/${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      // Fast Comprehensive Startup: Load current active data from Firebase (checking v2 and root)
+      // Lazy Architecture Startup: Load only Dashboard stats, package tiers, and meta health
       const [
         meta,
         v2Stats,
-        packagesData,
-        productsData,
-        customersData,
-        salesData,
-        expensesData,
-        creditsData,
-        suppliersData,
-        staffPayoutsData,
-        caisseData,
-        coachAbsencesData,
+        v2Packages,
         appStateCfg
       ] = await Promise.all([
         safeFetch('v2/meta/health.json'),
         safeFetch('v2/stats.json'),
-        safeFetch('v2/packages.json').then(res => res || safeFetch('packages.json')),
-        safeFetch('v2/products.json').then(res => res || safeFetch('products.json')),
-        safeFetch('v2/customers.json').then(res => res || safeFetch('customers.json')),
-        safeFetch('v2/sales.json').then(res => res || safeFetch('sales.json')),
-        safeFetch('v2/expenses.json').then(res => res || safeFetch('expenses.json')),
-        safeFetch('v2/credits.json').then(res => res || safeFetch('credits.json')),
-        safeFetch('v2/suppliers.json').then(res => res || safeFetch('suppliers.json')),
-        safeFetch('v2/staffPayouts.json').then(res => res || safeFetch('staffPayouts.json')),
-        safeFetch('v2/caisse.json').then(res => res || safeFetch('caisseLogs.json')),
-        safeFetch('v2/coachAbsences.json').then(res => res || safeFetch('coachAbsences.json')),
+        safeFetch('v2/packages.json'),
         safeFetch('appState.json')
       ]);
 
       window.__firebaseAlreadyFetched = true;
       window.appState = window.appState || {};
 
-      if (packagesData) window.applyFirebaseSectionUpdate('packages', packagesData, 'Startup Packages Sync');
-      if (productsData) window.applyFirebaseSectionUpdate('products', productsData, 'Startup Products Sync');
-      if (customersData) window.applyFirebaseSectionUpdate('customers', customersData, 'Startup Customers Sync');
-      if (salesData) window.applyFirebaseSectionUpdate('sales', salesData, 'Startup Sales Sync');
-      if (expensesData) window.applyFirebaseSectionUpdate('expenses', expensesData, 'Startup Expenses Sync');
-      if (creditsData) window.applyFirebaseSectionUpdate('credits', creditsData, 'Startup Credits Sync');
-      if (suppliersData) window.applyFirebaseSectionUpdate('suppliers', suppliersData, 'Startup Suppliers Sync');
-      if (staffPayoutsData) window.applyFirebaseSectionUpdate('staffPayouts', staffPayoutsData, 'Startup StaffPayouts Sync');
-      if (caisseData) window.applyFirebaseSectionUpdate('caisseLogs', caisseData, 'Startup Caisse Sync');
-      if (coachAbsencesData) window.applyFirebaseSectionUpdate('coachAbsences', coachAbsencesData, 'Startup CoachAbsences Sync');
+      if (v2Packages) {
+        window.applyFirebaseSectionUpdate('packages', v2Packages, 'Startup Packages Sync');
+      }
 
       if (v2Stats) {
         window.appState.v2Stats = v2Stats;
@@ -1414,14 +1559,9 @@ window.setElemRequired = setElemRequired;
       window.firebaseSyncState.rtdb = 'connected';
       window.firebaseSyncState.lastSync = new Date();
       window.firebaseSyncState.lastError = null;
-      updateFirebaseUIBadge('connected', 'Firebase: الاتصال نشط ومزامن');
-      try {
-        await window.fetchAndLoadFirebaseData(true);
-      } catch (e) {
-        console.warn('Sync refresh note:', e);
-      }
+      updateFirebaseUIBadge('connected', 'Firebase: الاتصال نشط وسريع');
       if (typeof showSuccessToast === 'function') {
-        showSuccessToast('تم فحص الاتصال ومزامنة البيانات مع قاعدة البيانات بنجاح!');
+        showSuccessToast('تم فحص الاتصال بـ Firebase بنجاح (الاتصال نشط وسليم)');
       }
     } else {
       window.firebaseSyncState.lastError = errorMsg;
@@ -1496,18 +1636,12 @@ window.setElemRequired = setElemRequired;
           return [];
         };
 
-        // Full-Spectrum Live Sync Listeners for Multi-Device and Real-Time Persistence
+        // Ultra-Lightweight Essential Realtime Listeners (Stats for Dashboard, recent Sales and Caisse for POS)
+        // All heavy data collections (customers, products, expenses, credits, etc.) are lazy-loaded on demand
         const realTimeListeners = [
           { name: 'stats', q: ref(database, 'v2/stats') },
-          { name: 'products', q: ref(database, 'products') },
-          { name: 'sales', q: query(ref(database, 'sales'), orderByKey(), limitToLast(50)) },
-          { name: 'caisseLogs', q: query(ref(database, 'caisseLogs'), orderByKey(), limitToLast(30)) },
-          { name: 'expenses', q: ref(database, 'expenses') },
-          { name: 'credits', q: ref(database, 'credits') },
-          { name: 'packages', q: ref(database, 'packages') },
-          { name: 'suppliers', q: ref(database, 'suppliers') },
-          { name: 'staffPayouts', q: ref(database, 'staffPayouts') },
-          { name: 'coachAbsences', q: ref(database, 'coachAbsences') }
+          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(30)) },
+          { name: 'caisseLogs', q: query(ref(database, 'v2/caisse'), orderByKey(), limitToLast(30)) }
         ];
 
         realTimeListeners.forEach(sec => {
@@ -1517,7 +1651,7 @@ window.setElemRequired = setElemRequired;
             }
             window.firebaseSyncState.rtdb = 'connected';
             window.firebaseSyncState.lastSync = new Date();
-            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (قاعدة البيانات كاملة)');
+            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (وضع V2 فائق السرعة)');
             window.dispatchEvent(new Event('firebaseReady'));
           }, (error) => {
             console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
@@ -1870,60 +2004,44 @@ window.setElemRequired = setElemRequired;
     }
     window.getPackageMap = getPackageMap;
 
-    // Debounced LocalStorage Engine to prevent main-thread I/O blocking (500ms debounce + bounded state)
-    let __localStorageSaveTimer = null;
-    function scheduleLocalStorageSave() {
-      if (__localStorageSaveTimer) clearTimeout(__localStorageSaveTimer);
-      __localStorageSaveTimer = setTimeout(() => {
-        try {
-          const s = appState || {};
-          const localCache = {
-            hideFinances: s.hideFinances !== false,
-            packages: Array.isArray(s.packages) ? s.packages : [],
-            customers: Array.isArray(s.customers) ? s.customers.slice(0, 80) : [],
-            products: Array.isArray(s.products) ? s.products.slice(0, 100) : [],
-            sales: Array.isArray(s.sales) ? s.sales.slice(0, 50) : [],
-            expenses: Array.isArray(s.expenses) ? s.expenses.slice(0, 50) : [],
-            caisseLogs: Array.isArray(s.caisseLogs) ? s.caisseLogs.slice(0, 50) : [],
-            credits: Array.isArray(s.credits) ? s.credits.slice(0, 100) : [],
-            suppliers: Array.isArray(s.suppliers) ? s.suppliers : [],
-            staffPayouts: Array.isArray(s.staffPayouts) ? s.staffPayouts.slice(0, 50) : [],
-            coachAbsences: Array.isArray(s.coachAbsences) ? s.coachAbsences.slice(0, 50) : [],
-            quickSessions: Array.isArray(s.quickSessions) ? s.quickSessions.slice(0, 50) : [],
-            v2Stats: s.v2Stats || null,
-            lastCachedAt: Date.now()
-          };
-          const jsonStr = JSON.stringify(localCache);
-          if (window.requestIdleCallback) {
-            window.requestIdleCallback(() => {
-              try { localStorage.setItem('sm_appState', jsonStr); } catch(e){}
-            });
-          } else {
-            localStorage.setItem('sm_appState', jsonStr);
-          }
-        } catch (storageErr) {
-          console.warn('LocalStorage save notice:', storageErr);
-        }
-      }, 500);
-    }
-    window.addEventListener('beforeunload', () => {
+    function saveLocalStorageImmediate() {
       try {
         const s = appState || {};
         const localCache = {
           hideFinances: s.hideFinances !== false,
-          packages: s.packages || [],
-          customers: (s.customers || []).slice(0, 80),
-          products: (s.products || []).slice(0, 100),
-          sales: (s.sales || []).slice(0, 50),
-          expenses: (s.expenses || []).slice(0, 50),
-          caisseLogs: (s.caisseLogs || []).slice(0, 50),
-          credits: (s.credits || []).slice(0, 100),
-          suppliers: s.suppliers || [],
+          packages: Array.isArray(s.packages) ? s.packages : [],
+          customers: Array.isArray(s.customers) ? s.customers.slice(0, 2000) : [],
+          products: Array.isArray(s.products) ? s.products.slice(0, 2000) : [],
+          sales: Array.isArray(s.sales) ? s.sales.slice(0, 1000) : [],
+          expenses: Array.isArray(s.expenses) ? s.expenses.slice(0, 1000) : [],
+          caisseLogs: Array.isArray(s.caisseLogs) ? s.caisseLogs.slice(0, 1000) : [],
+          credits: Array.isArray(s.credits) ? s.credits.slice(0, 1000) : [],
+          suppliers: Array.isArray(s.suppliers) ? s.suppliers : [],
+          supplierTransactions: Array.isArray(s.supplierTransactions) ? s.supplierTransactions.slice(0, 500) : [],
+          staffPayouts: Array.isArray(s.staffPayouts) ? s.staffPayouts.slice(0, 500) : [],
+          coachAbsences: Array.isArray(s.coachAbsences) ? s.coachAbsences.slice(0, 500) : [],
+          quickSessions: Array.isArray(s.quickSessions) ? s.quickSessions.slice(0, 500) : [],
+          activityLogs: Array.isArray(s.activityLogs) ? s.activityLogs.slice(0, 500) : [],
           v2Stats: s.v2Stats || null,
           lastCachedAt: Date.now()
         };
         localStorage.setItem('sm_appState', JSON.stringify(localCache));
-      } catch(e){}
+      } catch (storageErr) {
+        console.warn('saveLocalStorageImmediate notice:', storageErr);
+      }
+    }
+    window.saveLocalStorageImmediate = saveLocalStorageImmediate;
+
+    // Debounced LocalStorage Engine
+    let __localStorageSaveTimer = null;
+    function scheduleLocalStorageSave() {
+      if (__localStorageSaveTimer) clearTimeout(__localStorageSaveTimer);
+      __localStorageSaveTimer = setTimeout(() => {
+        saveLocalStorageImmediate();
+      }, 300);
+    }
+    window.addEventListener('beforeunload', () => {
+      saveLocalStorageImmediate();
     });
 
     // State loaded from Firebase
@@ -1977,7 +2095,8 @@ window.setElemRequired = setElemRequired;
       appState.caisseLogs = ensureArray(appState.caisseLogs);
       appState.activityLogs = ensureArray(appState.activityLogs);
       
-      // Async non-blocking debounced save
+      // Synchronous immediate local write + debounced safety
+      saveLocalStorageImmediate();
       scheduleLocalStorageSave();
 
       if (window.__firebasePushTimer) clearTimeout(window.__firebasePushTimer);
@@ -3070,8 +3189,20 @@ window.setElemRequired = setElemRequired;
         }
     }
     document.getElementById('editCustomerForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const customer = appState.customers.find(c => c.id === getElemVal('editCustId'));
-        if(!customer) return;
+        e.preventDefault();
+        const targetId = String(getElemVal('editCustId') || '').trim();
+        let customer = (appState.customers || []).find(c => c && (String(c.id) === targetId || String(c._rtdbKey) === targetId));
+        if (!customer) {
+            const fallbackName = getElemVal('editCustName').trim();
+            customer = (appState.customers || []).find(c => c && c.name === fallbackName);
+        }
+        if (!customer) {
+            showErrorToast('تعذر العثور على سجل المشترك لتحديث بياناته');
+            return;
+        }
+
+        // Ensure customer has valid id
+        if (!customer.id) customer.id = targetId || customer._rtdbKey || Date.now().toString();
 
         // Snapshot old values before edits for exact diff logging
         const oldName = customer.name || '';
@@ -3124,13 +3255,16 @@ window.setElemRequired = setElemRequired;
             if (!isNaN(currentEnd.getTime())) {
                 currentEnd.setDate(currentEnd.getDate() + extraDays);
                 customer.endDate = currentEnd.toISOString();
-            } } customer.packageId = getElemVal('editPackageId');
-        const pkg = appState.packages.find(p => p.id === customer.packageId);
+            } }
+        customer.packageId = getElemVal('editPackageId');
+        const pkg = (appState.packages || []).find(p => String(p && p.id) === String(customer.packageId));
         const editPriceInput = document.getElementById('editCustPrice');
         customer.price = editPriceInput && editPriceInput.value !== '' ? parseInt(editPriceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
         customer.paymentStatus = getElemVal('editPaymentStatus');
         customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(getElemVal('editDebtAmount') || 0) : 0;
         customer.imageUrl = getElemVal('editCustImageUrl') || null;
+        customer.updatedAt = Date.now();
+        customer._searchKey = `${customer.name || ''} ${(customer.phone || '').replace(/\D/g, '')}`.toLowerCase();
 
         // Sync with Credits section
         if (customer.debtAmount > 0) { if (!appState.credits) appState.credits = [];
@@ -4179,25 +4313,30 @@ window.setElemRequired = setElemRequired;
         const wVal = getElemVal('prodWeight');
         const finalWeight = (wType && wVal) ? (wType + ' - ' + wVal) : (wVal || wType || '');
         const stockLocationVal = document.getElementById('prodStockLocation') ? getElemVal('prodStockLocation') : 'both';
-        const costVal = parseInt(getElemVal('prodCost')) || 0;
-        const priceVal = parseInt(getElemVal('prodPrice')) || 0;
+        const costVal = parseFloat(getElemVal('prodCost')) || 0;
+        const priceVal = parseFloat(getElemVal('prodPrice')) || 0;
         const expiryDateVal = document.getElementById('prodExpiryDate') ? getElemVal('prodExpiryDate') : '';
         const categoryVal = getElemVal('prodCategory') || (typeof getProductCategory === 'function' ? getProductCategory({ name: prodName, weight: finalWeight }) : 'other');
         // Verify password before adding or updating product
         promptWithPassword({ title: editingId ? 'تعديل منتج' : 'إضافة منتج جديد',
             prompt: editingId ? 'أدخل كلمة المرور لحفظ تعديلات المنتج' : 'أدخل كلمة المرور لإضافة المنتج إلى المخزون',
             buttonText: 'حفظ المنتج' }, () => {
-            if (editingId) { const p = appState.products.find(p => p.id === editingId);
-                if (p) { p.barcode = prodBarcode;
+            if (editingId) {
+                const targetProdId = String(editingId);
+                const p = (appState.products || []).find(p => p && (String(p.id) === targetProdId || String(p.barcode) === targetProdId));
+                if (p) {
+                    p.barcode = prodBarcode;
                     p.name = prodName; p.weight = finalWeight;
                     p.cost = costVal; p.price = priceVal;
                     p.brand = brandVal; p.imageUrl = imgUrlVal;
                     p.expiryDate = expiryDateVal;
-                    p.category = categoryVal; if (stockLocationVal === 'both') {
+                    p.category = categoryVal;
+                    p.updatedAt = Date.now();
+                    if (stockLocationVal === 'both') {
                         const q1 = parseFloat(getElemVal('prodStock1')) || 0;
                         const q2 = parseFloat(getElemVal('prodStock2')) || 0;
                         if (p.stockLocation === 'stock2') {
-                            p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => x.id !== p.id && x.barcode === prodBarcode && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
+                            p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
                             if (p1) { p1.stock = q1;
                                 p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
@@ -4220,7 +4359,7 @@ window.setElemRequired = setElemRequired;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd1);
                             } } else { p.stock = q1;
                             p.stockLocation = 'stock1';
-                            let p2 = prodBarcode ? appState.products.find(x => x.id !== p.id && x.barcode === prodBarcode && x.stockLocation === 'stock2') : null;
+                            let p2 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && x.stockLocation === 'stock2') : null;
                             if (p2) { p2.stock = q2;
                                 p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
@@ -4367,7 +4506,9 @@ window.setElemRequired = setElemRequired;
                     if (typeof render === 'function') render();
                 }
             }); });
-    function editProduct(id) { const p = appState.products.find(p => p.id === id);
+    function editProduct(id) {
+        const targetId = String(id);
+        const p = (appState.products || []).find(p => p && (String(p.id) === targetId || String(p.barcode) === targetId));
         if(!p) return; setElemValue('prodBarcode', p.barcode || '');
         setElemValue('prodName', p.name || '');
         let pWeight = p.weight || ''; let wType = '';
@@ -4379,7 +4520,7 @@ window.setElemRequired = setElemRequired;
         setElemValue('prodCost', p.cost || 0);
         setElemValue('prodPrice', p.price || 0);
         // Check if counterpart product exists in the other stock
-        const counterpart = p.barcode ? appState.products.find(x => x.id !== p.id && x.barcode === p.barcode) : null;
+        const counterpart = p.barcode ? (appState.products || []).find(x => x && String(x.id) !== String(p.id) && String(x.barcode) === String(p.barcode)) : null;
         if (counterpart) { if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
             handleProdStockLocationChange();
             const s1Val = (p.stockLocation === 'stock2') ? counterpart.stock : p.stock;
@@ -5059,7 +5200,8 @@ window.setElemRequired = setElemRequired;
       if (isNaN(endMs)) return 0;
       return Math.max(0, Math.ceil((endMs - nowMs) / 86400000));
     } function recordCustomerAttendance(customerId) {
-        if (!appState.customers) return; const customer = appState.customers.find(c => c.id === customerId);
+        if (!appState.customers) return;
+        const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
         if (!customer) return; const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
         if (!isSession) { if (!customer.sessionHistory) customer.sessionHistory = [];
             customer.sessionHistory.unshift({
@@ -5090,7 +5232,8 @@ window.setElemRequired = setElemRequired;
         } else { showSuccessToast(`تم خصم حصة لـ (${customer.name}) - المتبقي: ${customer.remainingSessions} حصة`);
         } render(); } window.recordCustomerAttendance = recordCustomerAttendance;
     function adjustCustomerSessions(customerId, delta) {
-        if (!appState.customers) return; const customer = appState.customers.find(c => c.id === customerId);
+        if (!appState.customers) return;
+        const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
         if (!customer) return; const current = parseInt(customer.remainingSessions) || 0;
         const nextVal = Math.max(0, current + delta);
         customer.remainingSessions = nextVal;
@@ -6001,19 +6144,51 @@ window.setElemRequired = setElemRequired;
     function deleteAllCredits() { const count = Array.isArray(appState.credits) ? appState.credits.length : 0;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
         promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
+            const removed = [...(appState.credits || [])];
             appState.credits = []; window.appState.credits = [];
+
+            // Clear customer debts as well
+            if (Array.isArray(appState.customers)) {
+                appState.customers.forEach(c => {
+                    if (c && c.paymentStatus === 'credit') {
+                        c.debtAmount = 0;
+                        c.paymentStatus = 'paid';
+                        c.updatedAt = Date.now();
+                        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', c);
+                    }
+                });
+            }
+
+            // Register all removed credits in tombstone registry
+            removed.forEach(c => {
+                if (c) {
+                    if (c.id && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c.id);
+                    if (c._rtdbKey && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c._rtdbKey);
+                }
+            });
+
             if (window.firebaseDB && window.firebaseRef && window.firebaseSet) {
                 try {
                     window.firebaseSet(window.firebaseRef(window.firebaseDB, 'v2/credits'), null);
+                    window.firebaseSet(window.firebaseRef(window.firebaseDB, 'credits'), null);
+                    window.firebaseSet(window.firebaseRef(window.firebaseDB, 'appState/credits'), null);
                     window.firebaseSet(window.firebaseRef(window.firebaseDB, 'v2/openCreditsByCustomer'), null);
                 } catch(e) { console.warn('Delete all credits Firebase note:', e); }
             }
+            try {
+                const baseUrl = getRTDBUrl();
+                fetch(`${baseUrl}/v2/credits.json`, { method: 'DELETE' }).catch(() => {});
+                fetch(`${baseUrl}/credits.json`, { method: 'DELETE' }).catch(() => {});
+                fetch(`${baseUrl}/appState/credits.json`, { method: 'DELETE' }).catch(() => {});
+                fetch(`${baseUrl}/v2/openCreditsByCustomer.json`, { method: 'DELETE' }).catch(() => {});
+            } catch(e) {}
+
             if (typeof logActivity === 'function') {
                 logActivity('credit', 'حذف جميع سجلات الكريدي', `تم مسح جميع سجلات الديون والكريدي بالكامل (${count} سجل)`);
             }
             const searchInput = document.getElementById('creditSearchInput');
             if (searchInput) searchInput.value = '';
-            saveState(); renderCreditsList();
+            saveState(); renderCreditsList(); render();
             showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
         });
     } window.deleteAllCredits = deleteAllCredits;
@@ -6151,10 +6326,42 @@ window.setElemRequired = setElemRequired;
     function settleCredit(id) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
         showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
-            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
+            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit ? targetCredit.name : targetId}`, targetCredit ? targetCredit.amount : 0);
-            window.appState.credits = appState.credits.filter(c => String(c && c.id).trim() !== targetId);
-            if (window.deleteFirebaseSectionItem) window.deleteFirebaseSectionItem('credits', targetId);
+
+            // If credit is linked to a customer, clear their debt in customers collection
+            if (targetCredit) {
+                const custId = targetCredit.customerId || (targetId.startsWith('cr_auto_') ? targetId.replace('cr_auto_', '') : null);
+                let linkedCust = null;
+                if (custId && Array.isArray(appState.customers)) {
+                    linkedCust = appState.customers.find(c => String(c && c.id) === String(custId));
+                }
+                if (!linkedCust && targetCredit.phone && Array.isArray(appState.customers)) {
+                    const normP = cleanPhone(targetCredit.phone);
+                    if (normP) {
+                        linkedCust = appState.customers.find(c => cleanPhone(c && c.phone) === normP && c.paymentStatus === 'credit');
+                    }
+                }
+                if (linkedCust) {
+                    linkedCust.debtAmount = 0;
+                    linkedCust.paymentStatus = 'paid';
+                    linkedCust.updatedAt = Date.now();
+                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
+                }
+            }
+
+            if (typeof window.registerDeletedItemId === 'function') {
+                window.registerDeletedItemId('credits', targetId);
+                if (targetCredit && targetCredit._rtdbKey) window.registerDeletedItemId('credits', targetCredit._rtdbKey);
+            }
+
+            window.appState.credits = appState.credits.filter(c => String(c && c.id).trim() !== targetId && String(c && c._rtdbKey).trim() !== targetId);
+            if (window.deleteFirebaseSectionItem) {
+                window.deleteFirebaseSectionItem('credits', targetId, targetCredit);
+                if (targetCredit && targetCredit._rtdbKey && targetCredit._rtdbKey !== targetId) {
+                    window.deleteFirebaseSectionItem('credits', targetCredit._rtdbKey, targetCredit);
+                }
+            }
             saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
             renderCreditsList(); render(); // Update dashboard totals
         }, { title: 'تسديد الكريدي', confirmText: 'نعم، تم التسديد',
@@ -6260,14 +6467,49 @@ window.setElemRequired = setElemRequired;
         if (!id) return; const targetId = String(id).trim();
         promptWithPassword({ title: 'حذف الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا الكريدي', buttonText: 'تأكيد الحذف' }, () => {
             if (!Array.isArray(appState.credits)) appState.credits = [];
-            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId);
+            const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (typeof logActivity === 'function') logActivity('credit', 'حذف كريدي', `حذف سجل الكريدي الخاص بـ: ${targetCredit ? targetCredit.name : targetId}`);
+
+            // If credit is linked to a customer, clear their debt in customers collection
+            if (targetCredit) {
+                const custId = targetCredit.customerId || (targetId.startsWith('cr_auto_') ? targetId.replace('cr_auto_', '') : null);
+                let linkedCust = null;
+                if (custId && Array.isArray(appState.customers)) {
+                    linkedCust = appState.customers.find(c => String(c && c.id) === String(custId));
+                }
+                if (!linkedCust && targetCredit.phone && Array.isArray(appState.customers)) {
+                    const normP = cleanPhone(targetCredit.phone);
+                    if (normP) {
+                        linkedCust = appState.customers.find(c => cleanPhone(c && c.phone) === normP && c.paymentStatus === 'credit');
+                    }
+                }
+                if (linkedCust) {
+                    linkedCust.debtAmount = 0;
+                    linkedCust.paymentStatus = 'paid';
+                    linkedCust.updatedAt = Date.now();
+                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
+                }
+            }
+
+            if (typeof window.registerDeletedItemId === 'function') {
+                window.registerDeletedItemId('credits', targetId);
+                if (targetCredit && targetCredit._rtdbKey) window.registerDeletedItemId('credits', targetCredit._rtdbKey);
+            }
+
             // Delete matching credit
             appState.credits = appState.credits.filter(c => {
-                if (!c) return false; return String(c.id).trim() !== targetId;
-            }); window.appState.credits = appState.credits;
+                if (!c) return false;
+                const cId = String(c.id || '').trim();
+                const cKey = String(c._rtdbKey || '').trim();
+                return cId !== targetId && cKey !== targetId;
+            });
+            window.appState.credits = appState.credits;
+
             if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('credits', targetId);
+                window.deleteFirebaseSectionItem('credits', targetId, targetCredit);
+                if (targetCredit && targetCredit._rtdbKey && targetCredit._rtdbKey !== targetId) {
+                    window.deleteFirebaseSectionItem('credits', targetCredit._rtdbKey, targetCredit);
+                }
             }
             saveState(); showSuccessToast('تم حذف الكريدي بنجاح');
             renderCreditsList(); render(); // Update dashboard totals
@@ -6866,8 +7108,10 @@ window.setElemRequired = setElemRequired;
         this.reset(); const dateInput = document.getElementById('absenceDate');
         if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
     }); function toggleFreeze(customerId) {
-       const customer = appState.customers.find(c => c.id === customerId);
-       if (!customer) return; if (customer.status === 'frozen') {
+       const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
+       if (!customer) return;
+       customer.updatedAt = Date.now();
+       if (customer.status === 'frozen') {
            const newEndDate = new Date();
            newEndDate.setDate(newEndDate.getDate() + customer.frozenRemainingDays);
            customer.endDate = newEndDate.toISOString();
@@ -7838,11 +8082,17 @@ window.setElemRequired = setElemRequired;
                        ${expiryBadgeHtml}
                    </div>
                    <div class="text-xs text-slate-500 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                       <span>البيع: <strong class="text-slate-800">${p.price} دج</strong></span>
+                       <span>سعر البيع: <strong class="text-slate-800">${parseFloat(p.price) || 0} دج</strong></span>
                        <span class="text-slate-300">|</span>
-                       <span>التكلفة: <span class="text-slate-700">${p.cost || 0} دج</span></span>
+                       <span>سعر الشراء: <span class="text-slate-700 font-semibold">${parseFloat(p.cost) || 0} دج</span></span>
                        <span class="text-slate-300">|</span>
                        <span>المخزون: ${stockQtyDisplay}</span>
+                       <span class="text-slate-300">|</span>
+                       <span class="inline-flex items-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-md" title="إجمالي قيمة مخزون هذا المنتج">
+                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * (parseFloat(p.cost) || 0)).toLocaleString()} دج</strong></span>
+                           <span class="text-blue-300">•</span>
+                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * (parseFloat(p.price) || 0)).toLocaleString()} دج</strong></span>
+                       </span>
                        ${p.barcode ? `<span class="text-slate-300">|</span><span class="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200" title="باركود"><svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>${p.barcode}</span>` : ''}
                        ${p.expiryDate ? `<span class="text-slate-300">|</span><span>الصلاحية: <strong class="${expInfo.isNearExpiry ? 'text-blue-700 font-bold' : 'text-slate-700'}">${p.expiryDate}</strong></span>` : ''}
                    </div>
@@ -8342,17 +8592,9 @@ window.setElemRequired = setElemRequired;
             setElemHTML('yearlyProductSales', formatMoney(yearlySales));
             setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
         }
-        // Calculate Stock metrics
-        let totalStock1Units = 0; let totalStock2Units = 0;
-        let totalStockCapital = 0; if (Array.isArray(appState.products)) {
-            appState.products.forEach(p => { if (!p) return;
-                const cost = Number(p.cost) || 0;
-                const stockQty = Number(p.stock) || 0;
-                if (p.stockLocation === 'stock2') {
-                    totalStock2Units += stockQty;
-                } else { totalStock1Units += stockQty;
-                } totalStockCapital += (stockQty * cost);
-            }); }
+        // Calculate Stock metrics & valuation (سعر المشتريات وقيمة السلع بثمن البيع وبثمن الشراء)
+        const stockVal = calculateStockValuation();
+
         // Update Products View Summary Stats
         if (document.getElementById('prodViewTodaySales')) {
             setElemHTML('prodViewTodaySales', formatMoney(todaySales));
@@ -8361,13 +8603,43 @@ window.setElemRequired = setElemRequired;
         } if (document.getElementById('prodViewTodayCount')) {
             setElemText('prodViewTodayCount', todaySalesCount);
         } if (document.getElementById('prodViewStock1Count')) {
-            setElemText('prodViewStock1Count', `${totalStock1Units} قطعة`);
+            setElemText('prodViewStock1Count', `${stockVal.stock1ItemsCount} قطعة`);
         } if (document.getElementById('prodViewStock2Count')) {
-            setElemText('prodViewStock2Count', `${totalStock2Units} قطعة`);
+            setElemText('prodViewStock2Count', `${stockVal.stock2ItemsCount} قطعة`);
         } if (document.getElementById('prodViewTotalCapital')) {
-            setElemHTML('prodViewTotalCapital', formatMoney(totalStockCapital));
+            setElemHTML('prodViewTotalCapital', formatMoney(stockVal.totalCost));
         } if (document.getElementById('prodViewNetProfit')) {
             setElemHTML('prodViewNetProfit', formatMoney(allTimeProductProfit));
+        }
+
+        // Product View Stock Valuation Bar (سعر المشتريات وقيمة السلع بثمن البيع وبثمن الشراء)
+        if (document.getElementById('prodViewTotalCost')) {
+            setElemHTML('prodViewTotalCost', formatMoney(stockVal.totalCost));
+        } if (document.getElementById('prodViewStock1Cost')) {
+            setElemHTML('prodViewStock1Cost', formatMoney(stockVal.stock1Cost));
+        } if (document.getElementById('prodViewStock2Cost')) {
+            setElemHTML('prodViewStock2Cost', formatMoney(stockVal.stock2Cost));
+        } if (document.getElementById('prodViewTotalSelling')) {
+            setElemHTML('prodViewTotalSelling', formatMoney(stockVal.totalSelling));
+        } if (document.getElementById('prodViewStock1Selling')) {
+            setElemHTML('prodViewStock1Selling', formatMoney(stockVal.stock1Selling));
+        } if (document.getElementById('prodViewStock2Selling')) {
+            setElemHTML('prodViewStock2Selling', formatMoney(stockVal.stock2Selling));
+        } if (document.getElementById('prodViewTotalProfit')) {
+            setElemHTML('prodViewTotalProfit', formatMoney(stockVal.totalPotentialProfit));
+        } if (document.getElementById('prodViewProfitMargin')) {
+            setElemText('prodViewProfitMargin', `${stockVal.profitMargin}%`);
+        } if (document.getElementById('prodViewTotalItemsCount')) {
+            setElemText('prodViewTotalItemsCount', `${stockVal.totalItemsCount} قطعة`);
+        }
+
+        // Dashboard Stock Valuation Cards
+        if (document.getElementById('dashboardStockCost')) {
+            setElemHTML('dashboardStockCost', formatMoney(stockVal.totalCost));
+        } if (document.getElementById('dashboardStockSelling')) {
+            setElemHTML('dashboardStockSelling', formatMoney(stockVal.totalSelling));
+        } if (document.getElementById('dashboardStockProfit')) {
+            setElemHTML('dashboardStockProfit', formatMoney(stockVal.totalPotentialProfit));
         }
         // Real-time Category Breakdown Calculations (Doses, Boxes, Frigo)
         let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
@@ -8521,35 +8793,46 @@ window.setElemRequired = setElemRequired;
     // ==========================================
     // CAISSE & STOCK VALUATION CORE ENGINE
     // ==========================================
-    function calculateStockValuation() { const prods = Array.isArray(appState.products) ? appState.products : [];
+    function calculateStockValuation() {
+        const prods = Array.isArray(appState.products) ? appState.products : [];
         let stock1Cost = 0; let stock2Cost = 0;
         let stock1Selling = 0; let stock2Selling = 0;
         let stock1ItemsCount = 0; let stock2ItemsCount = 0;
         let stock1TypesCount = 0; let stock2TypesCount = 0;
-        prods.forEach(p => { if (!p) return;
-            const qty = Number(p.stock || 0);
-            const cost = Number(p.cost || 0);
-            const price = Number(p.price || 0);
+        prods.forEach(p => {
+            if (!p) return;
+            const qty = parseFloat(p.stock) || 0;
+            const cost = parseFloat(p.cost) || 0;
+            const price = parseFloat(p.price) || 0;
             const isStock2 = p.stockLocation === 'stock2';
-            if (isStock2) { stock2Cost += (qty * cost);
+            if (isStock2) {
+                stock2Cost += (qty * cost);
                 stock2Selling += (qty * price);
                 stock2ItemsCount += qty;
-                stock2TypesCount++; } else {
+                stock2TypesCount++;
+            } else {
                 stock1Cost += (qty * cost);
                 stock1Selling += (qty * price);
                 stock1ItemsCount += qty;
-                stock1TypesCount++; } }); const totalCost = stock1Cost + stock2Cost;
+                stock1TypesCount++;
+            }
+        });
+        const totalCost = stock1Cost + stock2Cost;
         const totalSelling = stock1Selling + stock2Selling;
         const totalPotentialProfit = totalSelling - totalCost;
         const totalItemsCount = stock1ItemsCount + stock2ItemsCount;
         const totalTypesCount = prods.length;
-        return { stock1Cost, stock2Cost,
+        const profitMargin = totalCost > 0 ? Math.round((totalPotentialProfit / totalCost) * 100) : 0;
+        return {
+            stock1Cost, stock2Cost,
             totalCost, stock1Selling,
             stock2Selling, totalSelling,
             totalPotentialProfit,
+            profitMargin,
             stock1ItemsCount, stock2ItemsCount,
             totalItemsCount, stock1TypesCount,
-            stock2TypesCount, totalTypesCount };
+            stock2TypesCount, totalTypesCount
+        };
     } window.calculateStockValuation = calculateStockValuation;
     function calculateCaisseDetails(targetDateInput) {
         const targetDateStr = getLocalDateString(targetDateInput) || getLocalDateString(new Date());
@@ -8812,6 +9095,14 @@ window.setElemRequired = setElemRequired;
             } } if (document.getElementById('caisseMonthManqueTotal')) {
             setElemHTML('caisseMonthManqueTotal', formatMoney(caisseStats.currentMonthManque));
             setElemHTML('caisseYearManqueTotal', formatMoney(caisseStats.currentYearManque));
+        }
+        // Stock Valuation in Caisse
+        if (document.getElementById('caisseStockCost')) {
+            setElemHTML('caisseStockCost', formatMoney(stockVal.totalCost));
+        } if (document.getElementById('caisseStockSelling')) {
+            setElemHTML('caisseStockSelling', formatMoney(stockVal.totalSelling));
+        } if (document.getElementById('caisseStockProfit')) {
+            setElemHTML('caisseStockProfit', formatMoney(stockVal.totalPotentialProfit));
         }
         // 3. Populate Clôture Form
         const clotureDateInput = document.getElementById('clotureFormDate');
@@ -9980,6 +10271,7 @@ window.setElemRequired = setElemRequired;
 
     window.renderSuppliersList = function() {
         const transactions = getAllSupplierTransactions();
+        let totalPurchases = 0;
         let totalPaid = 0;
         let totalDebt = 0;
 
@@ -9988,37 +10280,53 @@ window.setElemRequired = setElemRequired;
         transactions.forEach(tx => {
             const p = Number(tx.paidAmount) || 0;
             const d = Number(tx.remainingDebt) || 0;
+            const tot = Number(tx.totalAmount) || (p + d);
+            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
+                totalPurchases += tot;
+            }
             totalPaid += p;
 
             const name = (tx.supplierName || 'مورد عام').trim();
             if (!supplierMap[name]) {
-                supplierMap[name] = { name: name, info: tx.supplierInfo || '', paid: 0, debt: 0, transactions: [] };
+                supplierMap[name] = { name: name, info: tx.supplierInfo || '', paid: 0, debt: 0, purchases: 0, transactions: [] };
+            }
+            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
+                supplierMap[name].purchases += tot;
             }
             supplierMap[name].paid += p;
             supplierMap[name].transactions.push(tx);
         });
 
-        // Also incorporate debt from appState.suppliers
+        // Also incorporate debt and initial purchases from appState.suppliers
         (appState.suppliers || []).forEach(s => {
             if (!s || !s.name) return;
             const name = s.name.trim();
             const d = Number(s.debt) || 0;
+            const p = Number(s.paid) || 0;
             totalDebt += d;
             if (!supplierMap[name]) {
-                supplierMap[name] = { name: name, info: s.info || '', paid: Number(s.paid) || 0, debt: d, transactions: [] };
+                const sTotal = p + d;
+                totalPurchases += sTotal;
+                supplierMap[name] = { name: name, info: s.info || '', paid: p, debt: d, purchases: sTotal, transactions: [] };
             } else {
                 supplierMap[name].debt = d;
+                if (supplierMap[name].transactions.length === 0) {
+                    supplierMap[name].purchases = p + d;
+                    totalPurchases += (p + d);
+                }
                 if (s.info) supplierMap[name].info = s.info;
             }
         });
 
         // Update KPI Summary elements
+        const purchasesElem = document.getElementById('totalSupplierPurchases');
         const paidElem = document.getElementById('totalSupplierPaid');
         const debtElem = document.getElementById('totalSupplierDebt');
         const badgeElem = document.getElementById('suppliersCountBadge');
 
         const uniqueSuppliers = Object.values(supplierMap);
 
+        if (purchasesElem) purchasesElem.innerHTML = `${totalPurchases.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (paidElem) paidElem.innerHTML = `${totalPaid.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (debtElem) debtElem.innerHTML = `${totalDebt.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (badgeElem) badgeElem.textContent = `${uniqueSuppliers.length} مورد`;
@@ -10095,12 +10403,21 @@ window.setElemRequired = setElemRequired;
         if (!modal) return; const allTx = getAllSupplierTransactions().filter(tx => (tx.supplierName || '').trim().toLowerCase() === (supplierName || '').trim().toLowerCase());
         const sup = (appState.suppliers || []).find(s => (s && s.name || '').trim().toLowerCase() === (supplierName || '').trim().toLowerCase());
         let totalBought = 0; let totalPaid = 0;
-        allTx.forEach(tx => { const paid = Number(tx.paidAmount) || 0;
+        allTx.forEach(tx => {
+            const paid = Number(tx.paidAmount) || 0;
             const debt = Number(tx.remainingDebt) || 0;
-            if (tx.type === 'purchase') {
+            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
                 totalBought += Number(tx.totalAmount) || (paid + debt);
-            } else { totalBought += paid; }
-            totalPaid += paid; }); const currentDebt = sup ? Number(sup.debt || 0) : Math.max(0, totalBought - totalPaid);
+            }
+            totalPaid += paid;
+        });
+        if (allTx.length === 0 && sup) {
+            const paid = Number(sup.paid) || 0;
+            const debt = Number(sup.debt) || 0;
+            totalBought = paid + debt;
+            totalPaid = paid;
+        }
+        const currentDebt = sup ? Number(sup.debt || 0) : Math.max(0, totalBought - totalPaid);
         const nameElem = document.getElementById('stmtSupplierName');
         const phoneElem = document.getElementById('stmtSupplierPhone');
         const totalBoughtElem = document.getElementById('stmtTotalBought');

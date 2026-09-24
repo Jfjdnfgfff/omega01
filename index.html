@@ -59,6 +59,10 @@
               <span>Google Drive</span>
               <span class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
             </button>
+            <button onclick="handleNavButtonClick(event, () => openGitHubAiSyncModal())" title="إدارة التزامن ومنع التعارض بين GitHub و AI Studio" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
+              <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+              <span>منع التعارض (GitHub / AI Studio)</span>
+            </button>
             <button onclick="handleNavButtonClick(event, () => openCoachCommissionsModal())" title="تقرير عمولات ومبيعات الكوتشات (33%)" class="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 hover:text-blue-700 transition-all bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl shadow-2xs whitespace-nowrap shrink-0">
               <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
               <span>عمولات الكوتش (33%)</span>
@@ -178,7 +182,30 @@
               <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-sm hover:border-blue-300 transition-all">
                 <span class="text-slate-500 text-[10px] md:text-xs font-bold mb-1">عدد مبيعات اليوم</span>
                 <span id="todaySalesCount" class="text-lg md:text-xl font-black tracking-tighter text-blue-950 mt-auto">0</span>
-              </div> </div> </div>
+              </div> </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mt-3">
+              <div class="bg-gradient-to-br from-blue-50/60 to-white border border-blue-200/80 p-4 rounded-2xl flex flex-col shadow-sm hover:border-blue-400 transition-all">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-blue-950 text-xs font-bold">قيمة السلع بثمن الشراء (رأس المال)</span>
+                  <span class="text-[10px] font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-md">سعر الشراء</span>
+                </div>
+                <span id="dashboardStockCost" class="text-lg md:text-xl font-black tracking-tight text-blue-950 mt-auto">0 دج</span>
+              </div>
+              <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-sm hover:border-blue-300 transition-all">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-slate-800 text-xs font-bold">قيمة السلع بثمن البيع (العائد المتوقع)</span>
+                  <span class="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">سعر البيع</span>
+                </div>
+                <span id="dashboardStockSelling" class="text-lg md:text-xl font-black tracking-tight text-blue-700 mt-auto">0 دج</span>
+              </div>
+              <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-sm hover:border-blue-300 transition-all bg-gradient-to-br from-slate-50 to-white">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-slate-800 text-xs font-bold">الأرباح المتوقعة من المخزون</span>
+                  <span class="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">الربح المحتمل</span>
+                </div>
+                <span id="dashboardStockProfit" class="text-lg md:text-xl font-black tracking-tight text-blue-600 mt-auto">0 دج</span>
+              </div>
+            </div> </div>
           <div id="subscribersStatsSection" class="mt-6">
             <div class="flex items-center gap-2 mb-3">
               <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
@@ -358,6 +385,30 @@
         <div class="text-[10px] text-slate-500 mt-1 font-medium flex justify-between">
           <span>عجز السنة: <strong id="caisseYearManqueTotal" class="text-slate-700 font-bold">0 دج</strong></span>
         </div> </div> </div>
+    <!-- Stock Valuation in Caisse -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mb-6">
+      <div class="bg-gradient-to-br from-blue-50/70 to-white border border-blue-200 p-4 rounded-2xl flex flex-col shadow-2xs">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-blue-950 text-xs font-bold">قيمة السلع بثمن الشراء (رأس مال المخزون)</span>
+          <span class="text-[10px] font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-md">سعر الشراء</span>
+        </div>
+        <span id="caisseStockCost" class="text-xl md:text-2xl font-black text-blue-950 tracking-tight mt-auto">0 دج</span>
+      </div>
+      <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-2xs">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-slate-800 text-xs font-bold">قيمة السلع بثمن البيع</span>
+          <span class="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">سعر البيع</span>
+        </div>
+        <span id="caisseStockSelling" class="text-xl md:text-2xl font-black text-blue-700 tracking-tight mt-auto">0 دج</span>
+      </div>
+      <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-2xs bg-gradient-to-br from-slate-50 to-white">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-slate-800 text-xs font-bold">الأرباح المتوقعة من بيع المخزون</span>
+          <span class="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">الربح المتوقع</span>
+        </div>
+        <span id="caisseStockProfit" class="text-xl md:text-2xl font-black text-blue-600 tracking-tight mt-auto">0 دج</span>
+      </div>
+    </div>
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <!-- Caisse Audit & Clôture Form -->
       <div id="caisseClotureSection" class="lg:col-span-5 bg-white border border-slate-200 rounded-3xl p-5 md:p-6 shadow-sm">
@@ -535,6 +586,51 @@
                   <span class="text-blue-950 text-[10px] sm:text-xs font-black mb-1">أرباح المنتجات الصافية</span>
                   <span id="prodViewNetProfit" class="text-base sm:text-lg font-black tracking-tighter text-blue-700 mt-auto">0 دج</span>
               </div> </div>
+          <!-- Stock Valuation & Inventory Capital Bar (سعر المشتريات وقيمة السلع بثمن البيع وبثمن الشراء) -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+              <div class="bg-white border border-blue-200/80 p-4 rounded-2xl flex flex-col shadow-2xs hover:border-blue-400 transition-all bg-gradient-to-br from-blue-50/50 to-white">
+                  <div class="flex items-center justify-between mb-1">
+                      <span class="text-blue-950 text-xs font-black flex items-center gap-1.5">
+                          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                          <span>قيمة السلع بثمن الشراء (رأس مال المخزون)</span>
+                      </span>
+                      <span class="text-[10px] font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-md">سعر الشراء</span>
+                  </div>
+                  <span id="prodViewTotalCost" class="text-xl sm:text-2xl font-black tracking-tight text-blue-950 mt-1">0 دج</span>
+                  <div class="text-[11px] text-slate-500 mt-2 pt-2 border-t border-slate-100 flex justify-between items-center font-medium">
+                      <span>Stock 1 (الصالة): <strong id="prodViewStock1Cost" class="text-slate-700 font-bold">0 دج</strong></span>
+                      <span>Stock 2 (المستودع): <strong id="prodViewStock2Cost" class="text-slate-700 font-bold">0 دج</strong></span>
+                  </div>
+              </div>
+              <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-2xs hover:border-blue-400 transition-all">
+                  <div class="flex items-center justify-between mb-1">
+                      <span class="text-slate-800 text-xs font-black flex items-center gap-1.5">
+                          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
+                          <span>قيمة السلع بثمن البيع (القيمة السوقية)</span>
+                      </span>
+                      <span class="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">سعر البيع</span>
+                  </div>
+                  <span id="prodViewTotalSelling" class="text-xl sm:text-2xl font-black tracking-tight text-blue-700 mt-1">0 دج</span>
+                  <div class="text-[11px] text-slate-500 mt-2 pt-2 border-t border-slate-100 flex justify-between items-center font-medium">
+                      <span>Stock 1 (الصالة): <strong id="prodViewStock1Selling" class="text-slate-700 font-bold">0 دج</strong></span>
+                      <span>Stock 2 (المستودع): <strong id="prodViewStock2Selling" class="text-slate-700 font-bold">0 دج</strong></span>
+                  </div>
+              </div>
+              <div class="bg-white border border-slate-200 p-4 rounded-2xl flex flex-col shadow-2xs hover:border-blue-400 transition-all bg-gradient-to-br from-slate-50 to-white">
+                  <div class="flex items-center justify-between mb-1">
+                      <span class="text-slate-800 text-xs font-black flex items-center gap-1.5">
+                          <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                          <span>الأرباح الكامنة المتوقعة من المخزون</span>
+                      </span>
+                      <span class="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">الربح المتوقع</span>
+                  </div>
+                  <span id="prodViewTotalProfit" class="text-xl sm:text-2xl font-black tracking-tight text-blue-600 mt-1">0 دج</span>
+                  <div class="text-[11px] text-slate-500 mt-2 pt-2 border-t border-slate-100 flex justify-between items-center font-medium">
+                      <span>هامش الربح الإجمالي: <strong id="prodViewProfitMargin" class="text-blue-700 font-bold">0%</strong></span>
+                      <span>إجمالي عدد القطع: <strong id="prodViewTotalItemsCount" class="text-slate-700 font-bold">0 قطعة</strong></span>
+                  </div>
+              </div>
+          </div>
           <!-- Category Revenue & Profit Breakdown (Doses, Boîtes, Frigo) -->
           <div class="bg-white border border-slate-200/90 rounded-2xl p-4 md:p-5 shadow-xs mb-6">
               <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
@@ -1527,7 +1623,15 @@
                       </div> </div>
               </div>
               <!-- Suppliers Summary Cards Grid -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div class="bg-gradient-to-br from-indigo-50 to-white border border-indigo-100 p-4 rounded-2xl flex items-center justify-between">
+                      <div>
+                          <span class="text-xs font-semibold text-indigo-700 block mb-0.5">إجمالي المشتريات (سعر السلع)</span>
+                          <span id="totalSupplierPurchases" class="text-lg sm:text-xl font-extrabold text-indigo-950 tracking-tight">0 دج</span>
+                      </div>
+                      <div class="w-10 h-10 bg-indigo-600/10 text-indigo-700 rounded-xl flex items-center justify-center font-bold">
+                          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
+                      </div> </div>
                   <div class="bg-gradient-to-br from-blue-50 to-white border border-blue-100 p-4 rounded-2xl flex items-center justify-between">
                       <div>
                           <span class="text-xs font-semibold text-blue-700 block mb-0.5">إجمالي المدفوع (شحال خلصت)</span>
@@ -2857,6 +2961,69 @@
           </div>
       </div>
   </div>
+
+
+   <!-- GitHub / AI Studio Sync & Conflict Prevention Modal -->
+   <div id="githubAiSyncModal" class="modal-overlay" style="z-index: 135;" onclick="handleOverlayClick(event, 'githubAiSyncModal')">
+       <div class="modal-content relative w-full max-w-lg bg-white p-6 sm:p-7 rounded-[2rem] shadow-2xl border border-slate-100 space-y-5">
+           <button type="button" onclick="closeModal('githubAiSyncModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 transition-colors">
+               <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
+           </button>
+           <div class="border-b border-slate-100 pb-3">
+               <div class="flex items-center gap-2.5">
+                   <div class="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black">
+                       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                   </div>
+                   <div>
+                       <h3 class="text-base font-black text-slate-800">منع التعارض والتزامن (GitHub & AI Studio)</h3>
+                       <p class="text-xs text-slate-500 font-medium">إدارة بيئات التشغيل، عزل قواعد البيانات، ومسح الذاكرة المؤقتة لمنع أي تضارب بين جيت هاب و AI Studio.</p>
+                   </div>
+               </div>
+           </div>
+           <div class="space-y-3.5 text-xs">
+               <div class="bg-blue-50/70 border border-blue-200/90 rounded-2xl p-4 space-y-2">
+                   <div class="flex items-center justify-between font-bold text-blue-950">
+                       <span>حالة البيئة الحالية:</span>
+                       <span id="syncCurrentEnvBadge" class="px-2.5 py-1 rounded-lg bg-blue-600 text-white font-black text-[10px]">AI Studio Preview</span>
+                   </div>
+                   <p class="text-slate-600 text-[11px] leading-relaxed">
+                       نظام العزل التلقائي يمنع تداخل بيانات الإنتاج في GitHub مع اختباراتك التجريبية في AI Studio. يمكنك التبديل بين مسار قاعدة البيانات أو مزامنة النسخ الاحتياطي بنقرة واحدة.
+                   </p>
+               </div>
+
+               <div class="space-y-2">
+                   <label class="block font-extrabold text-slate-800">مسار قاعدة البيانات (Database Namespace Prefix):</label>
+                   <div class="grid grid-cols-2 gap-2">
+                       <button type="button" onclick="setDbNamespace('v2')" id="btnEnvProd" class="p-3 rounded-xl border text-center font-bold transition-all bg-white border-slate-200 text-slate-700 hover:border-blue-300">
+                           <span class="block text-slate-900 font-black">بيئة الإنتاج (v2)</span>
+                           <span class="text-[10px] text-slate-400">تستخدم في GitHub Pages</span>
+                       </button>
+                       <button type="button" onclick="setDbNamespace('v2_aistudio')" id="btnEnvAiStudio" class="p-3 rounded-xl border text-center font-bold transition-all bg-blue-50 border-blue-300 text-blue-900">
+                           <span class="block text-blue-950 font-black">بيئة التطوير (v2_aistudio)</span>
+                           <span class="text-[10px] text-blue-600">معزولة لتجارب AI Studio</span>
+                       </button>
+                   </div>
+               </div>
+
+               <div class="space-y-2 pt-2 border-t border-slate-100">
+                   <div class="font-extrabold text-slate-800 mb-1">إجراءات الصيانة ومنع تضارب الكاش (Cache Conflicts):</div>
+                   <button type="button" onclick="clearServiceWorkerAndHardRefresh()" class="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors">
+                       <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                       <span>إلغاء خدمة الكاش القديمة (Unregister SW) وتحديث الإطار</span>
+                   </button>
+                   <button type="button" onclick="exportGitHubAiBackup()" class="w-full py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors">
+                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                       <span>تصدير نسخة احتياطية كاملة (JSON Backup) للترحيل الآمن</span>
+                   </button>
+               </div>
+           </div>
+           <div class="pt-2">
+               <button type="button" onclick="closeModal('githubAiSyncModal')" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-extrabold transition-all shadow-md shadow-blue-500/20">
+                   حفظ والإغلاق
+               </button>
+           </div>
+       </div>
+   </div>
 
    <script type="module" src="/src/main.js"></script>
 </body> </html>
