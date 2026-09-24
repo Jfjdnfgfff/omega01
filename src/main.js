@@ -198,22 +198,16 @@ window.setElemRequired = setElemRequired;
       } else { errElem.classList.add('hidden');
       } } } window.updateFirebaseUIBadge = updateFirebaseUIBadge;
 
-  // Centralized RequestAnimationFrame Render Scheduler (prevents redundant rendering passes)
-  let renderScheduled = false;
+  // Centralized Render Scheduler: debounced + requestAnimationFrame batching.
+  // Coalesces bursts of updates (e.g. several Firebase realtime listeners firing at once)
+  // into a single render pass to keep the UI responsive with large datasets.
+  let renderDebounceTimer = null;
   function scheduleRender() {
-    if (renderScheduled) return;
-    renderScheduled = true;
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => {
-        renderScheduled = false;
-        if (typeof window.render === 'function') window.render();
-      });
-    } else {
-      setTimeout(() => {
-        renderScheduled = false;
-        if (typeof window.render === 'function') window.render();
-      }, 16);
-    }
+    if (renderDebounceTimer) return;
+    renderDebounceTimer = setTimeout(() => {
+      renderDebounceTimer = null;
+      if (typeof window.render === 'function') window.render();
+    }, 120);
   }
   window.scheduleRender = scheduleRender;
 
@@ -234,6 +228,57 @@ window.setElemRequired = setElemRequired;
   };
   window.firebaseLoadedSections = window.firebaseLoadedSections || {};
   window.firebaseLoadingPromises = window.firebaseLoadingPromises || {};
+
+  // Performance windows: sales is append-heavy and grows without bound, so only the live tail
+  // is subscribed/streamed in realtime; older history is completed via cursor pagination.
+  window.SALES_REALTIME_WINDOW = 3000;
+  window.salesHistoryComplete = false;
+  window.salesHistoryLoading = false;
+
+  // Silent background pager: completes older sales history with cursor-based pagination
+  // (orderByKey + endBefore) — no full-node re-downloads, no toasts, no blocked UI.
+  window.completeSalesHistorySilently = async function() {
+    if (window.salesHistoryLoading || window.salesHistoryComplete) return;
+    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return;
+    window.salesHistoryLoading = true;
+    try {
+      const pageSize = window.SALES_REALTIME_WINDOW || 3000;
+      const keyLess = (a, b) => {
+        const na = Number(a); const nb = Number(b);
+        if (!isNaN(na) && !isNaN(nb) && a !== '' && b !== '') return na < nb;
+        return String(a) < String(b);
+      };
+      for (let guard = 0; guard < 60; guard++) {
+        const list = Array.isArray(window.appState.sales) ? window.appState.sales : [];
+        let oldestKey = null;
+        for (let i = 0; i < list.length; i++) {
+          const k = list[i] && (list[i]._rtdbKey || list[i].id);
+          if (k !== undefined && k !== null && k !== '' && (oldestKey === null || keyLess(String(k), String(oldestKey)))) {
+            oldestKey = String(k);
+          }
+        }
+        let olderQ;
+        if (oldestKey) {
+          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), endBefore(oldestKey), limitToLast(pageSize));
+        } else {
+          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), limitToLast(pageSize));
+        }
+        let snap = await get(olderQ);
+        if (!snap || !snap.exists()) { window.salesHistoryComplete = true; break; }
+        const data = snap.val();
+        const keys = Object.keys(data);
+        const items = keys.map(k => ({ ...data[k], _rtdbKey: k }));
+        if (items.length === 0) { window.salesHistoryComplete = true; break; }
+        window.applyFirebaseSectionUpdate('sales', items, 'Silent Sales History Pager');
+        if (items.length < pageSize) { window.salesHistoryComplete = true; break; }
+      }
+    } catch (e) {
+      console.warn('Silent sales history completion note:', e);
+    } finally {
+      window.salesHistoryLoading = false;
+      if (typeof window.scheduleRender === 'function') window.scheduleRender();
+    }
+  };
 
   window.lazyLoadSection = async function(sectionName, force = false) {
     if (!sectionName) return [];
@@ -257,7 +302,18 @@ window.setElemRequired = setElemRequired;
 
         if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
           try {
-            let snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`));
+            // Bounded initial window for the append-heavy sales section (older history is
+            // completed silently via cursor pagination instead of one huge full-node fetch).
+            let snap;
+            if (sectionName === 'sales' && window.firebaseQuery && window.firebaseOrderByKey && window.firebaseLimitToLast) {
+              snap = await window.firebaseGet(window.firebaseQuery(
+                window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
+                window.firebaseOrderByKey(),
+                window.firebaseLimitToLast(window.SALES_REALTIME_WINDOW || 3000)
+              ));
+            } else {
+              snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`));
+            }
             if (snap.exists()) {
               const data = snap.val();
               items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
@@ -307,6 +363,10 @@ window.setElemRequired = setElemRequired;
         window.firebaseLoadedSections[sectionName] = true;
         if (items.length > 0) {
           window.applyFirebaseSectionUpdate(sectionName, items, `LazyLoad ${sectionName}`);
+        }
+        // Kick off silent background completion of older sales history (cursor pagination)
+        if (sectionName === 'sales' && items.length >= (window.SALES_REALTIME_WINDOW || 3000)) {
+          window.completeSalesHistorySilently();
         }
         scheduleRender();
         return items;
@@ -852,6 +912,24 @@ window.setElemRequired = setElemRequired;
     } catch(e) {
       return false;
     }
+  };
+
+  // O(1) package lookup with a memoized index (rebuilt only when the packages array changes).
+  // Replaces packages.find() inside per-customer loops, which was O(customers x packages).
+  let __pkgIndexArr = null;
+  let __pkgIndexMap = null;
+  window.getPackageById = function(id) {
+    const arr = (window.appState && Array.isArray(window.appState.packages)) ? window.appState.packages : [];
+    if (arr !== __pkgIndexArr) {
+      __pkgIndexArr = arr;
+      __pkgIndexMap = new Map();
+      for (let i = 0; i < arr.length; i++) {
+        const p = arr[i];
+        if (p && p.id !== undefined && p.id !== null) __pkgIndexMap.set(String(p.id), p);
+      }
+    }
+    if (id === undefined || id === null) return undefined;
+    return __pkgIndexMap.get(String(id));
   };
 
   function normalizePhone(phone) {
@@ -1472,7 +1550,6 @@ window.setElemRequired = setElemRequired;
       const sections = [
         { name: 'customers', v2: 'customers' },
         { name: 'products', v2: 'products' },
-        { name: 'sales', v2: 'sales' },
         { name: 'expenses', v2: 'expenses' },
         { name: 'credits', v2: 'credits' },
         { name: 'suppliers', v2: 'suppliers' },
@@ -1482,6 +1559,11 @@ window.setElemRequired = setElemRequired;
         { name: 'coachAbsences', v2: 'coachAbsences' },
         { name: 'supplierTransactions', v2: 'supplierTransactions' }
       ];
+      // When the realtime SDK is active, sales are served by the bounded window listener +
+      // silent cursor pager — skip the full-node REST download of the entire sales history.
+      if (!window.firebaseDB) {
+        sections.push({ name: 'sales', v2: 'sales' });
+      }
 
       const fetchPromises = [
         safeFetch('v2/meta/health.json'),
@@ -1625,8 +1707,29 @@ window.setElemRequired = setElemRequired;
       if (typeof showSuccessToast === 'function') showSuccessToast('تم نسخ القواعد بنجاح!');
     });
   };
+  // Startup sync: prefer the realtime SDK (bounded sales window + silent history pager).
+  // Only fall back to the full bulk REST fetch (including all sales) when the SDK is unavailable.
+  window.__startupFetchPromise = null;
+  window.runStartupFirebaseFetch = function(maxWaitMs = 3000) {
+    if (window.__startupFetchPromise) return window.__startupFetchPromise;
+    window.__startupFetchPromise = (async () => {
+      const started = Date.now();
+      while (!window.firebaseDB && !window.__firebaseSDKFailed && (Date.now() - started) < maxWaitMs) {
+        await new Promise(r => setTimeout(r, 150));
+      }
+      try {
+        await window.fetchAndLoadFirebaseData();
+      } catch (e) { console.warn('Startup bulk fetch note:', e); }
+      // Complete older sales history in the background once the SDK is live
+      if (window.firebaseDB && typeof window.completeSalesHistorySilently === 'function') {
+        window.completeSalesHistorySilently();
+      }
+    })();
+    return window.__startupFetchPromise;
+  };
+
   // Single immediate fast fetch (no duplicate event listeners)
-  window.fetchAndLoadFirebaseData();
+  window.runStartupFirebaseFetch();
   async function initFirebase() { try { try {
         const cfgRes = await fetch('/firebase.config.json');
         if (cfgRes.ok) { const cfgJson = await cfgRes.json();
@@ -1678,12 +1781,14 @@ window.setElemRequired = setElemRequired;
           return [];
         };
 
-        // Realtime Listeners for instant Live Sync across tabs, browsers, and devices
+        // Realtime Listeners for instant Live Sync across tabs, browsers, and devices.
+        // Sales uses a bounded window (limitToLast) so every new sale no longer re-downloads
+        // the ENTIRE sales history; older records are completed by the silent cursor pager.
         const realTimeListeners = [
           { name: 'stats', q: ref(database, 'v2/stats') },
           { name: 'products', q: ref(database, 'v2/products') },
           { name: 'customers', q: ref(database, 'v2/customers') },
-          { name: 'sales', q: ref(database, 'v2/sales') },
+          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(window.SALES_REALTIME_WINDOW || 3000)) },
           { name: 'expenses', q: ref(database, 'v2/expenses') },
           { name: 'credits', q: ref(database, 'v2/credits') },
           { name: 'suppliers', q: ref(database, 'v2/suppliers') },
@@ -1781,6 +1886,7 @@ window.setElemRequired = setElemRequired;
       } catch (rtdbInitErr) {
         console.warn('RTDB Init Note:', rtdbInitErr);
       } } catch (error) { console.warn('Notice initializing Firebase:', error?.message || error);
+      window.__firebaseSDKFailed = true; // release the startup bulk-REST fallback immediately
       updateFirebaseUIBadge('error', 'Firebase: خطأ في الاتصال', error?.message || String(error));
     } } initFirebase();
 
@@ -2749,7 +2855,7 @@ window.setElemRequired = setElemRequired;
         let totalCoachCommission = 0;
 
         femaleSubs.forEach(c => {
-            const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+            const pkg = getPackageById(c.packageId);
             const fullPrice = c.price !== undefined && c.price !== null ? Number(c.price) : (pkg && pkg.price ? Number(pkg.price) : 0);
             const debt = c.paymentStatus === 'credit' ? (Number(c.debtAmount) || 0) : 0;
             const paidAmount = Math.max(0, fullPrice - debt);
@@ -2833,7 +2939,7 @@ window.setElemRequired = setElemRequired;
                 `;
             } else {
                 tbody.innerHTML = femaleSubs.map(c => {
-                    const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+                    const pkg = getPackageById(c.packageId);
                     const pkgName = pkg ? pkg.name : 'اشتراك عام';
                     const fullPrice = c.price !== undefined && c.price !== null ? Number(c.price) : (pkg && pkg.price ? Number(pkg.price) : 0);
                     const debt = c.paymentStatus === 'credit' ? (Number(c.debtAmount) || 0) : 0;
@@ -5760,7 +5866,7 @@ window.setElemRequired = setElemRequired;
         let totalIncome = 0; let totalDebt = 0;
         let activeCount = 0; let expiredCount = 0;
         (appState.customers || []).forEach(c => {
-            const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+            const pkg = getPackageById(c.packageId);
             const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
             let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
             else if (c.paymentStatus === 'credit') {
@@ -5771,7 +5877,12 @@ window.setElemRequired = setElemRequired;
             else if (status === 'expired') expiredCount++;
         }); const totalStaffPayouts = (appState.staffPayouts || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
         const totalExpenses = (appState.expenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-        const totalSales = (appState.sales || []).reduce((sum, s) => sum + (Number(s.total) || 0), 0);
+        // Prefer exact pre-aggregated yearly stats while older sales history is still loading
+        const yearlyStatsR = appState.v2Stats && appState.v2Stats.yearly ? appState.v2Stats.yearly : null;
+        const salesInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStatsR && Object.keys(yearlyStatsR).length > 0);
+        const totalSales = salesInterim
+            ? Object.values(yearlyStatsR).reduce((sum, ys) => sum + (Number(ys && ys.sales) || 0), 0)
+            : (appState.sales || []).reduce((sum, s) => sum + (Number(s.total) || 0), 0);
         const netProfit = (totalIncome + totalSales) - (totalExpenses + totalStaffPayouts);
         let html = `
         <!-- Header -->
@@ -5942,7 +6053,7 @@ window.setElemRequired = setElemRequired;
                         ${(appState.customers || []).length === 0 ? `
                             <tr><td colspan="7" class="p-4 text-center text-slate-400 font-medium">لا يوجد مشتركين مسجلين</td></tr>
                         ` : (appState.customers || []).map(c => {
-                            const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+                            const pkg = getPackageById(c.packageId);
                             const pkgName = pkg ? pkg.name : 'ملاكمة';
                             const status = calculateStatus ? calculateStatus(c) : 'active';
                             const statusLabel = status === 'active' ? 'نشط' : (status === 'near_expiry' ? 'قريب الانتهاء' : 'منتهي');
@@ -6758,23 +6869,49 @@ window.setElemRequired = setElemRequired;
     window.generateMockTestData = generateMockTestData;
     window.clearMockTestData = clearMockTestData;
 
-    // Auto-seed mock test data immediately for testing system performance
-    if (!localStorage.getItem('sm_mock_seeded_200_100_v1')) {
-        localStorage.setItem('sm_mock_seeded_200_100_v1', 'true');
-        setTimeout(() => {
-            if (typeof window.generateMockTestData === 'function') {
-                window.generateMockTestData(200, 100, true);
-            }
-        }, 80);
-    }
+    // Auto-seeding of mock/test data into the production database has been REMOVED (data-integrity fix).
+    // generateMockTestData / clearMockTestData remain available for MANUAL use from the console/UI only.
 
-    if (!localStorage.getItem('sm_mock_seeded_1000_subscribers_v1')) {
-        localStorage.setItem('sm_mock_seeded_1000_subscribers_v1', 'true');
+    // One-time cleanup: purge previously auto-seeded mock records from local state AND Firebase
+    if (!localStorage.getItem('sm_mock_auto_purge_v1')) {
+        localStorage.setItem('sm_mock_auto_purge_v1', 'true');
         setTimeout(() => {
-            if (typeof window.generateMockTestData === 'function') {
-                window.generateMockTestData(1000, 0, false);
-            }
-        }, 500);
+            try {
+                const isMockItem = (it) => !!(it && (it.isMock || String(it.id || '').startsWith('mock_cust_') || String(it.id || '').startsWith('mock_cred_')));
+                const purgeSections = [
+                    { name: 'customers', paths: ['v2/customers', 'customers'] },
+                    { name: 'credits', paths: ['v2/credits', 'credits'] }
+                ];
+                const updates = {};
+                let purgedCount = 0;
+                purgeSections.forEach(sec => {
+                    const list = Array.isArray(window.appState[sec.name]) ? window.appState[sec.name] : [];
+                    const mockItems = list.filter(isMockItem);
+                    mockItems.forEach(m => {
+                        const id = String(m.id || m._rtdbKey || '');
+                        if (id) {
+                            if (typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId(sec.name, id);
+                            sec.paths.forEach(p => { updates[`${p}/${id}`] = null; });
+                        }
+                    });
+                    if (mockItems.length > 0) {
+                        window.appState[sec.name] = list.filter(it => !isMockItem(it));
+                        purgedCount += mockItems.length;
+                    }
+                });
+                if (purgedCount > 0) {
+                    if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef && Object.keys(updates).length > 0) {
+                        window.firebaseUpdate(window.firebaseRef(window.firebaseDB), updates)
+                            .catch(e => console.warn('Mock purge Firebase sync note:', e?.message || e));
+                    }
+                    if (typeof showSuccessToast === 'function') {
+                        showSuccessToast(`تم تنظيف ${purgedCount} سجل تجريبي قديم تم حقنه تلقائياً في نسخة سابقة`);
+                    }
+                    if (typeof render === 'function') render();
+                    if (typeof renderCreditsList === 'function') renderCreditsList();
+                }
+            } catch (e) { console.warn('Mock auto-purge note:', e); }
+        }, 2500);
     }
 
     // ==========================================
@@ -8380,7 +8517,7 @@ window.setElemRequired = setElemRequired;
         let html = visibleCustomers.map(c => {
             const age = calculateAge(c.dob);
             const ageStr = age !== null ? `${age} سنة` : 'غير محدد';
-            const pkg = appState.packages.find(p => p.id === c.packageId);
+            const pkg = getPackageById(c.packageId);
             const pkgName = pkg ? pkg.name : 'ملاكمة';
             const priceVal = c.price !== undefined && c.price !== null ? c.price : (pkg && pkg.price ? pkg.price : null);
             const priceSuffix = priceVal !== null ? ` (${priceVal} دج)` : '';
@@ -8504,9 +8641,14 @@ window.setElemRequired = setElemRequired;
                     todaySubIncome += p; } if (qDate.getMonth() === currentMonth && qDate.getFullYear() === currentYear) {
                     monthlySubIncome += p; } if (qDate.getFullYear() === currentYear) {
                     yearlySubIncome += p; } });
-        } appState.customers.forEach(c => { if (customerIsSession(c)) {
+        } // O(1) package lookup index (was packages.find inside the customers loop => O(n*m))
+        const packagesArr = Array.isArray(appState.packages) ? appState.packages : [];
+        const packageById = new Map();
+        packagesArr.forEach(p => { if (p && p.id !== undefined && p.id !== null) packageById.set(String(p.id), p); });
+        const customersArr = Array.isArray(appState.customers) ? appState.customers : [];
+        customersArr.forEach(c => { if (customerIsSession(c)) {
                totalQuickSessionClients++; }
-           const pkg = appState.packages.find(p => p.id === c.packageId);
+           const pkg = packageById.get(String(c.packageId));
            const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
            let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
            else if (c.paymentStatus === 'credit') {
@@ -8537,20 +8679,37 @@ window.setElemRequired = setElemRequired;
             } const d = new Date(p.date || p.id);
             return !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
         }).reduce((sum, p) => sum + (parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0), 0);
-        let totalExternalCredits = appState.credits.reduce((sum, cr) => sum + Number(cr.amount), 0);
+        const creditsArr = Array.isArray(appState.credits) ? appState.credits : [];
+        let totalExternalCredits = creditsArr.reduce((sum, cr) => sum + (Number(cr && cr.amount) || 0), 0);
         let allTimeSales = 0; let todaySales = 0;
         let todaySalesCount = 0; let monthlySales = 0;
         let yearlySales = 0; let allTimeProductProfit = 0;
-        let monthlyProductProfit = 0; appState.sales.forEach(s => {
-           allTimeSales += s.total; const sProfit = (Number(s.profit) || 0);
-           allTimeProductProfit += sProfit;
+        let monthlyProductProfit = 0;
+        // While older sales history is still being completed in the background, use the
+        // incrementally-maintained v2Stats yearly aggregates for exact all-time totals;
+        // once history is fully in memory the raw loop below is authoritative.
+        const yearlyStats = appState.v2Stats && appState.v2Stats.yearly ? appState.v2Stats.yearly : null;
+        const statsInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStats && Object.keys(yearlyStats).length > 0);
+        if (statsInterim) {
+            Object.values(yearlyStats).forEach(ys => {
+                if (!ys) return;
+                allTimeSales += Number(ys.sales) || 0;
+                allTimeProductProfit += Number(ys.profit) || 0;
+            });
+        }
+        const salesArr = Array.isArray(appState.sales) ? appState.sales : [];
+        salesArr.forEach(s => { if (!s) return;
+           const sTotal = Number(s.total) || 0;
+           if (!statsInterim) { allTimeSales += sTotal; }
+           const sProfit = (Number(s.profit) || 0);
+           if (!statsInterim) { allTimeProductProfit += sProfit; }
            const sDate = new Date(s.date); if (sDate.toDateString() === todayStr) {
-               todaySales += s.total;
+               todaySales += sTotal;
                todaySalesCount++; } if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) {
-               monthlySales += s.total;
+               monthlySales += sTotal;
                monthlyProductProfit += sProfit;
            } if (sDate.getFullYear() === currentYear) {
-               yearlySales += s.total; } });
+               yearlySales += sTotal; } });
         // Use v2Stats for accelerated O(1) stats aggregation
         const nowIso = new Date().toISOString();
         const statDateKey = nowIso.split('T')[0];
@@ -8869,7 +9028,7 @@ window.setElemRequired = setElemRequired;
             appState.customers.forEach(c => { if (!c) return;
                 const cDateStr = getLocalDateString(c.startDate);
                 if (cDateStr === targetDateStr) {
-                    const pkg = (appState.packages || []).find(p => p.id === c.packageId);
+                    const pkg = getPackageById(c.packageId);
                     const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
                     let paid = 0; if (c.paymentStatus === 'paid') paid = price;
                     else if (c.paymentStatus === 'credit') {
@@ -8889,7 +9048,14 @@ window.setElemRequired = setElemRequired;
                 const sDateStr = getLocalDateString(s.date);
                 if (sDateStr === targetDateStr) {
                     salesIncome += Number(s.total || 0);
-                } }); } const totalIncome = subIncome + quickIncome + salesIncome;
+                } }); }
+        // Prefer exact pre-aggregated daily stats while older sales history is still loading
+        if (window.salesHistoryLoading && !window.salesHistoryComplete &&
+            window.appState && window.appState.v2Stats && window.appState.v2Stats.daily &&
+            window.appState.v2Stats.daily[targetDateStr]) {
+            salesIncome = Number(window.appState.v2Stats.daily[targetDateStr].sales) || 0;
+        }
+        const totalIncome = subIncome + quickIncome + salesIncome;
         // Check if a closing log exists for this date
         const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
         const log = logs.find(l => getLocalDateString(l.date) === targetDateStr);
@@ -10808,7 +10974,8 @@ window.setElemRequired = setElemRequired;
     }
     window.clearAllActivityLogs = clearAllActivityLogs;
 
-    setupGlobalInputSecurity(); render(); if (typeof window.fetchAndLoadFirebaseData === 'function') {
+    setupGlobalInputSecurity(); render(); if (typeof window.runStartupFirebaseFetch === 'function') {
+        window.runStartupFirebaseFetch(); } else if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
 
 // Expose all top-level functions on window for inline HTML event handlers
