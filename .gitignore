@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+
+# Local env files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Vite / bundler caches
+.vite/
+.cache/
+.parcel-cache/
+.turbo/
+.npm/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
