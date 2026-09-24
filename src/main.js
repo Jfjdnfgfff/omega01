@@ -868,7 +868,22 @@ window.setElemRequired = setElemRequired;
   }
   window.applyExpenseStats = applyExpenseStats;
 
-  // Dedicated Item-Level Save: writes strictly to V2 structure with atomic index maintenance and pendingWrites protection
+  // Recursive sanitizer to prevent Firebase SDK "contains undefined in property" exceptions
+  function stripUndefined(obj) {
+    if (obj === null || obj === undefined) return null;
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(stripUndefined);
+    const res = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v !== undefined) {
+        res[k] = stripUndefined(v);
+      }
+    }
+    return res;
+  }
+  window.stripUndefined = stripUndefined;
+
+  // Dedicated Item-Level Save: writes concurrently to BOTH Root and V2 structures for 100% seamless persistence
   window.saveFirebaseSectionItem = async function(sectionPath, itemData, previousItem) {
     if (!itemData || typeof itemData !== 'object') return false;
     const rawId = itemData.id || itemData.barcode || Date.now().toString();
@@ -883,33 +898,45 @@ window.setElemRequired = setElemRequired;
       try {
         const v2Updates = {};
         const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
+        const rootSec = sectionPath === 'caisse' ? 'caisseLogs' : sectionPath;
+        const sanitizedItem = stripUndefined(itemData);
 
         if (sectionPath === 'customers') {
           const enriched = {
-            ...itemData,
+            ...sanitizedItem,
             id: cleanId,
-            normalizedPhone: normalizePhone(itemData.phone) || null,
+            normalizedPhone: normalizePhone(sanitizedItem.phone) || null,
             updatedAt: Date.now()
           };
           v2Updates[`v2/customers/${cleanId}`] = enriched;
+          v2Updates[`customers/${cleanId}`] = enriched;
           if (enriched.normalizedPhone) {
             v2Updates[`v2/customerByPhone/${enriched.normalizedPhone}`] = cleanId;
+            v2Updates[`customerByPhone/${enriched.normalizedPhone}`] = cleanId;
           }
-          if (itemData.barcode) {
-            v2Updates[`v2/customerByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
+          if (sanitizedItem.barcode) {
+            const bKey = cleanKey(sanitizedItem.barcode);
+            v2Updates[`v2/customerByBarcode/${bKey}`] = cleanId;
+            v2Updates[`customerByBarcode/${bKey}`] = cleanId;
           }
         } else if (sectionPath === 'products') {
-          v2Updates[`v2/products/${cleanId}`] = { ...itemData, id: cleanId, updatedAt: Date.now() };
-          if (itemData.barcode) {
-            v2Updates[`v2/productByBarcode/${cleanKey(itemData.barcode)}`] = cleanId;
+          const prodItem = { ...sanitizedItem, id: cleanId, updatedAt: Date.now() };
+          v2Updates[`v2/products/${cleanId}`] = prodItem;
+          v2Updates[`products/${cleanId}`] = prodItem;
+          if (sanitizedItem.barcode) {
+            const bKey = cleanKey(sanitizedItem.barcode);
+            v2Updates[`v2/productByBarcode/${bKey}`] = cleanId;
+            v2Updates[`productByBarcode/${bKey}`] = cleanId;
           }
         } else if (sectionPath === 'sales') {
-          const dateKey = getDateKey(itemData.date);
-          const total = Number(itemData.total || 0);
-          const profit = Number(itemData.profit || 0);
-          const qty = Number(itemData.qty || 1);
+          const dateKey = getDateKey(sanitizedItem.date);
+          const total = Number(sanitizedItem.total || 0);
+          const profit = Number(sanitizedItem.profit || 0);
+          const qty = Number(sanitizedItem.qty || 1);
+          const saleItem = { ...sanitizedItem, id: cleanId, dateKey, total, profit, qty };
 
-          v2Updates[`v2/sales/${cleanId}`] = { ...itemData, id: cleanId, dateKey, total, profit, qty };
+          v2Updates[`v2/sales/${cleanId}`] = saleItem;
+          v2Updates[`sales/${cleanId}`] = saleItem;
           v2Updates[`v2/salesByDate/${dateKey}/${cleanId}`] = true;
 
           window._processedStats = window._processedStats || new Map();
@@ -945,14 +972,16 @@ window.setElemRequired = setElemRequired;
             }
           }
 
-          const statsUpdates = applySaleStats(itemData, oldSale);
+          const statsUpdates = applySaleStats(sanitizedItem, oldSale);
           Object.assign(v2Updates, statsUpdates);
-          window._processedStats.set(statKey, { total, profit, qty, date: itemData.date });
+          window._processedStats.set(statKey, { total, profit, qty, date: sanitizedItem.date });
         } else if (sectionPath === 'expenses') {
-          const dateKey = getDateKey(itemData.date);
-          const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
+          const dateKey = getDateKey(sanitizedItem.date);
+          const amt = parseFloat(String(sanitizedItem.amount || 0).replace(/,/g, '')) || 0;
+          const expItem = { ...sanitizedItem, id: cleanId, dateKey, amount: amt };
 
-          v2Updates[`v2/expenses/${cleanId}`] = { ...itemData, id: cleanId, dateKey, amount: amt };
+          v2Updates[`v2/expenses/${cleanId}`] = expItem;
+          v2Updates[`expenses/${cleanId}`] = expItem;
           v2Updates[`v2/expensesByDate/${dateKey}/${cleanId}`] = true;
 
           window._processedStats = window._processedStats || new Map();
@@ -988,23 +1017,28 @@ window.setElemRequired = setElemRequired;
             }
           }
 
-          const statsUpdates = applyExpenseStats(itemData, oldExpense);
+          const statsUpdates = applyExpenseStats(sanitizedItem, oldExpense);
           Object.assign(v2Updates, statsUpdates);
-          window._processedStats.set(statKey, { amount: amt, date: itemData.date });
+          window._processedStats.set(statKey, { amount: amt, date: sanitizedItem.date });
         } else if (sectionPath === 'credits') {
-          v2Updates[`v2/credits/${cleanId}`] = itemData;
-          if (itemData.customerId && itemData.status !== 'settled') {
-            v2Updates[`v2/openCreditsByCustomer/${cleanKey(itemData.customerId)}/${cleanId}`] = true;
+          v2Updates[`v2/credits/${cleanId}`] = sanitizedItem;
+          v2Updates[`credits/${cleanId}`] = sanitizedItem;
+          if (sanitizedItem.customerId && sanitizedItem.status !== 'settled') {
+            v2Updates[`v2/openCreditsByCustomer/${cleanKey(sanitizedItem.customerId)}/${cleanId}`] = true;
           }
         } else {
-          v2Updates[`v2/${v2Sec}/${cleanId}`] = itemData;
+          v2Updates[`v2/${v2Sec}/${cleanId}`] = sanitizedItem;
+          v2Updates[`${rootSec}/${cleanId}`] = sanitizedItem;
         }
+
+        v2Updates['lastUpdated'] = new Date().toISOString();
 
         if (Object.keys(v2Updates).length > 0) {
           let sdkOk = false;
           if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
             try {
-              await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), v2Updates);
+              const cleanUpdates = stripUndefined(v2Updates);
+              await window.firebaseUpdate(window.firebaseRef(window.firebaseDB), cleanUpdates);
               sdkOk = true;
             } catch (e) {
               console.warn(`SDK saveFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, e);
@@ -1012,14 +1046,11 @@ window.setElemRequired = setElemRequired;
           }
           if (!sdkOk) {
             const baseUrl = getRTDBUrl();
-            const v2RelUpdates = {};
-            Object.keys(v2Updates).forEach(k => {
-              v2RelUpdates[k.replace(/^v2\//, '')] = v2Updates[k];
-            });
-            const res = await fetch(`${baseUrl}/v2.json`, {
+            const cleanUpdates = stripUndefined(v2Updates);
+            const res = await fetch(`${baseUrl}/.json`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(v2RelUpdates)
+              body: JSON.stringify(cleanUpdates)
             });
             if (!res.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
           }
@@ -1038,7 +1069,7 @@ window.setElemRequired = setElemRequired;
     return task;
   };
 
-  // Dedicated Item-Level Delete: cleans V2 structures + indexes with pendingWrites protection
+  // Dedicated Item-Level Delete: cleans BOTH V2 and Root structures + indexes with pendingWrites protection
   window.deleteFirebaseSectionItem = async function(sectionPath, itemId, previousItem) {
     if (!itemId) return false;
     const cleanId = cleanKey(itemId);
@@ -1052,19 +1083,30 @@ window.setElemRequired = setElemRequired;
       try {
         const v2Deletes = {};
         const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
+        const rootSec = sectionPath === 'caisse' ? 'caisseLogs' : sectionPath;
         v2Deletes[`v2/${v2Sec}/${cleanId}`] = null;
+        v2Deletes[`${rootSec}/${cleanId}`] = null;
 
         if (sectionPath === 'customers') {
           const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId));
           if (item) {
             const normPhone = normalizePhone(item.phone);
-            if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
-            if (item.barcode) v2Deletes[`v2/customerByBarcode/${cleanKey(item.barcode)}`] = null;
+            if (normPhone) {
+              v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
+              v2Deletes[`customerByPhone/${normPhone}`] = null;
+            }
+            if (item.barcode) {
+              const bKey = cleanKey(item.barcode);
+              v2Deletes[`v2/customerByBarcode/${bKey}`] = null;
+              v2Deletes[`customerByBarcode/${bKey}`] = null;
+            }
           }
         } else if (sectionPath === 'products') {
           const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId));
           if (item && item.barcode) {
-            v2Deletes[`v2/productByBarcode/${cleanKey(item.barcode)}`] = null;
+            const bKey = cleanKey(item.barcode);
+            v2Deletes[`v2/productByBarcode/${bKey}`] = null;
+            v2Deletes[`productByBarcode/${bKey}`] = null;
           }
         } else if (sectionPath === 'credits') {
           const item = (window.appState?.credits || []).find(c => String(c.id) === String(itemId));
@@ -1133,6 +1175,8 @@ window.setElemRequired = setElemRequired;
           }
         }
 
+        v2Deletes['lastUpdated'] = new Date().toISOString();
+
         let sdkOk = false;
         if (window.firebaseDB && window.firebaseUpdate && window.firebaseRef) {
           try {
@@ -1144,14 +1188,10 @@ window.setElemRequired = setElemRequired;
         }
         if (!sdkOk) {
           const baseUrl = getRTDBUrl();
-          const v2RelDeletes = {};
-          Object.keys(v2Deletes).forEach(k => {
-            v2RelDeletes[k.replace(/^v2\//, '')] = v2Deletes[k];
-          });
-          const res = await fetch(`${baseUrl}/v2.json`, {
+          const res = await fetch(`${baseUrl}/.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(v2RelDeletes)
+            body: JSON.stringify(v2Deletes)
           });
           if (!res.ok) throw new Error(`REST delete failed HTTP ${res.status}`);
         }
@@ -1273,25 +1313,50 @@ window.setElemRequired = setElemRequired;
       const baseUrl = getRTDBUrl();
       const safeFetch = (path) => fetch(`${baseUrl}/${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      // Lazy Architecture Startup: Load only Dashboard stats, package tiers, and meta health
+      // Fast Comprehensive Startup: Load current active data from Firebase (checking v2 and root)
       const [
         meta,
         v2Stats,
-        v2Packages,
+        packagesData,
+        productsData,
+        customersData,
+        salesData,
+        expensesData,
+        creditsData,
+        suppliersData,
+        staffPayoutsData,
+        caisseData,
+        coachAbsencesData,
         appStateCfg
       ] = await Promise.all([
         safeFetch('v2/meta/health.json'),
         safeFetch('v2/stats.json'),
-        safeFetch('v2/packages.json'),
+        safeFetch('v2/packages.json').then(res => res || safeFetch('packages.json')),
+        safeFetch('v2/products.json').then(res => res || safeFetch('products.json')),
+        safeFetch('v2/customers.json').then(res => res || safeFetch('customers.json')),
+        safeFetch('v2/sales.json').then(res => res || safeFetch('sales.json')),
+        safeFetch('v2/expenses.json').then(res => res || safeFetch('expenses.json')),
+        safeFetch('v2/credits.json').then(res => res || safeFetch('credits.json')),
+        safeFetch('v2/suppliers.json').then(res => res || safeFetch('suppliers.json')),
+        safeFetch('v2/staffPayouts.json').then(res => res || safeFetch('staffPayouts.json')),
+        safeFetch('v2/caisse.json').then(res => res || safeFetch('caisseLogs.json')),
+        safeFetch('v2/coachAbsences.json').then(res => res || safeFetch('coachAbsences.json')),
         safeFetch('appState.json')
       ]);
 
       window.__firebaseAlreadyFetched = true;
       window.appState = window.appState || {};
 
-      if (v2Packages) {
-        window.applyFirebaseSectionUpdate('packages', v2Packages, 'Startup Packages Sync');
-      }
+      if (packagesData) window.applyFirebaseSectionUpdate('packages', packagesData, 'Startup Packages Sync');
+      if (productsData) window.applyFirebaseSectionUpdate('products', productsData, 'Startup Products Sync');
+      if (customersData) window.applyFirebaseSectionUpdate('customers', customersData, 'Startup Customers Sync');
+      if (salesData) window.applyFirebaseSectionUpdate('sales', salesData, 'Startup Sales Sync');
+      if (expensesData) window.applyFirebaseSectionUpdate('expenses', expensesData, 'Startup Expenses Sync');
+      if (creditsData) window.applyFirebaseSectionUpdate('credits', creditsData, 'Startup Credits Sync');
+      if (suppliersData) window.applyFirebaseSectionUpdate('suppliers', suppliersData, 'Startup Suppliers Sync');
+      if (staffPayoutsData) window.applyFirebaseSectionUpdate('staffPayouts', staffPayoutsData, 'Startup StaffPayouts Sync');
+      if (caisseData) window.applyFirebaseSectionUpdate('caisseLogs', caisseData, 'Startup Caisse Sync');
+      if (coachAbsencesData) window.applyFirebaseSectionUpdate('coachAbsences', coachAbsencesData, 'Startup CoachAbsences Sync');
 
       if (v2Stats) {
         window.appState.v2Stats = v2Stats;
@@ -1349,9 +1414,14 @@ window.setElemRequired = setElemRequired;
       window.firebaseSyncState.rtdb = 'connected';
       window.firebaseSyncState.lastSync = new Date();
       window.firebaseSyncState.lastError = null;
-      updateFirebaseUIBadge('connected', 'Firebase: الاتصال نشط وسريع');
+      updateFirebaseUIBadge('connected', 'Firebase: الاتصال نشط ومزامن');
+      try {
+        await window.fetchAndLoadFirebaseData(true);
+      } catch (e) {
+        console.warn('Sync refresh note:', e);
+      }
       if (typeof showSuccessToast === 'function') {
-        showSuccessToast('تم فحص الاتصال بـ Firebase بنجاح (الاتصال نشط وسليم)');
+        showSuccessToast('تم فحص الاتصال ومزامنة البيانات مع قاعدة البيانات بنجاح!');
       }
     } else {
       window.firebaseSyncState.lastError = errorMsg;
@@ -1426,12 +1496,18 @@ window.setElemRequired = setElemRequired;
           return [];
         };
 
-        // Ultra-Lightweight Essential Realtime Listeners (Stats for Dashboard, recent Sales and Caisse for POS)
-        // All heavy data collections (customers, products, expenses, credits, etc.) are lazy-loaded on demand
+        // Full-Spectrum Live Sync Listeners for Multi-Device and Real-Time Persistence
         const realTimeListeners = [
           { name: 'stats', q: ref(database, 'v2/stats') },
-          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(30)) },
-          { name: 'caisseLogs', q: query(ref(database, 'v2/caisse'), orderByKey(), limitToLast(30)) }
+          { name: 'products', q: ref(database, 'products') },
+          { name: 'sales', q: query(ref(database, 'sales'), orderByKey(), limitToLast(50)) },
+          { name: 'caisseLogs', q: query(ref(database, 'caisseLogs'), orderByKey(), limitToLast(30)) },
+          { name: 'expenses', q: ref(database, 'expenses') },
+          { name: 'credits', q: ref(database, 'credits') },
+          { name: 'packages', q: ref(database, 'packages') },
+          { name: 'suppliers', q: ref(database, 'suppliers') },
+          { name: 'staffPayouts', q: ref(database, 'staffPayouts') },
+          { name: 'coachAbsences', q: ref(database, 'coachAbsences') }
         ];
 
         realTimeListeners.forEach(sec => {
@@ -1441,7 +1517,7 @@ window.setElemRequired = setElemRequired;
             }
             window.firebaseSyncState.rtdb = 'connected';
             window.firebaseSyncState.lastSync = new Date();
-            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (وضع V2 فائق السرعة)');
+            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (قاعدة البيانات كاملة)');
             window.dispatchEvent(new Event('firebaseReady'));
           }, (error) => {
             console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
