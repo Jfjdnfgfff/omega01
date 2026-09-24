@@ -247,7 +247,6 @@ window.setElemRequired = setElemRequired;
     const loadPromise = (async () => {
       try {
         const v2Sec = sectionName === 'caisseLogs' ? 'caisse' : sectionName;
-        const limit = (sectionName === 'packages' || sectionName === 'suppliers') ? 200 : 500;
         let items = [];
 
         const mapFirebaseItem = (k, v) => ({
@@ -256,53 +255,53 @@ window.setElemRequired = setElemRequired;
           _rtdbKey: k
         });
 
-        if (window.firebaseDB && window.firebaseRef && window.firebaseGet && window.firebaseQuery && window.firebaseLimitToLast && window.firebaseOrderByKey) {
-          const q = window.firebaseQuery(
-            window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
-            window.firebaseOrderByKey(),
-            window.firebaseLimitToLast(limit)
-          );
-          let snap = await window.firebaseGet(q);
-          if (snap.exists()) {
-            const data = snap.val();
-            items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
-          } else {
-            // Migration / legacy fallback
-            const legQ = window.firebaseQuery(
-              window.firebaseRef(window.firebaseDB, sectionName),
-              window.firebaseOrderByKey(),
-              window.firebaseLimitToLast(limit)
-            );
-            const legSnap = await window.firebaseGet(legQ);
-            if (legSnap.exists()) {
-              const data = legSnap.val();
+        if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
+          try {
+            let snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`));
+            if (snap.exists()) {
+              const data = snap.val();
               items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
             }
-          }
-        } else {
-          const baseUrl = getRTDBUrl();
-          const url = `${baseUrl}/v2/${v2Sec}.json?orderBy="$key"&limitToLast=${limit}`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && typeof data === 'object') {
-              items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
-            }
+          } catch(e) {}
+          if (items.length === 0) {
+            try {
+              let legSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, sectionName));
+              if (legSnap.exists()) {
+                const data = legSnap.val();
+                items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
+              }
+            } catch(e) {}
           }
         }
 
-        // Initialize cursor for this section
-        if (window.firebaseCursors && window.firebaseCursors[sectionName]) {
-          if (items.length > 0) {
-            const keys = items.map(i => String(i._rtdbKey || i.id || i.barcode || '')).filter(Boolean);
-            if (keys.length > 0) {
-              window.firebaseCursors[sectionName].oldestKey = keys[0];
-              window.firebaseCursors[sectionName].newestKey = keys[keys.length - 1];
-              window.firebaseCursors[sectionName].hasMore = (items.length >= limit);
+        if (items.length === 0) {
+          const baseUrl = getRTDBUrl();
+          const [v2Res, rootRes] = await Promise.all([
+            fetch(`${baseUrl}/v2/${v2Sec}.json`).then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${baseUrl}/${sectionName}.json`).then(r => r.ok ? r.json() : null).catch(() => null)
+          ]);
+          const map = new Map();
+          const addData = (data) => {
+            if (!data) return;
+            if (Array.isArray(data)) {
+              data.forEach((item, idx) => {
+                if (item) {
+                  const key = String(item.id || item._rtdbKey || item.barcode || idx);
+                  map.set(key, { ...item, id: item.id || key });
+                }
+              });
+            } else if (typeof data === 'object') {
+              Object.entries(data).forEach(([k, item]) => {
+                if (item) {
+                  const key = String(item.id || item._rtdbKey || item.barcode || k);
+                  map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
+                }
+              });
             }
-          } else {
-            window.firebaseCursors[sectionName].hasMore = false;
-          }
+          };
+          addData(rootRes);
+          addData(v2Res);
+          items = Array.from(map.values());
         }
 
         window.firebaseLoadedSections[sectionName] = true;
@@ -1466,42 +1465,82 @@ window.setElemRequired = setElemRequired;
     return null;
   };
 
-  // Full-State Sync removed completely in favor of Record-Level CRUD
-  // Optimized Fast Data Sync with Firebase Realtime Database (Single guarded load + WebSocket listener)
-  // Optimized Fast Data Sync with Firebase Realtime Database (Bounded V2 Queries + Local Cache)
+  // Robust Data Sync with Firebase Realtime Database
   window.__firebaseAlreadyFetched = false;
   window.fetchAndLoadFirebaseData = async function(force) {
     if (window.__firebaseAlreadyFetched && !force) return true;
-
-    // Check if we have local storage data for instant 0ms offline display
-    const hasLocalData = localStorage.getItem('sm_appState') !== null;
-    if (hasLocalData && !force) {
-      console.log('Using local offline cache for instant UI start.');
-    }
 
     try {
       const baseUrl = getRTDBUrl();
       const safeFetch = (path) => fetch(`${baseUrl}/${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      // Lazy Architecture Startup: Load only Dashboard stats, package tiers, and meta health
-      const [
-        meta,
-        v2Stats,
-        v2Packages,
-        appStateCfg
-      ] = await Promise.all([
+      const sections = [
+        { name: 'customers', v2: 'customers' },
+        { name: 'products', v2: 'products' },
+        { name: 'sales', v2: 'sales' },
+        { name: 'expenses', v2: 'expenses' },
+        { name: 'credits', v2: 'credits' },
+        { name: 'suppliers', v2: 'suppliers' },
+        { name: 'staffPayouts', v2: 'staffPayouts' },
+        { name: 'caisseLogs', v2: 'caisse' },
+        { name: 'packages', v2: 'packages' },
+        { name: 'coachAbsences', v2: 'coachAbsences' },
+        { name: 'supplierTransactions', v2: 'supplierTransactions' }
+      ];
+
+      const fetchPromises = [
         safeFetch('v2/meta/health.json'),
         safeFetch('v2/stats.json'),
-        safeFetch('v2/packages.json'),
         safeFetch('appState.json')
-      ]);
+      ];
+
+      sections.forEach(sec => {
+        fetchPromises.push(safeFetch(`v2/${sec.v2}.json`));
+        fetchPromises.push(safeFetch(`${sec.name}.json`));
+      });
+
+      const results = await Promise.all(fetchPromises);
+      const meta = results[0];
+      const v2Stats = results[1];
+      const appStateCfg = results[2];
 
       window.__firebaseAlreadyFetched = true;
       window.appState = window.appState || {};
 
-      if (v2Packages) {
-        window.applyFirebaseSectionUpdate('packages', v2Packages, 'Startup Packages Sync');
-      }
+      let resultIdx = 3;
+      sections.forEach(sec => {
+        const v2Data = results[resultIdx++];
+        const rootData = results[resultIdx++];
+        
+        const map = new Map();
+        const addData = (data) => {
+          if (!data) return;
+          if (Array.isArray(data)) {
+            data.forEach((item, idx) => {
+              if (item) {
+                const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || idx);
+                map.set(key, { ...item, id: item.id || key });
+              }
+            });
+          } else if (typeof data === 'object') {
+            Object.entries(data).forEach(([k, item]) => {
+              if (item) {
+                const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || k);
+                map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
+              }
+            });
+          }
+        };
+
+        addData(rootData);
+        addData(v2Data);
+
+        const combinedItems = Array.from(map.values());
+        if (combinedItems.length > 0) {
+          window.applyFirebaseSectionUpdate(sec.name, combinedItems, `Startup ${sec.name} Sync`);
+        }
+        window.firebaseLoadedSections[sec.name] = true;
+      });
 
       if (v2Stats) {
         window.appState.v2Stats = v2Stats;
@@ -1513,10 +1552,18 @@ window.setElemRequired = setElemRequired;
         }
       }
 
+      window.firebaseSyncState = window.firebaseSyncState || {};
+      window.firebaseSyncState.rtdb = 'connected';
+      window.firebaseSyncState.lastSync = new Date();
+      updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
+
+      if (typeof saveLocalStorageImmediate === 'function') {
+        saveLocalStorageImmediate();
+      }
       scheduleRender();
       return true;
     } catch (err) {
-      console.warn('Initial startup fetch note:', err);
+      console.warn('Initial startup fetch error:', err);
     }
     return false;
   };
