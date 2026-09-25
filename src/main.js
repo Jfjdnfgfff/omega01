@@ -5086,6 +5086,104 @@ window.setElemRequired = setElemRequired;
     window.parseProductWeight = parseProductWeight;
 
     /* ============================================================
+       التصنيف التلقائي للمنتجات (doses / boxes / frigo / other)
+       ------------------------------------------------------------
+       يُستعمل عندما لا يكون للمنتج أو لعملية البيع حقل category
+       (سجلات قديمة أو منتجات مسجَّلة بدون اختيار الفئة)، حتى لا تضيع
+       المبيعات من حساب "تفاصيل المداخيل والأرباح حسب الفئات".
+       ============================================================ */
+    function normalizeCategoryKey(cat) {
+        const c = String(cat == null ? '' : cat).trim().toLowerCase();
+        return (c === 'doses' || c === 'boxes' || c === 'frigo' || c === 'other') ? c : '';
+    }
+    function getProductCategory(product) {
+        if (!product) return 'other';
+        // 1) الفئة المسجَّلة صراحةً لها الأولوية دائماً
+        const explicit = normalizeCategoryKey(product.category);
+        if (explicit) return explicit;
+        // 2) بخلاف ذلك: استنتاج من اسم المنتج / علامته / قياسه
+        const name = String(product.name || product.prodName || product.productName || '').toLowerCase();
+        const brand = String(product.brand || '').toLowerCase();
+        const weight = String(product.weight || '').toLowerCase();
+        const hay = `${name} ${brand} ${weight}`;
+        const has = list => list.some(k => k && hay.indexOf(k) !== -1);
+
+        // 1) علب مغلقة أولاً: كلمة «علبة / مسكرة / مغلقة» أقوى من ذكر البروتين
+        //    (مثال: «علبة بروتين مغلقة» = علبة وليس جرعة)
+        if (has(['علبة', 'علب', 'boite', 'boîte', 'box', 'مسكرة', 'مغلقة', 'fermée', 'fermee',
+                 'sealed', 'energy bar'])) return 'boxes';
+        // 2) فريغو: ماء / جي / شوفان / مشروبات
+        if (has(['ماء', 'water', 'eau', 'mineral', 'معدنية', 'شوفان', 'avoine', 'oat',
+                 'عصير', 'jus', 'juice', 'مشروب', 'boisson', 'drink', 'soda', 'كولا', 'cola',
+                 'حليب', 'lait', 'milk', 'ياغورت', 'ياورت', 'yogourt', 'yogurt', 'raibi', 'رايبى', 'رايبي',
+                 ' جي'])) return 'frigo';
+        // 3) بروتين لي دوز: بيع بالجرعة / الكيلو / الغرام
+        if (has(['دوز', 'doza', 'dose', 'جرعة', 'جرات', 'كيلو', 'kilo', 'kg', 'غرام', 'gram',
+                 'scoop'])) return 'doses';
+        // 4) مكملات بدون ذكر علبة → تُباع بالجرعة
+        if (has(['بروتين', 'protein', 'protéine', 'whey', 'واي', 'كرياتين', 'creatine',
+                 'أمينو', 'amino', 'bcaa', 'مكمل', 'supplement'])) return 'doses';
+        // 5) ألواح / بار
+        if (has(['barre', 'بار', 'bar '])) return 'boxes';
+        return 'other';
+    }
+    window.normalizeCategoryKey = normalizeCategoryKey;
+    window.getProductCategory = getProductCategory;
+
+    /* ============================================================
+       تجميع مداخيل وأرباح الفئات لفترة محددة (الشهر / كل الفترات)
+       مرجع واحد يستعمله كل من: لوحة التفصيل + نافذة "تقرير الفئات المفصل"
+       ============================================================ */
+    function emptyCategoryBucket(label, unitLabel) {
+        return { label: label, unitLabel: unitLabel, sales: 0, cost: 0, profit: 0, units: 0, deducted: 0, ops: 0 };
+    }
+    function getCategoryStats(targetYear, targetMonth) {
+        const filterAll = (targetMonth === undefined || targetMonth === null || Number(targetMonth) < 0);
+        const y = Number(targetYear);
+        const m = Number(targetMonth);
+        const cats = {
+            doses: emptyCategoryBucket('بروتين بالجرعة (لي دوز)', 'جرعة'),
+            boxes: emptyCategoryBucket('العلب المغلقة (Boîtes)', 'علبة'),
+            frigo: emptyCategoryBucket('الفريغو (ماء / جي / شوفان)', 'قطعة'),
+            other: emptyCategoryBucket('منتجات ومبيعات أخرى', 'قطعة')
+        };
+        const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
+        let grandSales = 0, grandProfit = 0, grandUnits = 0, grandOps = 0;
+
+        (Array.isArray(appState.sales) ? appState.sales : []).forEach(s => {
+            if (!s || !s.date) return;
+            const d = new Date(s.date);
+            if (isNaN(d.getTime())) return;
+            if (!filterAll && (d.getFullYear() !== y || d.getMonth() !== m)) return;
+
+            const catKey = normalizeCategoryKey(s.category)
+                || getProductCategory({ name: s.prodName || s.productName || s.name, weight: s.measurement });
+            const bucket = cats[catKey] || cats.other;
+            const total = Number(s.total) || 0;
+            const cost = (s.cost !== undefined && s.cost !== null && s.cost !== '') ? Number(s.cost) : 0;
+            const profit = (s.profit !== undefined && s.profit !== null && s.profit !== '')
+                ? Number(s.profit) : (total - cost);
+            const qty = Number(s.qty) || 1;
+            // القاعدة الموحدة: ما خُصم فعلياً من المخزون = الكمية × القياس
+            const deduction = Number(s.stockDeduction) || (Number(s.unitFactor) ? qty * Number(s.unitFactor) : qty);
+
+            bucket.sales = round2(bucket.sales + total);
+            bucket.cost = round2(bucket.cost + cost);
+            bucket.profit = round2(bucket.profit + profit);
+            bucket.units = round2(bucket.units + qty);
+            bucket.deducted = round2(bucket.deducted + deduction);
+            bucket.ops += 1;
+
+            grandSales = round2(grandSales + total);
+            grandProfit = round2(grandProfit + profit);
+            grandUnits = round2(grandUnits + qty);
+            grandOps += 1;
+        });
+        return { cats: cats, totals: { sales: grandSales, profit: grandProfit, units: grandUnits, ops: grandOps } };
+    }
+    window.getCategoryStats = getCategoryStats;
+
+    /* ============================================================
        القاعدة الموحدة للبيع (تُطبَّق على جميع المنتجات بدون استثناء)
        ------------------------------------------------------------
        1) القياس المُسجَّل للمنتج (مثال: 50) هو "وحدة الخصم" من المخزون.
@@ -8377,7 +8475,7 @@ window.setElemRequired = setElemRequired;
                filtered = filtered.filter(s => s.stockLocation === 'stock2');
            } else { filtered = filtered.filter(s => !s.stockLocation || s.stockLocation === 'stock1');
            } } if (selCat !== 'all') { filtered = filtered.filter(s => {
-               const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
+               const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName, weight: s.measurement }) : 'other');
                return cat === selCat; }); } if (selProd !== 'all') {
            filtered = filtered.filter(s => (s.prodName || s.productName) === selProd);
        } if (selCoach !== 'all') { if (selCoach === 'عام') {
@@ -8407,7 +8505,7 @@ window.setElemRequired = setElemRequired;
            const isStock2 = s.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="text-[9px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">مخزون 2</span>`
                 : `<span class="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">مخزون 1</span>`;
-           const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
+           const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName, weight: s.measurement }) : 'other');
            let catBadge = ''; if (cat === 'doses') {
                catBadge = `<span class="text-[9px] font-bold text-blue-800 bg-blue-100/90 px-1.5 py-0.5 rounded-md border border-blue-200">بروتين دوز</span>`;
            } else if (cat === 'boxes') {
@@ -8843,41 +8941,45 @@ window.setElemRequired = setElemRequired;
         } if (document.getElementById('dashboardStockProfit')) {
             setElemHTML('dashboardStockProfit', formatMoney(stockVal.totalPotentialProfit));
         }
-        // Real-time Category Breakdown Calculations (Doses, Boxes, Frigo)
-        let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
-        let boxesSales = 0, boxesProfit = 0, boxesUnits = 0;
-        let frigoSales = 0, frigoProfit = 0, frigoUnits = 0;
-        (appState.sales || []).forEach(s => {
-            const d = new Date(s.date); if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
-                const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
-                const total = Number(s.total) || 0;
-                const profit = Number(s.profit) || 0;
-                const qty = Number(s.qty) || 1;
-                if (cat === 'doses') {
-                    dosesSales += total;
-                    dosesProfit += profit;
-                    dosesUnits += qty; } else if (cat === 'boxes') {
-                    boxesSales += total;
-                    boxesProfit += profit;
-                    boxesUnits += qty; } else if (cat === 'frigo') {
-                    frigoSales += total;
-                    frigoProfit += profit;
-                    frigoUnits += qty; } } });
-        if (document.getElementById('prodCatMonthLabel')) {
-            setElemText('prodCatMonthLabel', `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`);
-        } if (document.getElementById('prodCatDosesIncome')) {
-            setElemHTML('prodCatDosesIncome', formatMoney(dosesSales));
-            setElemHTML('prodCatDosesProfit', `صافي الربح: ${dosesProfit.toLocaleString()} دج`);
-            setElemText('prodCatDosesUnits', `${dosesUnits} جرعة مباعة`);
-        } if (document.getElementById('prodCatBoxesIncome')) {
-            setElemHTML('prodCatBoxesIncome', formatMoney(boxesSales));
-            setElemHTML('prodCatBoxesProfit', `صافي الربح: ${boxesProfit.toLocaleString()} دج`);
-            setElemText('prodCatBoxesUnits', `${boxesUnits} علبة مباعة`);
-        } if (document.getElementById('prodCatFrigoIncome')) {
-            setElemHTML('prodCatFrigoIncome', formatMoney(frigoSales));
-            setElemHTML('prodCatFrigoProfit', `صافي الربح: ${frigoProfit.toLocaleString()} دج`);
-            setElemText('prodCatFrigoUnits', `${frigoUnits} قارورة / قطعة`);
+        // ===== تفصيل المداخيل والأرباح حسب الفئات (جرعات بروتين / علب مغلقة / فريغو) =====
+        // الأرقام تُحسب من سجل المبيعات للشهر الحالي عبر المرجع الموحَّد getCategoryStats
+        const catStats = getCategoryStats(currentYear, currentMonth);
+        const hideFin = !!appState.hideFinances;
+        const money = v => (hideFin ? '**** دج' : formatMoney(v));
+        const num = v => (hideFin ? '****' : Number(v).toLocaleString());
+
+        // لوحة التفصيل داخل قسم المنتجات (العناصر الفعلية في الواجهة: catDoses*/catBoxes*/catFrigo*)
+        setElemHTML('catDosesIncome', money(catStats.cats.doses.sales));
+        setElemHTML('catDosesProfit', money(catStats.cats.doses.profit));
+        setElemText('catDosesCountBadge', `${num(catStats.cats.doses.units)} ${catStats.cats.doses.unitLabel}`);
+
+        setElemHTML('catBoxesIncome', money(catStats.cats.boxes.sales));
+        setElemHTML('catBoxesProfit', money(catStats.cats.boxes.profit));
+        setElemText('catBoxesCountBadge', `${num(catStats.cats.boxes.units)} ${catStats.cats.boxes.unitLabel}`);
+
+        setElemHTML('catFrigoIncome', money(catStats.cats.frigo.sales));
+        setElemHTML('catFrigoProfit', money(catStats.cats.frigo.profit));
+        setElemText('catFrigoCountBadge', `${num(catStats.cats.frigo.units)} ${catStats.cats.frigo.unitLabel}`);
+
+        // شريط المطابقة: فئة «أخرى» + المجموع الكلي (حتى تتطابق الأرقام مع بقية التقارير)
+        if (document.getElementById('catBreakdownTotalsRow')) {
+            const other = catStats.cats.other;
+            const t = catStats.totals;
+            const margin = t.sales > 0 ? Math.round((t.profit / t.sales) * 100) : 0;
+            document.getElementById('catBreakdownTotalsRow').innerHTML = `
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="bg-slate-100 text-slate-700 border border-slate-200 px-2.5 py-1 rounded-lg">أخرى: <strong class="text-slate-900">${money(other.sales)}</strong> <span class="text-slate-500">(${num(other.units)} قطعة / ${other.ops} عملية)</span></span>
+                        <span class="bg-slate-100 text-slate-700 border border-slate-200 px-2.5 py-1 rounded-lg">عدد العمليات هذا الشهر: <strong class="text-slate-900">${num(t.ops)}</strong></span>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="bg-blue-50 text-blue-900 border border-blue-200 px-2.5 py-1 rounded-lg">مجموع الفئات (المدخول): <strong class="text-blue-950">${money(t.sales)}</strong></span>
+                        <span class="bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg">صافي الربح: <strong>${money(t.profit)}</strong></span>
+                        <span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg">هامش الربح: <strong>${margin}%</strong></span>
+                    </div>
+                </div>`;
         }
+        setElemText('catBreakdownMonthLabel', `الشهر الحالي: ${String(currentMonth + 1).padStart(2, '0')} / ${currentYear}`);
         // Update Customers View Summary Stats
         if (document.getElementById('custViewActiveCount')) {
             setElemText('custViewActiveCount', activeCount);
@@ -9811,43 +9913,32 @@ window.setElemRequired = setElemRequired;
         if (!modal) return; const now = new Date();
         const monthSelect = document.getElementById('catProfitFilterMonth');
         if (monthSelect) { monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        } renderCategoryProfitsModal(); modal.classList.add('active');
+        } window.renderCategoryProfitsModal(); modal.classList.add('active');
     }; window.renderCategoryProfitsModal = function() {
         const monthSelect = document.getElementById('catProfitFilterMonth');
-        const selectedVal = monthSelect ? monthSelect.value : 'all';
+        const selectedVal = monthSelect ? monthSelect.value : '';
         let targetMonth = -1; let targetYear = -1;
         if (selectedVal && selectedVal !== 'all') {
             const parts = selectedVal.split('-');
             targetYear = parseInt(parts[0]);
             targetMonth = parseInt(parts[1]) - 1;
-        } const sales = appState.sales || [];
-        const filtered = sales.filter(s => { if (!s.date) return false;
-            if (targetMonth === -1) return true;
-            const d = new Date(s.date); return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
-        });
-        // Aggregation per category
-        const cats = { doses: { name: 'بروتين بالجرعة (لي دوز)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            boxes: { name: 'علب البروتين والمكملات (المسكرة)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            frigo: { name: 'الفريغو (ماء، جي، شوفان، مشروبات)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            other: { name: 'منتجات ومبيعات أخرى', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 }
-        }; filtered.forEach(s => { const catKey = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
-            const targetCat = cats[catKey] || cats.other;
-            const total = Number(s.total) || 0;
-            const cost = Number(s.cost) || 0;
-            const profit = s.profit !== undefined ? Number(s.profit) : (total - cost);
-            const qty = Number(s.qty) || 1;
-            targetCat.sales += total; targetCat.cost += cost;
-            targetCat.profit += profit;
-            targetCat.units += qty; }); const totalSalesAll = Object.values(cats).reduce((acc, c) => acc + c.sales, 0);
-        const totalProfitAll = Object.values(cats).reduce((acc, c) => acc + c.profit, 0);
-        const totalUnitsAll = Object.values(cats).reduce((acc, c) => acc + c.units, 0);
-        // Update UI summary numbers
+            if (isNaN(targetYear) || isNaN(targetMonth)) { targetMonth = -1; targetYear = -1; }
+        }
+        // نفس مرجع الحساب المستعمل في لوحة التفصيل — حتى تتطابق الأرقام في المكانين
+        const stats = getCategoryStats(targetYear, targetMonth);
+        const cats = stats.cats;
+        const totalSalesAll = stats.totals.sales;
+        const totalProfitAll = stats.totals.profit;
+        const totalUnitsAll = stats.totals.units;
+        // Update UI summary numbers (تحترم وضع إخفاء الأرقام togglePrivacy)
+        const hideFin = !!appState.hideFinances;
+        const money = v => (hideFin ? '****' : Number(v).toLocaleString());
         const sumSalesElem = document.getElementById('catProfitTotalSales');
         const sumProfitElem = document.getElementById('catProfitTotalNet');
         const sumUnitsElem = document.getElementById('catProfitTotalUnits');
-        if (sumSalesElem) sumSalesElem.innerHTML = `${totalSalesAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (sumProfitElem) sumProfitElem.innerHTML = `${totalProfitAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (sumUnitsElem) sumUnitsElem.innerText = `${totalUnitsAll} قطعة / جرعة`;
+        if (sumSalesElem) sumSalesElem.innerHTML = `${money(totalSalesAll)} <span class="text-xs font-normal text-slate-500">دج</span>`;
+        if (sumProfitElem) sumProfitElem.innerHTML = `${money(totalProfitAll)} <span class="text-xs font-normal text-slate-500">دج</span>`;
+        if (sumUnitsElem) sumUnitsElem.innerText = `${money(totalUnitsAll)} قطعة / جرعة`;
         // Render category cards
         const container = document.getElementById('catProfitCardsContainer');
         if (container) { container.innerHTML = `
@@ -9858,16 +9949,16 @@ window.setElemRequired = setElemRequired;
                             <span class="text-2xl"></span>
                             <span>بروتين بالجرعة (لي دوز)</span>
                         </div>
-                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-800">${cats.doses.units} جرعة</span>
+                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-800">${money(cats.doses.units)} جرعة</span>
                     </div>
                     <div class="grid grid-cols-2 gap-2 pt-2 border-t border-blue-200/60 text-sm">
                         <div>
                             <div class="text-xs text-blue-600 font-semibold">إجمالي المبيعات</div>
-                            <div class="font-extrabold text-slate-800 text-base">${cats.doses.sales.toLocaleString()} دج</div>
+                            <div class="font-extrabold text-slate-800 text-base">${money(cats.doses.sales)} دج</div>
                         </div>
                         <div>
                             <div class="text-xs text-blue-600 font-bold">الربح الصافي</div>
-                            <div class="font-black text-blue-700 text-base">${cats.doses.profit.toLocaleString()} دج</div>
+                            <div class="font-black text-blue-700 text-base">${money(cats.doses.profit)} دج</div>
                         </div>
                     </div>
                     <div class="text-[11px] text-slate-500 font-medium bg-white/70 p-2 rounded-xl">
@@ -9882,16 +9973,16 @@ window.setElemRequired = setElemRequired;
                             <span class="text-2xl"></span>
                             <span>علب المكملات (المسكرة)</span>
                         </div>
-                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${cats.boxes.units} علبة</span>
+                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${money(cats.boxes.units)} علبة</span>
                     </div>
                     <div class="grid grid-cols-2 gap-2 pt-2 border-t border-blue-200/60 text-sm">
                         <div>
                             <div class="text-xs text-blue-700 font-semibold">إجمالي المبيعات</div>
-                            <div class="font-extrabold text-slate-800 text-base">${cats.boxes.sales.toLocaleString()} دج</div>
+                            <div class="font-extrabold text-slate-800 text-base">${money(cats.boxes.sales)} دج</div>
                         </div>
                         <div>
                             <div class="text-xs text-blue-600 font-bold">الربح الصافي</div>
-                            <div class="font-black text-blue-700 text-base">${cats.boxes.profit.toLocaleString()} دج</div>
+                            <div class="font-black text-blue-700 text-base">${money(cats.boxes.profit)} دج</div>
                         </div>
                     </div>
                     <div class="text-[11px] text-slate-500 font-medium bg-white/70 p-2 rounded-xl">
@@ -9906,23 +9997,54 @@ window.setElemRequired = setElemRequired;
                             <span class="text-2xl"></span>
                             <span>الفريغو (ماء، جي، شوفان)</span>
                         </div>
-                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${cats.frigo.units} قطعة</span>
+                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${money(cats.frigo.units)} قطعة</span>
                     </div>
                     <div class="grid grid-cols-2 gap-2 pt-2 border-t border-blue-200/60 text-sm">
                         <div>
                             <div class="text-xs text-blue-700 font-semibold">إجمالي المبيعات</div>
-                            <div class="font-extrabold text-slate-800 text-base">${cats.frigo.sales.toLocaleString()} دج</div>
+                            <div class="font-extrabold text-slate-800 text-base">${money(cats.frigo.sales)} دج</div>
                         </div>
                         <div>
                             <div class="text-xs text-blue-600 font-bold">الربح الصافي</div>
-                            <div class="font-black text-blue-700 text-base">${cats.frigo.profit.toLocaleString()} دج</div>
+                            <div class="font-black text-blue-700 text-base">${money(cats.frigo.profit)} دج</div>
                         </div>
                     </div>
                     <div class="text-[11px] text-slate-500 font-medium bg-white/70 p-2 rounded-xl">
                         هامش الربح: ${cats.frigo.sales > 0 ? Math.round((cats.frigo.profit / cats.frigo.sales) * 100) : 0}%
                     </div>
                 </div>
-            `; } };
+
+                <!-- 4. Other Card (حتى يطابق مجموع البطاقات الإجمالي) -->
+                <div class="p-5 rounded-2xl bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200 shadow-sm space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2 font-black text-slate-800 text-base">
+                            <span class="text-2xl">📦</span>
+                            <span>منتجات ومبيعات أخرى</span>
+                        </div>
+                        <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-200 text-slate-800">${money(cats.other.units)} قطعة</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-300/60 text-sm">
+                        <div>
+                            <div class="text-xs text-slate-600 font-semibold">إجمالي المبيعات</div>
+                            <div class="font-extrabold text-slate-800 text-base">${money(cats.other.sales)} دج</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-slate-600 font-bold">الربح الصافي</div>
+                            <div class="font-black text-slate-700 text-base">${money(cats.other.profit)} دج</div>
+                        </div>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-medium bg-white/70 p-2 rounded-xl">
+                        هامش الربح: ${cats.other.sales > 0 ? Math.round((cats.other.profit / cats.other.sales) * 100) : 0}% — عدد العمليات: ${cats.other.ops}
+                    </div>
+                </div>
+            `; }
+        // تفاصيل إضافية: ما خُصم فعلياً من المخزون حسب القاعدة الموحدة
+        const deductedElem = document.getElementById('catProfitTotalDeducted');
+        if (deductedElem) {
+            const totalDeducted = Object.values(cats).reduce((acc, c) => acc + (Number(c.deducted) || 0), 0);
+            deductedElem.innerText = `${hideFin ? '****' : (Math.round(totalDeducted * 100) / 100).toLocaleString()} وحدة مخزون`;
+        }
+    };
     // ==========================================
     // 3. COACH COMMISSIONS (33% PROFIT SHARE)
     // ==========================================

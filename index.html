@@ -637,7 +637,8 @@
                   <div>
                       <h3 class="text-base font-extrabold text-blue-950 flex items-center gap-2">
                           <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                          <span>تفصيل المداخيل والأرباح حسب الفئات (الشهر الحالي)</span>
+                          <span>تفصيل المداخيل والأرباح حسب الفئات</span>
+                          <span id="catBreakdownMonthLabel" class="text-[10px] font-extrabold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">الشهر الحالي</span>
                       </h3>
                       <p class="text-xs text-slate-500 font-medium">حساب مدخول وأرباح جرعات البروتين (Doses)، العلب المغلقة (Boîtes)، وفريغو المشروبات والشوفان بدقة.</p>
                   </div>
@@ -705,7 +706,10 @@
                               <span class="text-slate-500 font-medium">صافي الربح:</span>
                               <span id="catFrigoProfit" class="font-extrabold text-blue-600" dir="ltr">0 دج</span>
                           </div> </div> </div>
-              </div> </div>
+              </div>
+              <!-- شريط المطابقة: فئة «أخرى» + المجموع الكلي للفئات (يُملأ تلقائياً) -->
+              <div id="catBreakdownTotalsRow" class="mt-3 pt-3 border-t border-slate-200/80"></div>
+          </div>
           <div class="flex flex-col lg:flex-row gap-6 lg:gap-8 mt-4">
               <div class="flex-1 space-y-4">
                   <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -2776,7 +2780,7 @@
                   <input type="month" id="catProfitFilterMonth" onchange="renderCategoryProfitsModal()" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold">
               </div> </div>
           <!-- Overall Summary Top Bar -->
-          <div class="grid grid-cols-3 gap-3">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div class="bg-slate-50 border border-slate-200/70 p-3.5 rounded-xl text-center">
                   <div class="text-[11px] font-bold text-slate-500">إجمالي مبيعات الشهر</div>
                   <div class="text-base sm:text-lg font-black text-slate-800 mt-0.5" id="catProfitTotalSales">0 دج</div>
@@ -2788,6 +2792,10 @@
               <div class="bg-blue-50 border border-blue-200/70 p-3.5 rounded-xl text-center">
                   <div class="text-[11px] font-bold text-blue-700">الكمية المباعة</div>
                   <div class="text-base sm:text-lg font-black text-blue-800 mt-0.5" id="catProfitTotalUnits">0 قطعة</div>
+              </div>
+              <div class="bg-indigo-50 border border-indigo-200/70 p-3.5 rounded-xl text-center">
+                  <div class="text-[11px] font-bold text-indigo-700">إجمالي ما خُصم من المخزون</div>
+                  <div class="text-base sm:text-lg font-black text-indigo-900 mt-0.5" id="catProfitTotalDeducted">0 وحدة مخزون</div>
               </div> </div>
           <!-- Categories List Container -->
           <div id="catProfitCardsContainer" class="space-y-3">
