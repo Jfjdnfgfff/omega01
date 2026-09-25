@@ -2380,7 +2380,7 @@ window.setElemRequired = setElemRequired;
             return; } el.classList.add('active');
         if (typeof window.lazyLoadSection === 'function') {
             if (id === 'coachAbsenceModal') window.lazyLoadSection('coachAbsences');
-            else if (id === 'addCustomerModal' || id === 'editCustomerModal') { window.lazyLoadSection('packages'); window.lazyLoadSection('customers'); }
+            else if (id === 'addCustomerModal' || id === 'editCustomerModal' || id === 'renewCustomerModal') { window.lazyLoadSection('packages'); window.lazyLoadSection('customers'); }
             else if (id === 'staffPayoutsModal') { window.lazyLoadSection('staffPayouts'); window.lazyLoadSection('suppliers'); window.lazyLoadSection('supplierTransactions'); }
             else if (id === 'expensesModal') window.lazyLoadSection('expenses');
             else if (id === 'packagesModal') window.lazyLoadSection('packages');
@@ -3459,6 +3459,362 @@ window.setElemRequired = setElemRequired;
         showSuccessToast('تم تعديل بيانات المشترك بنجاح');
         if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
         render(); });
+
+    // ==========================================
+    // RENEWAL (تجديد الاشتراك) MODAL & LOGIC
+    // ==========================================
+    function populateRenewModalData(customer) {
+        if (!customer) return;
+
+        // Basic info
+        setElemValue('renewCustId', customer.id || customer._rtdbKey);
+        const nameDisplay = document.getElementById('renewCustNameDisplay');
+        if (nameDisplay) nameDisplay.textContent = customer.name || 'بدون اسم';
+        const phoneDisplay = document.getElementById('renewCustPhoneDisplay');
+        if (phoneDisplay) phoneDisplay.textContent = getDisplayPhone(customer.phone) || 'لا يوجد هاتف';
+
+        // Avatar
+        const letterSpan = document.getElementById('renewCustAvatarLetter');
+        const imgEl = document.getElementById('renewCustAvatarImg');
+        const firstLetter = customer.name ? customer.name.trim().charAt(0) : '؟';
+        if (letterSpan) letterSpan.textContent = firstLetter;
+        if (customer.imageUrl && imgEl) {
+            imgEl.src = customer.imageUrl;
+            imgEl.classList.remove('hidden');
+            if (letterSpan) letterSpan.classList.add('hidden');
+        } else {
+            if (imgEl) {
+                imgEl.src = '';
+                imgEl.classList.add('hidden');
+            }
+            if (letterSpan) letterSpan.classList.remove('hidden');
+        }
+
+        // Expiry / Status Badge
+        const expiryBadge = document.getElementById('renewCustCurrentExpiryStatus');
+        if (expiryBadge) {
+            const isSession = customer.subscriptionType === 'session';
+            if (isSession) {
+                const rem = customer.remainingSessions !== undefined ? customer.remainingSessions : 0;
+                expiryBadge.textContent = `المتبقي: ${rem} حصة`;
+                expiryBadge.className = rem > 0 
+                    ? 'inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 shadow-2xs'
+                    : 'inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 shadow-2xs';
+            } else {
+                const days = typeof getRemainingDays === 'function' ? getRemainingDays(customer) : 0;
+                if (customer.status === 'frozen') {
+                    expiryBadge.textContent = 'مجمد حالياً';
+                    expiryBadge.className = 'inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 shadow-2xs';
+                } else if (days > 0) {
+                    expiryBadge.textContent = `متبقي ${days} يوم`;
+                    expiryBadge.className = 'inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 shadow-2xs';
+                } else {
+                    expiryBadge.textContent = `منتهي (${Math.abs(days)} يوم)`;
+                    expiryBadge.className = 'inline-block text-[11px] font-bold px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-red-700 shadow-2xs';
+                }
+            }
+        }
+
+        // Packages Dropdown
+        if (!Array.isArray(appState.packages) || appState.packages.length === 0) {
+            appState.packages = defaultPackages;
+        }
+        const pkgSelect = document.getElementById('renewPackageId');
+        if (pkgSelect) {
+            pkgSelect.innerHTML = appState.packages.map(p => {
+                const isSess = p.type === 'session';
+                const label = isSess ? `[بالحصة] ${p.name} (${p.sessionsCount || 10} حصص) - ${p.price} دج` : `[زمني] ${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
+                return `<option value="${p.id}">${label}</option>`;
+            }).join('');
+            if (customer.packageId && appState.packages.some(p => p.id === customer.packageId)) {
+                pkgSelect.value = customer.packageId;
+            } else if (appState.packages.length > 0) {
+                pkgSelect.value = appState.packages[0].id;
+            }
+        }
+
+        const pkg = (appState.packages || []).find(p => p.id === (pkgSelect ? pkgSelect.value : customer.packageId)) || appState.packages[0];
+
+        // Subscription type
+        const isSession = (pkg && pkg.type === 'session') || customer.subscriptionType === 'session';
+        const subTypeSelect = document.getElementById('renewSubscriptionType');
+        if (subTypeSelect) subTypeSelect.value = isSession ? 'session' : 'time';
+        toggleRenewCustTypeFields(isSession ? 'session' : 'time');
+
+        // Price
+        const priceInput = document.getElementById('renewCustPrice');
+        if (priceInput) {
+            priceInput.value = (pkg && pkg.price !== undefined) ? pkg.price : (customer.price || 0);
+        }
+
+        // Sessions
+        const sessCount = (pkg && pkg.sessionsCount) ? parseInt(pkg.sessionsCount) : 10;
+        const totalInput = document.getElementById('renewTotalSessions');
+        const remInput = document.getElementById('renewRemainingSessions');
+        if (totalInput) totalInput.value = sessCount;
+        if (remInput) {
+            const currentRem = Math.max(0, parseInt(customer.remainingSessions || 0));
+            remInput.value = currentRem > 0 ? (currentRem + sessCount) : sessCount;
+        }
+
+        // Dates & Start Mode
+        window._currentRenewCustomer = customer;
+        const now = new Date();
+        const currentEndDate = customer.endDate ? new Date(customer.endDate) : null;
+        const isCurrentEndValidAndFuture = currentEndDate && !isNaN(currentEndDate.getTime()) && currentEndDate > now;
+
+        const startMode = isCurrentEndValidAndFuture ? 'continue' : 'today';
+        setRenewStartDateMode(startMode);
+
+        // Payment status
+        if (document.getElementById('renewPaymentStatus')) setElemValue('renewPaymentStatus', 'paid');
+        if (document.getElementById('renewDebtAmount')) setElemValue('renewDebtAmount', '');
+        toggleRenewDebtField();
+    }
+
+    function openRenewModal(customerId) {
+        if (typeof window.lazyLoadSection === 'function') {
+            window.lazyLoadSection('packages');
+            window.lazyLoadSection('customers');
+        }
+
+        const customersList = Array.isArray(appState.customers) ? appState.customers : [];
+        if (customersList.length === 0) {
+            showErrorToast('لا يوجد مشتركين مسجلين بعد لتجديد اشتراكاتهم');
+            return;
+        }
+
+        let customer = null;
+        if (customerId) {
+            customer = customersList.find(c => String(c && c.id) === String(customerId) || String(c && c._rtdbKey) === String(customerId));
+        }
+        if (!customer) {
+            customer = customersList[0];
+        }
+
+        // Populate customer select
+        const custSelect = document.getElementById('renewCustSelect');
+        const custSelectContainer = document.getElementById('renewCustSelectContainer');
+        if (custSelect) {
+            custSelect.innerHTML = customersList.map(c => {
+                const pkg = (appState.packages || []).find(p => p && p.id === c.packageId);
+                const pkgName = pkg ? pkg.name : '';
+                return `<option value="${c.id}">${c.name || 'بدون اسم'} ${c.phone ? '(' + c.phone + ')' : ''} ${pkgName ? ' - ' + pkgName : ''}</option>`;
+            }).join('');
+            custSelect.value = customer ? customer.id : '';
+        }
+
+        if (custSelectContainer) {
+            custSelectContainer.style.display = customerId ? 'none' : 'block';
+        }
+
+        populateRenewModalData(customer);
+        openModal('renewCustomerModal');
+    }
+
+    function handleRenewCustomerSelect(selectedId) {
+        const customer = (appState.customers || []).find(c => String(c && c.id) === String(selectedId) || String(c && c._rtdbKey) === String(selectedId));
+        if (customer) {
+            populateRenewModalData(customer);
+        }
+    }
+    window.handleRenewCustomerSelect = handleRenewCustomerSelect;
+    window.openRenewModal = openRenewModal;
+
+    window.setRenewStartDateMode = function(mode) {
+        const todayBtn = document.getElementById('renewStartFromTodayBtn');
+        const contBtn = document.getElementById('renewStartFromExpiryBtn');
+        const startInput = document.getElementById('renewStartDate');
+        const customer = window._currentRenewCustomer;
+        const now = new Date();
+        const todayStr = (typeof getLocalDateString === 'function' ? getLocalDateString(now) : now.toISOString().split('T')[0]);
+
+        if (mode === 'continue' && customer && customer.endDate) {
+            const currentEnd = new Date(customer.endDate);
+            if (!isNaN(currentEnd.getTime()) && currentEnd > now) {
+                if (startInput) startInput.value = currentEnd.toISOString().split('T')[0];
+                if (contBtn) {
+                    contBtn.className = 'py-2 px-3 rounded-xl border border-blue-600 bg-blue-50 text-blue-700 text-xs font-bold transition-all text-center shadow-2xs';
+                }
+                if (todayBtn) {
+                    todayBtn.className = 'py-2 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-bold transition-all text-center';
+                }
+                updateRenewEndDate();
+                return;
+            }
+        }
+
+        // Default 'today'
+        if (startInput) startInput.value = todayStr;
+        if (todayBtn) {
+            todayBtn.className = 'py-2 px-3 rounded-xl border border-blue-600 bg-blue-50 text-blue-700 text-xs font-bold transition-all text-center shadow-2xs';
+        }
+        if (contBtn) {
+            contBtn.className = 'py-2 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-bold transition-all text-center';
+        }
+        updateRenewEndDate();
+    };
+
+    window.toggleRenewCustTypeFields = function(type) {
+        const isSession = type === 'session';
+        const sessionFields = document.getElementById('renewCustSessionFields');
+        const timeFields = document.getElementById('renewCustTimeFields');
+        if (sessionFields) sessionFields.style.display = isSession ? 'block' : 'none';
+        if (timeFields) timeFields.style.display = isSession ? 'none' : 'block';
+    };
+
+    window.handleRenewPackageChange = function() {
+        const pkgId = getElemVal('renewPackageId');
+        const pkg = (appState.packages || []).find(p => p && p.id === pkgId);
+        if (!pkg) return;
+
+        const priceInput = document.getElementById('renewCustPrice');
+        if (priceInput && pkg.price !== undefined) priceInput.value = pkg.price;
+
+        const subTypeSelect = document.getElementById('renewSubscriptionType');
+        if (pkg.type === 'session') {
+            if (subTypeSelect) subTypeSelect.value = 'session';
+            toggleRenewCustTypeFields('session');
+            const sessCount = parseInt(pkg.sessionsCount || 10);
+            const totalInput = document.getElementById('renewTotalSessions');
+            const remInput = document.getElementById('renewRemainingSessions');
+            if (totalInput) totalInput.value = sessCount;
+            if (remInput) remInput.value = sessCount;
+        } else {
+            if (subTypeSelect) subTypeSelect.value = 'time';
+            toggleRenewCustTypeFields('time');
+            updateRenewEndDate();
+        }
+    };
+
+    window.updateRenewEndDate = function() {
+        const startInput = document.getElementById('renewStartDate');
+        const endInput = document.getElementById('renewEndDate');
+        const pkgId = getElemVal('renewPackageId');
+        const pkg = (appState.packages || []).find(p => p && p.id === pkgId);
+        if (!startInput || !endInput) return;
+
+        const startDate = new Date(startInput.value || new Date());
+        if (isNaN(startDate.getTime())) return;
+
+        const duration = pkg ? parseInt(pkg.durationDays || pkg.duration || 30) : 30;
+        const newEnd = new Date(startDate);
+        newEnd.setDate(startDate.getDate() + duration);
+        endInput.value = newEnd.toISOString().split('T')[0];
+    };
+
+    window.applyRenewDuration = function(days) {
+        const startInput = document.getElementById('renewStartDate');
+        const endInput = document.getElementById('renewEndDate');
+        if (!startInput || !endInput) return;
+        const startDate = new Date(startInput.value || new Date());
+        if (isNaN(startDate.getTime())) return;
+        const newEnd = new Date(startDate);
+        newEnd.setDate(startDate.getDate() + days);
+        endInput.value = newEnd.toISOString().split('T')[0];
+    };
+
+    window.adjustRenewSessions = function(delta) {
+        const remInput = document.getElementById('renewRemainingSessions');
+        const totalInput = document.getElementById('renewTotalSessions');
+        if (remInput && totalInput) {
+            let rem = parseInt(remInput.value || 0) + delta;
+            let total = parseInt(totalInput.value || 0);
+            if (delta > 0) total += delta;
+            remInput.value = Math.max(0, rem);
+            totalInput.value = Math.max(1, total);
+        }
+    };
+
+    window.toggleRenewDebtField = function() {
+        const container = document.getElementById('renewDebtAmountContainer');
+        const status = document.getElementById('renewPaymentStatus');
+        const priceInput = document.getElementById('renewCustPrice');
+        const debtInput = document.getElementById('renewDebtAmount');
+        if (container && status) {
+            const isCredit = status.value === 'credit';
+            container.style.display = isCredit ? 'block' : 'none';
+            if (isCredit && debtInput && (!debtInput.value || debtInput.value === '0') && priceInput) {
+                debtInput.value = priceInput.value || '';
+            }
+        }
+    };
+
+    window.handleRenewCustomerSubmit = function(e) {
+        if (e && e.preventDefault) e.preventDefault();
+        if (e && e.stopPropagation) e.stopPropagation();
+
+        const targetId = String(getElemVal('renewCustId') || '').trim();
+        let customer = (appState.customers || []).find(c => c && (String(c.id) === targetId || String(c._rtdbKey) === targetId));
+        if (!customer) {
+            showErrorToast('تعذر العثور على سجل المشترك لتسجيل التجديد');
+            return false;
+        }
+
+        const pkgId = getElemVal('renewPackageId');
+        const pkg = (appState.packages || []).find(p => p && p.id === pkgId);
+        const priceInput = document.getElementById('renewCustPrice');
+        const renewPrice = priceInput && priceInput.value !== '' ? parseInt(priceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
+        const subType = getElemVal('renewSubscriptionType') || 'time';
+        const paymentStatus = getElemVal('renewPaymentStatus') || 'paid';
+        const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('renewDebtAmount') || renewPrice || 0) : 0;
+
+        customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
+        customer.price = renewPrice;
+        customer.subscriptionType = subType;
+        customer.status = 'active';
+        customer.paymentStatus = paymentStatus;
+        customer.debtAmount = debtAmount;
+        customer.updatedAt = Date.now();
+
+        if (subType === 'session') {
+            const totalSess = parseInt(getElemVal('renewTotalSessions') || (pkg?.sessionsCount || 10));
+            const remSess = parseInt(getElemVal('renewRemainingSessions') || totalSess);
+            customer.totalSessions = totalSess;
+            customer.remainingSessions = remSess;
+        } else {
+            const startVal = getElemVal('renewStartDate');
+            const endVal = getElemVal('renewEndDate');
+            if (startVal) customer.startDate = new Date(startVal).toISOString();
+            if (endVal) customer.endDate = new Date(endVal).toISOString();
+        }
+
+        // Credit record handling
+        if (paymentStatus === 'credit' && debtAmount > 0) {
+            if (!appState.credits) appState.credits = [];
+            const autoId = 'cr_auto_' + customer.id + '_' + Date.now();
+            const newCredit = {
+                id: autoId,
+                name: customer.name,
+                nickname: 'مشترك (تجديد)',
+                phone: cleanPhone(customer.phone),
+                desc: `دين تجديد اشتراك - باقة: ${pkg ? pkg.name : 'باقة'} (${renewPrice} دج)`,
+                amount: debtAmount,
+                date: new Date().toISOString()
+            };
+            appState.credits.unshift(newCredit);
+            if (window.saveFirebaseSectionItem) {
+                window.saveFirebaseSectionItem('credits', newCredit);
+            }
+        }
+
+        // Log renewal activity
+        if (typeof logActivity === 'function') {
+            logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج`, renewPrice);
+        }
+
+        if (window.saveFirebaseSectionItem) {
+            window.saveFirebaseSectionItem('customers', customer);
+        }
+
+        saveState();
+        closeModal('renewCustomerModal');
+        showSuccessToast(`تم تجديد اشتراك (${customer.name}) بنجاح! 🎉`);
+        if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+        render();
+        return false;
+    };
+    document.getElementById('renewCustomerForm')?.addEventListener('submit', window.handleRenewCustomerSubmit);
     // ==========================================
     // EXPENSES CATEGORIES & MANAGEMENT HELPERS
     // ==========================================
@@ -4951,6 +5307,14 @@ window.setElemRequired = setElemRequired;
     window.togglePrivacy = togglePrivacy; window.clearAllData = clearAllData;
     window.openBulkImportModal = openBulkImportModal;
     window.openEditModal = openEditModal;
+    window.openRenewModal = openRenewModal;
+    window.handleRenewPackageChange = handleRenewPackageChange;
+    window.setRenewStartDateMode = setRenewStartDateMode;
+    window.updateRenewEndDate = updateRenewEndDate;
+    window.applyRenewDuration = applyRenewDuration;
+    window.adjustRenewSessions = adjustRenewSessions;
+    window.toggleRenewDebtField = toggleRenewDebtField;
+    window.handleRenewCustomerSubmit = handleRenewCustomerSubmit;
     // --- Smooth Scroll & Drag Navigation for Top Header Icons (PC + Mobile) ---
     let isNavDragging = false; let navDragStartX = 0;
     let navScrollStartLeft = 0; let navHasMoved = false;
@@ -8808,8 +9172,9 @@ window.setElemRequired = setElemRequired;
                     <button type="button" onclick="openEditModal('${c.id}')" class="w-11 h-11 rounded-2xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors shrink-0 cursor-pointer" title="تعديل المشترك">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                     </button>
-                    <button type="button" onclick="toggleFreeze('${c.id}')" class="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center cursor-pointer">
-                        ${c.status === 'frozen' ? 'إلغاء التجميد' : 'تجميد'}
+                    <button type="button" onclick="openRenewModal('${c.id}')" class="flex-1 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-2xl text-xs sm:text-sm font-bold transition-all text-center shadow-md shadow-blue-500/20 hover:shadow-lg flex items-center justify-center gap-1.5 cursor-pointer" title="تجديد اشتراك المشترك">
+                        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        <span>تجديد</span>
                     </button>
                     <button type="button" onclick="openMessageModal('${c.id}')" class="flex-1 py-3 bg-[#2563eb] hover:bg-blue-700 text-white rounded-2xl text-xs sm:text-sm font-bold transition-colors text-center shadow-md shadow-blue-100 cursor-pointer">
                         مراسلة
@@ -11313,7 +11678,7 @@ window.setElemRequired = setElemRequired;
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
