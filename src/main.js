@@ -5128,7 +5128,7 @@ window.setElemRequired = setElemRequired;
         const modeInput = document.getElementById('sellUnitModeInput');
         if (!product) { stockInfo.classList.add('hidden');
             if (modeWrapper) modeWrapper.classList.add('hidden');
-            return; } const qty = parseFloat(getElemVal('sellProdQty')) || 0;
+            return; } const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
 
@@ -5137,13 +5137,13 @@ window.setElemRequired = setElemRequired;
             const perDosePrice = (Number(product.price || 0) / weightVal).toFixed(2);
             const doseBtn = document.getElementById('sellModeDosesBtn');
             const countBtn = document.getElementById('sellModeCountBtn');
-            if (doseBtn) doseBtn.innerHTML = `<span>بالدوزة / الكيلو</span> <span class="text-[10px] opacity-90">(${perDosePrice} دج)</span>`;
-            if (countBtn) countBtn.innerHTML = `<span>بالعلبة / القطعة</span> <span class="text-[10px] opacity-90">(${product.price} دج)</span>`;
+            if (doseBtn) doseBtn.innerHTML = `<span>بالجرعة / الدوزة الفردية</span> <span class="text-[10px] opacity-90">(${perDosePrice} دج)</span>`;
+            if (countBtn) countBtn.innerHTML = `<span>بالعلبة / القطعة الكاملة (${weightVal})</span> <span class="text-[10px] opacity-90">(${product.price} دج)</span>`;
         } else {
             if (modeWrapper) modeWrapper.classList.add('hidden');
         }
 
-        let sellMode = modeInput ? modeInput.value : 'doses';
+        let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
         if (!weightVal || weightVal <= 0) sellMode = 'count';
 
         let deduction = qty;
@@ -5156,9 +5156,11 @@ window.setElemRequired = setElemRequired;
             totalPrice = (unitPrice * qty).toFixed(2);
         } else if (weightVal && weightVal > 0 && sellMode === 'count') {
             deduction = qty * weightVal;
+            unitPrice = Number(product.price || 0);
             totalPrice = (unitPrice * qty).toFixed(2);
         } else {
             deduction = qty;
+            unitPrice = Number(product.price || 0);
             totalPrice = (unitPrice * qty).toFixed(2);
         }
 
@@ -5176,15 +5178,15 @@ window.setElemRequired = setElemRequired;
         const locColor = 'text-blue-700 bg-blue-50 border-blue-200';
         stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
         const modeText = (weightVal && weightVal > 0)
-            ? (sellMode === 'doses' ? ` (سعر الدوزة/الكيلو: ${unitPrice} دج)` : ` (سعر العلبة الكاملة: ${unitPrice} دج)`)
-            : '';
+            ? (sellMode === 'doses' ? ` (سعر الجرعة: ${unitPrice} دج - خصم: ${deduction})` : ` (سعر العلبة: ${unitPrice} دج - خصم من المخزون: ${deduction})`)
+            : ` (خصم من المخزون: ${deduction})`;
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong></span>
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
                 <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong>${modeText}</span>
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
@@ -5203,7 +5205,7 @@ window.setElemRequired = setElemRequired;
 
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         const modeInput = document.getElementById('sellUnitModeInput');
-        let sellMode = modeInput ? modeInput.value : 'doses';
+        let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
         if (!weightVal || weightVal <= 0) sellMode = 'count';
 
         let stockDeduction = qty;
@@ -5215,12 +5217,14 @@ window.setElemRequired = setElemRequired;
             salePrice = Number((salePrice / weightVal).toFixed(2));
             saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
             stockDeduction = qty;
-            saleLabel += ' (دوزة/كيلو)';
+            saleLabel += ' (جرعة/دوزة)';
         } else if (weightVal && weightVal > 0 && sellMode === 'count') {
+            salePrice = Number(product.price || 0);
             saleCost = saleCost * qty;
             stockDeduction = qty * weightVal;
             saleLabel += ' (علبة كاملة)';
         } else {
+            salePrice = Number(product.price || 0);
             saleCost = saleCost * qty;
             stockDeduction = qty;
         }
@@ -7381,6 +7385,222 @@ window.setElemRequired = setElemRequired;
         closeModal('messageModal');
     }
     window.sendMessage = sendMessage;
+    
+    function parseSafeDate(rawDate) {
+        if (!rawDate && rawDate !== 0) return null;
+        if (rawDate instanceof Date) return isNaN(rawDate.getTime()) ? null : rawDate;
+        if (typeof rawDate === 'number') {
+            const d = new Date(rawDate);
+            return isNaN(d.getTime()) ? null : d;
+        }
+        if (typeof rawDate === 'string') {
+            const str = rawDate.trim();
+            if (!str) return null;
+            if (/^\d{10,15}$/.test(str)) {
+                const d = new Date(Number(str));
+                if (!isNaN(d.getTime())) return d;
+            }
+            if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+                const parts = str.split(/[-/T\s]/);
+                const y = parseInt(parts[0], 10);
+                const m = parseInt(parts[1], 10) - 1;
+                const day = parseInt(parts[2], 10);
+                const d = new Date(y, m, day);
+                if (!isNaN(d.getTime())) return d;
+            }
+            const d = new Date(str);
+            if (!isNaN(d.getTime())) return d;
+        }
+        if (typeof rawDate === 'object' && rawDate.seconds) {
+            return new Date(rawDate.seconds * 1000);
+        }
+        return null;
+    }
+    window.parseSafeDate = parseSafeDate;
+
+    function inferCategoryFromText(text) {
+        if (!text) return null;
+        const t = text.toLowerCase();
+        
+        // 1. Doses (جرعات بروتين ومكملات بالدوزة)
+        if (
+            t.includes('دوز') || 
+            t.includes('جرع') || 
+            t.includes('dose') || 
+            t.includes('doza') || 
+            t.includes('doz') || 
+            t.includes('سكوب') || 
+            t.includes('scoop') || 
+            t.includes('شايك') || 
+            t.includes('كأس') || 
+            t.includes('كوب') || 
+            t.includes('shake')
+        ) {
+            return 'doses';
+        }
+
+        // 2. Frigo (مشروبات، ماء، شوفان، سناكات)
+        if (
+            t.includes('فريغو') || 
+            t.includes('فريكو') || 
+            t.includes('frigo') || 
+            t.includes('ماء') || 
+            t.includes('مياه') || 
+            t.includes('eau') || 
+            t.includes('water') || 
+            t.includes('ifri') || 
+            t.includes('saida') || 
+            t.includes('guedila') || 
+            t.includes('lalla') || 
+            t.includes('قارور') || 
+            t.includes('قرعة') || 
+            t.includes('bouteille') || 
+            t.includes('جي') || 
+            t.includes('jus') || 
+            t.includes('juice') || 
+            t.includes('عصير') || 
+            t.includes('شوفان') || 
+            t.includes('flocon') || 
+            t.includes('avoine') || 
+            t.includes('oats') || 
+            t.includes('شيبس') || 
+            t.includes('chips') || 
+            t.includes('مشروب') || 
+            t.includes('boisson') || 
+            t.includes('drink') || 
+            t.includes('energy') || 
+            t.includes('redbull') || 
+            t.includes('red bull') || 
+            t.includes('monster') || 
+            t.includes('قهوة') || 
+            t.includes('cafe') || 
+            t.includes('café') || 
+            t.includes('coffee') || 
+            t.includes('كوكا') || 
+            t.includes('coca') || 
+            t.includes('pepsi') || 
+            t.includes('بيبسي') || 
+            t.includes('ياغورت') || 
+            t.includes('yaourt') || 
+            t.includes('حليب') || 
+            t.includes('lait') || 
+            t.includes('تونة') || 
+            t.includes('thon') || 
+            t.includes('بيض') || 
+            t.includes('oeuf') || 
+            t.includes('سناك') || 
+            t.includes('snack') || 
+            t.includes('snickers') || 
+            t.includes('سنيكرز') || 
+            t.includes('mars') || 
+            t.includes('twix') || 
+            t.includes('biscuit') || 
+            t.includes('شكلاطة') || 
+            t.includes('chocolat')
+        ) {
+            return 'frigo';
+        }
+
+        // 3. Boxes (علب مغلقة ومكملات غذائية)
+        if (
+            t.includes('علب') || 
+            t.includes('مغلق') || 
+            t.includes('مسكر') || 
+            t.includes('boite') || 
+            t.includes('boîte') || 
+            t.includes('box') || 
+            t.includes('pot') || 
+            t.includes('بروتين') || 
+            t.includes('protein') || 
+            t.includes('whey') || 
+            t.includes('واي') || 
+            t.includes('creatine') || 
+            t.includes('كرياتين') || 
+            t.includes('غينر') || 
+            t.includes('gainer') || 
+            t.includes('mass') || 
+            t.includes('ماس') || 
+            t.includes('bcaa') || 
+            t.includes('eaa') || 
+            t.includes('amino') || 
+            t.includes('امينو') || 
+            t.includes('omega') || 
+            t.includes('اوميغا') || 
+            t.includes('glutamine') || 
+            t.includes('غلوتامين') || 
+            t.includes('isolate') || 
+            t.includes('ايزولات') || 
+            t.includes('casein') || 
+            t.includes('كازين') || 
+            t.includes('carnitine') || 
+            t.includes('كارنتين') || 
+            t.includes('vitamine') || 
+            t.includes('vitamin') || 
+            t.includes('فيتامين') || 
+            t.includes('collagen') || 
+            t.includes('كولاجين') || 
+            t.includes('preworkout') || 
+            t.includes('pre-workout') || 
+            t.includes('حارق دهون') || 
+            t.includes('fat burner') || 
+            t.includes('كيلو') || 
+            t.includes('kg') || 
+            t.includes('lbs')
+        ) {
+            return 'boxes';
+        }
+
+        return null;
+    }
+
+    function getProductCategory(item) {
+        if (!item) return 'boxes';
+        if (typeof item === 'string') {
+            const str = item.toLowerCase().trim();
+            if (str === 'doses' || str === 'boxes' || str === 'frigo') return str;
+            item = { name: str };
+        }
+        // Direct category field check
+        const directCat = (item.category || '').toString().toLowerCase().trim();
+        if (directCat === 'doses' || directCat === 'boxes' || directCat === 'frigo') {
+            return directCat;
+        }
+
+        // Check if item is a sale linked to an existing product in appState.products
+        if (item.prodId && Array.isArray(window.appState && window.appState.products)) {
+            const pId = String(item.prodId);
+            const linked = window.appState.products.find(p => p && (String(p.id) === pId || String(p.barcode) === pId));
+            if (linked) {
+                const lCat = (linked.category || '').toString().toLowerCase().trim();
+                if (lCat === 'doses' || lCat === 'boxes' || lCat === 'frigo') {
+                    return lCat;
+                }
+                const pCombined = ((linked.name || '') + ' ' + (linked.weight || '') + ' ' + (linked.brand || '')).toLowerCase();
+                const pCatInferred = inferCategoryFromText(pCombined);
+                if (pCatInferred) return pCatInferred;
+            }
+        }
+
+        // Combine all text fields from item
+        const combined = ((item.name || '') + ' ' + (item.prodName || '') + ' ' + (item.productName || '') + ' ' + (item.weight || '') + ' ' + (item.unitLabel || '') + ' ' + (item.desc || '')).toLowerCase();
+        const inferred = inferCategoryFromText(combined);
+        if (inferred) return inferred;
+
+        // If nothing matched, check if sold in doses mode
+        if (item.sellMode === 'doses' || (item.stockDeduction && item.stockDeduction < 1)) {
+            return 'doses';
+        }
+
+        return 'boxes'; // Default gym products / supplements to boxes
+    }
+    window.getProductCategory = getProductCategory;
+
+    window.categoryBreakdownFilter = 'month';
+    window.setCategoryBreakdownFilter = function(mode) {
+        window.categoryBreakdownFilter = mode;
+        if (typeof render === 'function') render();
+    };
+
     function formatMoney(amount) { return appState.hideFinances ? '**** دج' : Number(amount).toLocaleString() + ' دج'; }
     // Global password action callback handler
     
@@ -7630,8 +7850,7 @@ window.setElemRequired = setElemRequired;
 
             const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
             const modeInput = document.getElementById('sellUnitModeInput');
-            let sellMode = modeInput ? modeInput.value : 'doses';
-            if (product.category === 'boxes') sellMode = 'count';
+            let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
             if (!weightVal || weightVal <= 0) sellMode = 'count';
 
             let stockDeduction = qty;
@@ -7643,12 +7862,14 @@ window.setElemRequired = setElemRequired;
                 salePrice = Number((salePrice / weightVal).toFixed(2));
                 saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
                 stockDeduction = qty;
-                unitLabel = ' (دوزة/كيلو)';
+                unitLabel = ' (جرعة/دوزة)';
             } else if (weightVal && weightVal > 0 && sellMode === 'count') {
+                salePrice = Number(product.price || 0);
                 saleCost = saleCost * qty;
                 stockDeduction = qty * weightVal;
                 unitLabel = ' (علبة كاملة)';
             } else {
+                salePrice = Number(product.price || 0);
                 saleCost = saleCost * qty;
                 stockDeduction = qty;
             }
@@ -7779,8 +8000,7 @@ window.setElemRequired = setElemRequired;
 
                     const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
                     const modeInputBarcode = document.getElementById('sellUnitModeInput');
-                    let sellModeBarcode = modeInputBarcode ? modeInputBarcode.value : 'doses';
-                    if (prodStock1.category === 'boxes') sellModeBarcode = 'count';
+                    let sellModeBarcode = modeInputBarcode ? (modeInputBarcode.value || 'count') : 'count';
                     if (!weightValBarcode || weightValBarcode <= 0) sellModeBarcode = 'count';
 
                     const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0 && sellModeBarcode === 'count') ? (chosenQty * weightValBarcode) : chosenQty;
@@ -8827,40 +9047,112 @@ window.setElemRequired = setElemRequired;
             setElemHTML('dashboardStockProfit', formatMoney(stockVal.totalPotentialProfit));
         }
         // Real-time Category Breakdown Calculations (Doses, Boxes, Frigo)
+        const catFilterMode = window.categoryBreakdownFilter || 'month';
         let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
         let boxesSales = 0, boxesProfit = 0, boxesUnits = 0;
         let frigoSales = 0, frigoProfit = 0, frigoUnits = 0;
-        (appState.sales || []).forEach(s => {
-            const d = new Date(s.date); if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
-                const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
-                const total = Number(s.total) || 0;
-                const profit = Number(s.profit) || 0;
-                const qty = Number(s.qty) || 1;
+        let allDosesSales = 0, allDosesProfit = 0, allDosesUnits = 0;
+        let allBoxesSales = 0, allBoxesProfit = 0, allBoxesUnits = 0;
+        let allFrigoSales = 0, allFrigoProfit = 0, allFrigoUnits = 0;
+
+        const allSalesList = Array.isArray(appState.sales) ? appState.sales : [];
+        allSalesList.forEach(s => {
+            if (!s) return;
+            const d = parseSafeDate(s.date || s.id || s.createdAt);
+            const isThisMonth = d ? (d.getMonth() === currentMonth && d.getFullYear() === currentYear) : true;
+            const cat = getProductCategory(s);
+            const total = Number(s.total) || 0;
+            const cost = Number(s.cost) || 0;
+            const profit = s.profit !== undefined && s.profit !== null ? Number(s.profit) : (total - cost);
+            const qty = Number(s.qty) || 1;
+
+            if (cat === 'doses') {
+                allDosesSales += total;
+                allDosesProfit += profit;
+                allDosesUnits += qty;
+            } else if (cat === 'frigo') {
+                allFrigoSales += total;
+                allFrigoProfit += profit;
+                allFrigoUnits += qty;
+            } else {
+                allBoxesSales += total;
+                allBoxesProfit += profit;
+                allBoxesUnits += qty;
+            }
+
+            if (isThisMonth) {
                 if (cat === 'doses') {
                     dosesSales += total;
                     dosesProfit += profit;
-                    dosesUnits += qty; } else if (cat === 'boxes') {
-                    boxesSales += total;
-                    boxesProfit += profit;
-                    boxesUnits += qty; } else if (cat === 'frigo') {
+                    dosesUnits += qty;
+                } else if (cat === 'frigo') {
                     frigoSales += total;
                     frigoProfit += profit;
-                    frigoUnits += qty; } } });
+                    frigoUnits += qty;
+                } else {
+                    boxesSales += total;
+                    boxesProfit += profit;
+                    boxesUnits += qty;
+                }
+            }
+        });
+
+        // Auto fallback: if filter is 'month' but month has 0 sales and all-time has sales, show all-time or filtered
+        const showAll = catFilterMode === 'all';
+        const displayDosesSales = showAll ? allDosesSales : dosesSales;
+        const displayDosesProfit = showAll ? allDosesProfit : dosesProfit;
+        const displayDosesUnits = showAll ? allDosesUnits : dosesUnits;
+
+        const displayBoxesSales = showAll ? allBoxesSales : boxesSales;
+        const displayBoxesProfit = showAll ? allBoxesProfit : boxesProfit;
+        const displayBoxesUnits = showAll ? allBoxesUnits : boxesUnits;
+
+        const displayFrigoSales = showAll ? allFrigoSales : frigoSales;
+        const displayFrigoProfit = showAll ? allFrigoProfit : frigoProfit;
+        const displayFrigoUnits = showAll ? allFrigoUnits : frigoUnits;
+
         if (document.getElementById('prodCatMonthLabel')) {
-            setElemText('prodCatMonthLabel', `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`);
-        } if (document.getElementById('prodCatDosesIncome')) {
-            setElemHTML('prodCatDosesIncome', formatMoney(dosesSales));
-            setElemHTML('prodCatDosesProfit', `صافي الربح: ${dosesProfit.toLocaleString()} دج`);
-            setElemText('prodCatDosesUnits', `${dosesUnits} جرعة مباعة`);
-        } if (document.getElementById('prodCatBoxesIncome')) {
-            setElemHTML('prodCatBoxesIncome', formatMoney(boxesSales));
-            setElemHTML('prodCatBoxesProfit', `صافي الربح: ${boxesProfit.toLocaleString()} دج`);
-            setElemText('prodCatBoxesUnits', `${boxesUnits} علبة مباعة`);
-        } if (document.getElementById('prodCatFrigoIncome')) {
-            setElemHTML('prodCatFrigoIncome', formatMoney(frigoSales));
-            setElemHTML('prodCatFrigoProfit', `صافي الربح: ${frigoProfit.toLocaleString()} دج`);
-            setElemText('prodCatFrigoUnits', `${frigoUnits} قارورة / قطعة`);
+            const labelStr = showAll
+                ? `إحصائيات إجمالية (جميع المبيعات المسجلة)`
+                : `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`;
+            setElemText('prodCatMonthLabel', labelStr);
         }
+
+        const btnMonth = document.getElementById('catFilterThisMonthBtn');
+        const btnAll = document.getElementById('catFilterAllTimeBtn');
+        if (btnMonth && btnAll) {
+            if (showAll) {
+                btnAll.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
+                btnMonth.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
+            } else {
+                btnMonth.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
+                btnAll.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
+            }
+        }
+
+        // Doses
+        setElemHTML('prodCatDosesIncome', formatMoney(displayDosesSales));
+        setElemHTML('catDosesIncome', formatMoney(displayDosesSales));
+        setElemHTML('prodCatDosesProfit', `صافي الربح: ${displayDosesProfit.toLocaleString()} دج`);
+        setElemHTML('catDosesProfit', formatMoney(displayDosesProfit));
+        setElemText('prodCatDosesUnits', `${displayDosesUnits} جرعة مباعة`);
+        setElemText('catDosesCountBadge', `${displayDosesUnits} جرعة`);
+
+        // Boxes
+        setElemHTML('prodCatBoxesIncome', formatMoney(displayBoxesSales));
+        setElemHTML('catBoxesIncome', formatMoney(displayBoxesSales));
+        setElemHTML('prodCatBoxesProfit', `صافي الربح: ${displayBoxesProfit.toLocaleString()} دج`);
+        setElemHTML('catBoxesProfit', formatMoney(displayBoxesProfit));
+        setElemText('prodCatBoxesUnits', `${displayBoxesUnits} علبة مباعة`);
+        setElemText('catBoxesCountBadge', `${displayBoxesUnits} علبة`);
+
+        // Frigo
+        setElemHTML('prodCatFrigoIncome', formatMoney(displayFrigoSales));
+        setElemHTML('catFrigoIncome', formatMoney(displayFrigoSales));
+        setElemHTML('prodCatFrigoProfit', `صافي الربح: ${displayFrigoProfit.toLocaleString()} دج`);
+        setElemHTML('catFrigoProfit', formatMoney(displayFrigoProfit));
+        setElemText('prodCatFrigoUnits', `${displayFrigoUnits} قارورة / قطعة`);
+        setElemText('catFrigoCountBadge', `${displayFrigoUnits} قطعة`);
         // Update Customers View Summary Stats
         if (document.getElementById('custViewActiveCount')) {
             setElemText('custViewActiveCount', activeCount);
@@ -9791,39 +10083,59 @@ window.setElemRequired = setElemRequired;
     // ==========================================
     window.openCategoryProfitsModal = function() {
         const modal = document.getElementById('categoryProfitsModal');
-        if (!modal) return; const now = new Date();
+        if (!modal) return;
+        const now = new Date();
         const monthSelect = document.getElementById('catProfitFilterMonth');
-        if (monthSelect) { monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        } renderCategoryProfitsModal(); modal.classList.add('active');
-    }; window.renderCategoryProfitsModal = function() {
+        if (monthSelect && !monthSelect.value) {
+            monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        }
+        renderCategoryProfitsModal();
+        modal.classList.add('active');
+    }; 
+    window.renderCategoryProfitsModal = function() {
         const monthSelect = document.getElementById('catProfitFilterMonth');
-        const selectedVal = monthSelect ? monthSelect.value : 'all';
+        const selectedVal = monthSelect ? monthSelect.value : '';
         let targetMonth = -1; let targetYear = -1;
         if (selectedVal && selectedVal !== 'all') {
             const parts = selectedVal.split('-');
-            targetYear = parseInt(parts[0]);
-            targetMonth = parseInt(parts[1]) - 1;
-        } const sales = appState.sales || [];
-        const filtered = sales.filter(s => { if (!s.date) return false;
-            if (targetMonth === -1) return true;
-            const d = new Date(s.date); return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
+            if (parts.length === 2) {
+                targetYear = parseInt(parts[0], 10);
+                targetMonth = parseInt(parts[1], 10) - 1;
+            }
+        }
+        const sales = Array.isArray(appState.sales) ? appState.sales : [];
+        const filtered = sales.filter(s => { 
+            if (!s) return false;
+            if (targetMonth === -1 || !selectedVal || selectedVal === 'all') return true;
+            const d = parseSafeDate(s.date || s.id || s.createdAt);
+            if (!d) return true;
+            return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
         });
+
         // Aggregation per category
-        const cats = { doses: { name: 'بروتين بالجرعة (لي دوز)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            boxes: { name: 'علب البروتين والمكملات (المسكرة)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            frigo: { name: 'الفريغو (ماء، جي، شوفان، مشروبات)', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
-            other: { name: 'منتجات ومبيعات أخرى', icon: '', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 }
-        }; filtered.forEach(s => { const catKey = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
-            const targetCat = cats[catKey] || cats.other;
+        const cats = { 
+            doses: { name: 'بروتين بالجرعة (لي دوز)', icon: '⚡', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
+            boxes: { name: 'علب البروتين والمكملات (المسكرة)', icon: '📦', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 },
+            frigo: { name: 'الفريغو (ماء، جي، شوفان، مشروبات)', icon: '❄️', color: 'blue', sales: 0, cost: 0, profit: 0, units: 0 }
+        };
+
+        filtered.forEach(s => { 
+            const catKey = getProductCategory(s);
+            const targetCat = cats[catKey] || cats.boxes;
             const total = Number(s.total) || 0;
             const cost = Number(s.cost) || 0;
-            const profit = s.profit !== undefined ? Number(s.profit) : (total - cost);
+            const profit = s.profit !== undefined && s.profit !== null ? Number(s.profit) : (total - cost);
             const qty = Number(s.qty) || 1;
-            targetCat.sales += total; targetCat.cost += cost;
+            targetCat.sales += total; 
+            targetCat.cost += cost;
             targetCat.profit += profit;
-            targetCat.units += qty; }); const totalSalesAll = Object.values(cats).reduce((acc, c) => acc + c.sales, 0);
+            targetCat.units += qty; 
+        });
+
+        const totalSalesAll = Object.values(cats).reduce((acc, c) => acc + c.sales, 0);
         const totalProfitAll = Object.values(cats).reduce((acc, c) => acc + c.profit, 0);
         const totalUnitsAll = Object.values(cats).reduce((acc, c) => acc + c.units, 0);
+
         // Update UI summary numbers
         const sumSalesElem = document.getElementById('catProfitTotalSales');
         const sumProfitElem = document.getElementById('catProfitTotalNet');
@@ -9831,14 +10143,16 @@ window.setElemRequired = setElemRequired;
         if (sumSalesElem) sumSalesElem.innerHTML = `${totalSalesAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (sumProfitElem) sumProfitElem.innerHTML = `${totalProfitAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (sumUnitsElem) sumUnitsElem.innerText = `${totalUnitsAll} قطعة / جرعة`;
+
         // Render category cards
         const container = document.getElementById('catProfitCardsContainer');
-        if (container) { container.innerHTML = `
+        if (container) { 
+            container.innerHTML = `
                 <!-- 1. Doses Card -->
                 <div class="p-5 rounded-2xl bg-gradient-to-br from-blue-50 to-blue-100/60 border border-blue-200/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2 font-black text-blue-900 text-base">
-                            <span class="text-2xl"></span>
+                            <span class="text-2xl">⚡</span>
                             <span>بروتين بالجرعة (لي دوز)</span>
                         </div>
                         <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-800">${cats.doses.units} جرعة</span>
@@ -9862,7 +10176,7 @@ window.setElemRequired = setElemRequired;
                 <div class="p-5 rounded-2xl bg-gradient-to-br from-blue-50 to-blue-100/60 border border-blue-200/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2 font-black text-blue-950 text-base">
-                            <span class="text-2xl"></span>
+                            <span class="text-2xl">📦</span>
                             <span>علب المكملات (المسكرة)</span>
                         </div>
                         <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${cats.boxes.units} علبة</span>
@@ -9886,7 +10200,7 @@ window.setElemRequired = setElemRequired;
                 <div class="p-5 rounded-2xl bg-gradient-to-br from-blue-50 to-blue-100/60 border border-blue-200/80 shadow-sm space-y-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2 font-black text-blue-950 text-base">
-                            <span class="text-2xl"></span>
+                            <span class="text-2xl">❄️</span>
                             <span>الفريغو (ماء، جي، شوفان)</span>
                         </div>
                         <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-200 text-blue-950">${cats.frigo.units} قطعة</span>
@@ -9905,7 +10219,9 @@ window.setElemRequired = setElemRequired;
                         هامش الربح: ${cats.frigo.sales > 0 ? Math.round((cats.frigo.profit / cats.frigo.sales) * 100) : 0}%
                     </div>
                 </div>
-            `; } };
+            `; 
+        } 
+    };
     // ==========================================
     // 3. COACH COMMISSIONS (33% PROFIT SHARE)
     // ==========================================
@@ -9913,20 +10229,25 @@ window.setElemRequired = setElemRequired;
         const modal = document.getElementById('coachCommissionsModal');
         if (!modal) return; const now = new Date();
         const monthSelect = document.getElementById('coachCommissionsFilterMonth');
-        if (monthSelect) { monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        if (monthSelect && !monthSelect.value) { monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         } renderCoachCommissionsModal(); modal.classList.add('active');
     }; window.renderCoachCommissionsModal = function() {
         const monthSelect = document.getElementById('coachCommissionsFilterMonth');
-        const selectedVal = monthSelect ? monthSelect.value : 'all';
+        const selectedVal = monthSelect ? monthSelect.value : '';
         let targetMonth = -1; let targetYear = -1;
         if (selectedVal && selectedVal !== 'all') {
             const parts = selectedVal.split('-');
-            targetYear = parseInt(parts[0]);
-            targetMonth = parseInt(parts[1]) - 1;
-        } const sales = appState.sales || [];
-        const filtered = sales.filter(s => { if (!s.date) return false;
-            if (targetMonth === -1) return true;
-            const d = new Date(s.date); return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
+            if (parts.length === 2) {
+                targetYear = parseInt(parts[0], 10);
+                targetMonth = parseInt(parts[1], 10) - 1;
+            }
+        } const sales = Array.isArray(appState.sales) ? appState.sales : [];
+        const filtered = sales.filter(s => { 
+            if (!s) return false;
+            if (targetMonth === -1 || !selectedVal || selectedVal === 'all') return true;
+            const d = parseSafeDate(s.date || s.id || s.createdAt);
+            if (!d) return true;
+            return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
         });
         // Group by coach
         const coachMap = {}; filtered.forEach(s => {

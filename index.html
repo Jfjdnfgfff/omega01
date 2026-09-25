@@ -12,7 +12,29 @@
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
   <script>
-    // Ensure critical inline event handlers have safe global stubs immediately
+    // Ensure critical inline event handlers and navigation have safe global functions immediately
+    window.handleNavButtonClick = function(event, callback) {
+      if (typeof callback === 'function') {
+        try { callback(); } catch (err) { console.warn('Nav action waiting for bundle:', err); }
+      }
+    };
+    window.scrollHeaderNav = function(offset) {
+      var nav = document.getElementById('topHeaderNav');
+      if (nav) nav.scrollBy({ left: offset, behavior: 'smooth' });
+    };
+    window.openModal = function(id) {
+      var m = document.getElementById(id);
+      if (m) m.classList.add('active');
+    };
+    window.closeModal = function(id) {
+      var m = document.getElementById(id);
+      if (m) m.classList.remove('active');
+    };
+    window.handleOverlayClick = function(e, id) {
+      if (e && e.target && e.target.id === id) {
+        window.closeModal(id);
+      }
+    };
     window.setQuickSellQty = function(qty) {
       var input = document.getElementById('sellProdQty');
       if (input) {
@@ -637,11 +659,15 @@
                   <div>
                       <h3 class="text-base font-extrabold text-blue-950 flex items-center gap-2">
                           <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                          <span>تفصيل المداخيل والأرباح حسب الفئات (الشهر الحالي)</span>
+                          <span id="prodCategoryStatsTitle">تفصيل المداخيل والأرباح حسب الفئات</span>
                       </h3>
-                      <p class="text-xs text-slate-500 font-medium">حساب مدخول وأرباح جرعات البروتين (Doses)، العلب المغلقة (Boîtes)، وفريغو المشروبات والشوفان بدقة.</p>
+                      <p id="prodCatMonthLabel" class="text-xs text-slate-500 font-medium">حساب مدخول وأرباح جرعات البروتين (Doses)، العلب المغلقة (Boîtes)، وفريغو المشروبات والشوفان بدقة.</p>
                   </div>
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-2 flex-wrap">
+                      <div class="inline-flex bg-slate-100 p-1 rounded-xl text-xs font-bold border border-slate-200">
+                          <button type="button" id="catFilterThisMonthBtn" onclick="setCategoryBreakdownFilter('month')" class="px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold">هذا الشهر</button>
+                          <button type="button" id="catFilterAllTimeBtn" onclick="setCategoryBreakdownFilter('all')" class="px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold">الكل (الإجمالي)</button>
+                      </div>
                       <button type="button" onclick="openCategoryProfitsModal()" class="text-xs font-bold bg-white text-slate-800 hover:text-blue-700 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-2xs">
                           <span class="flex items-center gap-1.5"><svg class="w-4 h-4 text-blue-600 inline" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg> تقرير الفئات المفصل</span>
                           <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"></path></svg>
@@ -960,14 +986,14 @@
                                   <span id="sellModeHelpBadge" class="text-[10px] text-blue-700 font-extrabold bg-white px-2 py-0.5 rounded-md border border-blue-200 shadow-2xs"></span>
                               </div>
                               <div class="grid grid-cols-2 gap-2">
-                                  <button type="button" id="sellModeDosesBtn" onclick="setSellUnitMode('doses')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer">
-                                      <span>بالدوزة / الكيلو</span>
+                                  <button type="button" id="sellModeCountBtn" onclick="setSellUnitMode('count')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer">
+                                      <span>بالعلبة / القطعة الكاملة</span>
                                   </button>
-                                  <button type="button" id="sellModeCountBtn" onclick="setSellUnitMode('count')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer">
-                                      <span>بالعلبة / القطعة</span>
+                                  <button type="button" id="sellModeDosesBtn" onclick="setSellUnitMode('doses')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer">
+                                      <span>بالجرعة / الدوزة الفردية</span>
                                   </button>
                               </div>
-                              <input type="hidden" id="sellUnitModeInput" value="doses">
+                              <input type="hidden" id="sellUnitModeInput" value="count">
                           </div>
                           <div id="stockInfo" class="text-xs text-blue-800 font-bold p-2.5 bg-blue-50/90 rounded-xl border border-blue-200 hidden">
                           </div>
@@ -2766,7 +2792,8 @@
                   </h3>
                   <p class="text-xs text-slate-500 mt-0.5">حساب منفصل لمداخيل وأرباح البروتين دوز، العلب، والفريغو</p>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                  <button type="button" onclick="document.getElementById('catProfitFilterMonth').value=''; renderCategoryProfitsModal();" class="text-xs font-bold text-blue-700 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1.5 rounded-xl transition-all shadow-2xs">الكل (جميع الأشهر)</button>
                   <label class="text-xs font-bold text-slate-600">الشهر:</label>
                   <input type="month" id="catProfitFilterMonth" onchange="renderCategoryProfitsModal()" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:border-blue-600 bg-slate-50 font-bold">
               </div> </div>
