@@ -5082,7 +5082,44 @@ window.setElemRequired = setElemRequired;
         let parts = weightStr.split(' - '); let valStr = parts.length > 1 ? parts.slice(1).join(' - ') : parts[0];
         let match = valStr.match(/(\d+(\.\d+)?)/);
         if (match) { return parseFloat(match[1]);
-        } return null; } window.setSellStockLocation = function(loc) {
+        } return null; }
+    window.parseProductWeight = parseProductWeight;
+
+    /* ============================================================
+       القاعدة الموحدة للبيع (تُطبَّق على جميع المنتجات بدون استثناء)
+       ------------------------------------------------------------
+       1) القياس المُسجَّل للمنتج (مثال: 50) هو "وحدة الخصم" من المخزون.
+       2) الخصم من المخزون = الكمية المختارة × القياس.
+          مثال: منتج قياسه 50، اخترت الكمية 1  =>  يُخصم 50 من المخزون.
+       3) السعر هو السعر المسجَّل كما هو (لا يُقسَم أبداً على القياس).
+          مثال: السعر 5، اخترت الكمية 1  =>  الإجمالي 5 دج.
+       4) المنتجات التي ليس لها قياس رقمي: الخصم = الكمية نفسها.
+       ============================================================ */
+    function getSaleUnitFactor(product) {
+        const w = (typeof parseProductWeight === 'function') ? parseProductWeight(product && product.weight) : null;
+        return (w && w > 0) ? Number(w) : 1;
+    }
+    function computeSaleAmounts(product, qty) {
+        const q = Number(qty) > 0 ? Number(qty) : 1;
+        const factor = getSaleUnitFactor(product);
+        const unitPrice = Number((product && product.price) || 0);   // السعر المسجَّل كاملاً — بدون قسمة على القياس
+        const unitCost = Number((product && product.cost) || 0);      // التكلفة المسجَّلة كاملة — بدون قسمة على القياس
+        const round2 = n => Number((Math.round((Number(n) || 0) * 100) / 100).toFixed(2));
+        const stockDeduction = round2(q * factor);                    // الخصم = الكمية × القياس
+        return {
+            qty: q,
+            factor: factor,
+            unitPrice: unitPrice,
+            unitCost: unitCost,
+            stockDeduction: stockDeduction,
+            total: round2(unitPrice * q),
+            cost: round2(unitCost * q)
+        };
+    }
+    window.getSaleUnitFactor = getSaleUnitFactor;
+    window.computeSaleAmounts = computeSaleAmounts;
+
+    window.setSellStockLocation = function(loc) {
         appState.sellStockFilter = 'stock1';
         const hiddenInput = document.getElementById('sellStockLocation');
         if (hiddenInput) hiddenInput.value = 'stock1';
@@ -5103,67 +5140,50 @@ window.setElemRequired = setElemRequired;
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
+    /* لم يعد هناك نمطان للبيع (بالدوزة / بالعلبة).
+       القاعدة الموحدة تُطبَّق على الكل: الخصم = الكمية × القياس ، والسعر = السعر المسجَّل.
+       الدالة محفوظة فقط للتوافق مع أي استدعاءات قديمة ولا تغيّر طريقة الاحتساب. */
     function setSellUnitMode(mode) {
         const hiddenInput = document.getElementById('sellUnitModeInput');
-        if (hiddenInput) hiddenInput.value = mode;
-        const doseBtn = document.getElementById('sellModeDosesBtn');
-        const countBtn = document.getElementById('sellModeCountBtn');
-        if (doseBtn && countBtn) {
-            if (mode === 'doses') {
-                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
-                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
-            } else {
-                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
-                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
-            }
-        }
+        if (hiddenInput) hiddenInput.value = 'unified';
         if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
     }
     window.setSellUnitMode = setSellUnitMode;
 
-    function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
+    function updateStockInfoDisplay() {
+        const prodId = getElemVal('sellProdId');
         const stockInfo = document.getElementById('stockInfo');
-        if (!stockInfo) return; const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
+        if (!stockInfo) return;
+        const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
+
+        // القاعدة الموحدة: لا يوجد نمطان للاحتساب — طريقة واحدة للجميع
         const modeWrapper = document.getElementById('sellModeWrapper');
-        const modeInput = document.getElementById('sellUnitModeInput');
-        if (!product) { stockInfo.classList.add('hidden');
-            if (modeWrapper) modeWrapper.classList.add('hidden');
-            return; } const qty = parseFloat(getElemVal('sellProdQty')) || 0;
+        if (modeWrapper) modeWrapper.classList.remove('hidden');
+        const helpBadge = document.getElementById('sellModeHelpBadge');
+
+        if (!product) {
+            stockInfo.classList.add('hidden');
+            if (helpBadge) helpBadge.textContent = 'اختر منتجاً لعرض العملية';
+            return;
+        }
+        if (helpBadge) {
+            const f = getSaleUnitFactor(product);
+            helpBadge.textContent = (f > 1) ? `قياس هذا المنتج: ${f} لكل وحدة` : 'بدون قياس — الخصم = الكمية';
+        }
+
+        const qty = parseFloat(getElemVal('sellProdQty')) || 0;
         const currentStock = Number(product.stock || 0);
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
+        const calc = computeSaleAmounts(product, qty > 0 ? qty : 1);
+        const factor = calc.factor;
+        const deduction = calc.stockDeduction;
+        const unitPrice = calc.unitPrice;
+        const totalPrice = (calc.unitPrice * (qty > 0 ? qty : 1)).toFixed(2);
+        const rem = currentStock - deduction;
+        const notEnough = rem < 0;
 
-        if (weightVal && weightVal > 0) {
-            if (modeWrapper) modeWrapper.classList.remove('hidden');
-            const perDosePrice = (Number(product.price || 0) / weightVal).toFixed(2);
-            const doseBtn = document.getElementById('sellModeDosesBtn');
-            const countBtn = document.getElementById('sellModeCountBtn');
-            if (doseBtn) doseBtn.innerHTML = `<span>بالدوزة / الكيلو</span> <span class="text-[10px] opacity-90">(${perDosePrice} دج)</span>`;
-            if (countBtn) countBtn.innerHTML = `<span>بالعلبة / القطعة</span> <span class="text-[10px] opacity-90">(${product.price} دج)</span>`;
-        } else {
-            if (modeWrapper) modeWrapper.classList.add('hidden');
-        }
-
-        let sellMode = modeInput ? modeInput.value : 'doses';
-        if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-        let deduction = qty;
-        let unitPrice = Number(product.price || 0);
-        let totalPrice = 0;
-
-        if (weightVal && weightVal > 0 && sellMode === 'doses') {
-            unitPrice = Number((product.price / weightVal).toFixed(2));
-            deduction = qty;
-            totalPrice = (unitPrice * qty).toFixed(2);
-        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-            deduction = qty * weightVal;
-            totalPrice = (unitPrice * qty).toFixed(2);
-        } else {
-            deduction = qty;
-            totalPrice = (unitPrice * qty).toFixed(2);
-        }
-
-        const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
-        stockInfo.classList.remove('hidden'); if (isStock2) {
+        const isStock2 = product.stockLocation === 'stock2';
+        stockInfo.classList.remove('hidden');
+        if (isStock2) {
             stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border text-slate-800 bg-slate-100 border-slate-200`;
             stockInfo.innerHTML = `
                 <div class="flex items-center justify-between">
@@ -5172,22 +5192,41 @@ window.setElemRequired = setElemRequired;
                 <div class="mt-1 text-[11px] text-slate-700 font-bold">
                     هذا المنتج يتواجد في المستودع (Stock 2) ولا يمكن البيع منه مباشرة! يرجى تحويله إلى Stock 1 أولاً.
                 </div>
-            `; return; } const locName = 'Stock 1 (صالة البيع)';
-        const locColor = 'text-blue-700 bg-blue-50 border-blue-200';
-        stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
-        const modeText = (weightVal && weightVal > 0)
-            ? (sellMode === 'doses' ? ` (سعر الدوزة/الكيلو: ${unitPrice} دج)` : ` (سعر العلبة الكاملة: ${unitPrice} دج)`)
-            : '';
+            `;
+            return;
+        }
+
+        const locName = 'Stock 1 (صالة البيع)';
+        stockInfo.className = notEnough
+            ? `text-xs font-bold p-2.5 rounded-xl border text-red-900 bg-red-50 border-red-300`
+            : `text-xs font-bold p-2.5 rounded-xl border text-blue-700 bg-blue-50 border-blue-200`;
+
+        // شرح العملية بوضوح: الكمية × القياس = الخصم ، والسعر كما هو مسجَّل
+        const factorNote = (factor > 1)
+            ? `القياس المسجَّل: <strong class="font-extrabold">${factor}</strong> لكل وحدة`
+            : `لا يوجد قياس مسجَّل — الخصم = الكمية نفسها`;
+        const opNote = (factor > 1)
+            ? `${qty} × ${factor} = <strong class="font-extrabold">${deduction}</strong>`
+            : `${deduction}`;
+
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong></span>
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
-            <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-slate-500 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
-                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong>${modeText}</span>
+            <div class="mt-1 text-[11px] font-bold ${notEnough ? 'text-red-800' : 'text-slate-600'}">${factorNote}</div>
+            <div class="mt-1 flex items-center justify-between text-[11px] opacity-95 border-t ${notEnough ? 'border-red-300/70' : 'border-blue-200/60'} pt-1">
+                <span>سيُخصم: <strong class="font-extrabold ${notEnough ? 'text-red-700' : 'text-indigo-700'}">${opNote}</strong></span>
+                <span>المتبقي بعد الخصم: <strong class="${notEnough ? 'text-red-700 font-extrabold' : 'text-slate-800'}">${rem >= 0 ? rem : 0}</strong></span>
             </div>
-        `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
+            <div class="mt-1 flex items-center justify-between text-[11px] border-t ${notEnough ? 'border-red-300/70' : 'border-blue-200/60'} pt-1">
+                <span>سعر الوحدة (كما هو مسجَّل): <strong class="font-extrabold text-slate-800">${unitPrice} دج</strong></span>
+                <span>إجمالي المبلغ: <strong class="font-extrabold ${notEnough ? 'text-red-700' : 'text-blue-700'}">${totalPrice} دج</strong></span>
+            </div>
+            ${notEnough ? `<div class="mt-1.5 text-[11px] font-extrabold text-red-700 bg-red-100/80 border border-red-200 rounded-lg px-2 py-1.5">⚠️ المخزون المتوفر (${currentStock}) لا يكفي لخصم (${deduction}) — زِد الكمية في المخزون أو قلِّل الكمية المطلوبة.</div>` : ''}
+        `;
+    }
+    window.updateStockInfoDisplay = updateStockInfoDisplay;
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
     document.getElementById('sellProdQty')?.addEventListener('input', updateStockInfoDisplay);
     document.getElementById('sellProductForm')?.addEventListener('submit', function(e) {
@@ -5201,29 +5240,14 @@ window.setElemRequired = setElemRequired;
             showErrorToast('يرجى تحديد كمية صحيحة يدوياً');
             return; }
 
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-        const modeInput = document.getElementById('sellUnitModeInput');
-        let sellMode = modeInput ? modeInput.value : 'doses';
-        if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-        let stockDeduction = qty;
-        let salePrice = Number(product.price || 0);
-        let saleCost = Number(product.cost || 0);
-        let saleLabel = product.name;
-
-        if (weightVal && weightVal > 0 && sellMode === 'doses') {
-            salePrice = Number((salePrice / weightVal).toFixed(2));
-            saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
-            stockDeduction = qty;
-            saleLabel += ' (دوزة/كيلو)';
-        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-            saleCost = saleCost * qty;
-            stockDeduction = qty * weightVal;
-            saleLabel += ' (علبة كاملة)';
-        } else {
-            saleCost = saleCost * qty;
-            stockDeduction = qty;
-        }
+        // ===== القاعدة الموحدة للبيع (على كل المنتجات) =====
+        // الخصم من المخزون = الكمية × القياس المسجَّل  |  السعر = السعر المسجَّل كما هو (بدون قسمة)
+        const calc = computeSaleAmounts(product, qty);
+        const saleFactor = calc.factor;
+        const stockDeduction = calc.stockDeduction;
+        const salePrice = calc.unitPrice;
+        const saleCost = calc.cost;
+        const saleLabel = product.name;
 
         const isStock2 = product.stockLocation === 'stock2';
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
@@ -5232,7 +5256,7 @@ window.setElemRequired = setElemRequired;
             showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
             return; }
 
-        let saleTotal = Number((salePrice * qty).toFixed(2));
+        let saleTotal = calc.total;
         let saleProfit = saleTotal - saleCost;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
@@ -5256,6 +5280,8 @@ window.setElemRequired = setElemRequired;
             stockName: isStock2 ? 'مخزون 2' : 'مخزون 1',
             qty: qty,
             stockDeduction: stockDeduction,
+            unitFactor: saleFactor,
+            measurement: product.weight || '',
             price: salePrice,
             cost: saleCost, total: saleTotal,
             profit: saleProfit, coachName: coachVal,
@@ -7628,30 +7654,14 @@ window.setElemRequired = setElemRequired;
             const coachInput = document.getElementById('sellCoachName');
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
-            const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-            const modeInput = document.getElementById('sellUnitModeInput');
-            let sellMode = modeInput ? modeInput.value : 'doses';
-            if (product.category === 'boxes') sellMode = 'count';
-            if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-            let stockDeduction = qty;
-            let salePrice = Number(product.price || 0);
-            let saleCost = Number(product.cost || 0);
-            let unitLabel = '';
-
-            if (weightVal && weightVal > 0 && sellMode === 'doses') {
-                salePrice = Number((salePrice / weightVal).toFixed(2));
-                saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
-                stockDeduction = qty;
-                unitLabel = ' (دوزة/كيلو)';
-            } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-                saleCost = saleCost * qty;
-                stockDeduction = qty * weightVal;
-                unitLabel = ' (علبة كاملة)';
-            } else {
-                saleCost = saleCost * qty;
-                stockDeduction = qty;
-            }
+            // ===== القاعدة الموحدة للبيع (على كل المنتجات) =====
+            // الخصم من المخزون = الكمية × القياس المسجَّل  |  السعر = السعر المسجَّل كما هو (بدون قسمة)
+            const calc = computeSaleAmounts(product, qty);
+            const saleFactor = calc.factor;
+            const stockDeduction = calc.stockDeduction;
+            const salePrice = calc.unitPrice;
+            const saleCost = calc.cost;
+            const unitLabel = '';
 
             if (currentStock < stockDeduction) {
                 showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
@@ -7676,7 +7686,7 @@ window.setElemRequired = setElemRequired;
                 }
             }
 
-            let saleTotal = Number((salePrice * qty).toFixed(2));
+            let saleTotal = calc.total;
             let saleProfit = saleTotal - saleCost;
             let coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
             let prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
@@ -7695,6 +7705,8 @@ window.setElemRequired = setElemRequired;
                 stockName: 'مخزون 1',
                 qty: qty,
                 stockDeduction: stockDeduction,
+                unitFactor: saleFactor,
+                measurement: product.weight || '',
                 price: salePrice,
                 cost: saleCost,
                 total: saleTotal,
@@ -7777,13 +7789,8 @@ window.setElemRequired = setElemRequired;
                     const qtyInput = document.getElementById('sellProdQty');
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
-                    const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
-                    const modeInputBarcode = document.getElementById('sellUnitModeInput');
-                    let sellModeBarcode = modeInputBarcode ? modeInputBarcode.value : 'doses';
-                    if (prodStock1.category === 'boxes') sellModeBarcode = 'count';
-                    if (!weightValBarcode || weightValBarcode <= 0) sellModeBarcode = 'count';
-
-                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0 && sellModeBarcode === 'count') ? (chosenQty * weightValBarcode) : chosenQty;
+                    // القاعدة الموحدة: المطلوب خصمه = الكمية المختارة × القياس المسجَّل (لكل المنتجات)
+                    const requiredStockBarcode = computeSaleAmounts(prodStock1, chosenQty).stockDeduction;
 
                     if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
                         showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
@@ -8302,8 +8309,11 @@ window.setElemRequired = setElemRequired;
             if (sale.prodId && appState.products) {
                 const prod = appState.products.find(p => p.id === sale.prodId);
                 if (prod) {
-                    const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(prod.weight) : null;
-                    const stockToRestore = Number(sale.stockDeduction) || ((weightVal && weightVal > 0) ? (Number(sale.qty || 1) * weightVal) : Number(sale.qty || 1));
+                    // استرجاع نفس الكمية التي خُصمت فعلياً (القاعدة الموحدة: الكمية × القياس)
+                    const recordedDeduction = Number(sale.stockDeduction);
+                    const stockToRestore = (recordedDeduction > 0)
+                        ? recordedDeduction
+                        : computeSaleAmounts(prod, Number(sale.qty || 1)).stockDeduction;
                     prod.stock = Number(prod.stock || 0) + stockToRestore;
                     if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                 }
@@ -8388,6 +8398,12 @@ window.setElemRequired = setElemRequired;
            const name = escapeHTML(s.prodName || s.productName || 'منتج');
            const coachName = escapeHTML(s.coachName || 'عام');
            const safeId = escapeHTML(s.id || '');
+           // القاعدة الموحدة: إظهار ما خُصم فعلياً من المخزون (الكمية × القياس)
+           const sQtyNum = Number(s.qty || 1);
+           const sDeduction = Number(s.stockDeduction) || Number(s.unitFactor ? (sQtyNum * Number(s.unitFactor)) : sQtyNum) || sQtyNum;
+           const deductionBadge = (sDeduction !== sQtyNum)
+               ? `<span class="text-[9px] font-extrabold text-indigo-800 bg-indigo-50 px-1.5 py-0.5 rounded-md border border-indigo-200" title="الكمية × القياس = ما خُصم من المخزون">خصم ${sDeduction} من المخزون</span>`
+               : '';
            const isStock2 = s.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="text-[9px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">مخزون 2</span>`
                 : `<span class="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">مخزون 1</span>`;
@@ -8406,6 +8422,7 @@ window.setElemRequired = setElemRequired;
                    <div class="font-bold text-sm text-slate-800 flex items-center gap-1.5 flex-wrap">
                        <span>${name}</span>
                        <span class="text-xs text-slate-500 font-normal">(x${s.qty || 1})</span>
+                       ${deductionBadge}
                        ${stockBadge}
                        ${catBadge}
                    </div>
