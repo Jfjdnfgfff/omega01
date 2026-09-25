@@ -5103,20 +5103,99 @@ window.setElemRequired = setElemRequired;
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
-    function setSellUnitMode(mode) {
-        const hiddenInput = document.getElementById('sellUnitModeInput');
-        if (hiddenInput) hiddenInput.value = mode;
-        const doseBtn = document.getElementById('sellModeDosesBtn');
-        const countBtn = document.getElementById('sellModeCountBtn');
-        if (doseBtn && countBtn) {
-            if (mode === 'doses') {
-                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
-                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
+
+    function handlePosProductSearch(query, isEnter = false) {
+        query = String(query || '').trim().toLowerCase();
+        const statusElem = document.getElementById('posSearchProductStatus');
+        const select = document.getElementById('sellProdId');
+        if (!select) return;
+
+        if (!query) {
+            if (statusElem) statusElem.innerHTML = '';
+            updateSellProductDropdown();
+            updateStockInfoDisplay();
+            return;
+        }
+
+        const prods = Array.isArray(appState.products) ? appState.products : [];
+        
+        // 1. Exact barcode match in Stock 1
+        const exactStock1Match = prods.find(p => String(p.barcode || '').trim().toLowerCase() === query && (!p.stockLocation || p.stockLocation === 'stock1'));
+        const exactStock2Match = prods.find(p => String(p.barcode || '').trim().toLowerCase() === query && p.stockLocation === 'stock2');
+
+        if (exactStock1Match) {
+            updateSellProductDropdown();
+            select.value = exactStock1Match.id;
+            updateStockInfoDisplay();
+            const s2Info = exactStock2Match ? ` | المستودع Stock 2: ${exactStock2Match.stock}` : '';
+            if (statusElem) {
+                statusElem.innerHTML = `<span class="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">✅ تم تحديد: ${exactStock1Match.name} (Stock 1: ${exactStock1Match.stock}${s2Info})</span>`;
+            }
+            if (isEnter) {
+                playBeep();
+                showSuccessToast(`تم العثور على [${exactStock1Match.name}] وتحديده للبيع (المتوفر بـ Stock 1: ${exactStock1Match.stock})`);
+            }
+            return;
+        } else if (exactStock2Match) {
+            if (statusElem) {
+                statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ المنتج [${exactStock2Match.name}] متوفر فقط في المستودع Stock 2 (${exactStock2Match.stock} قطعة) — يرجى تحويله إلى Stock 1 أولاً</span>`;
+            }
+            if (isEnter) {
+                showErrorToast(`المنتج [${exactStock2Match.name}] متوفر بالمستودع (Stock 2) فقط (${exactStock2Match.stock} قطعة). لا يمكن البيع المباشر منه، يرجى تحويله إلى Stock 1 أولاً.`);
+            }
+            return;
+        }
+
+        // 2. Partial barcode or name matching
+        const matchingStock1 = prods.filter(p => (!p.stockLocation || p.stockLocation === 'stock1') && (
+            String(p.barcode || '').toLowerCase().includes(query) ||
+            String(p.name || '').toLowerCase().includes(query) ||
+            String(p.brand || '').toLowerCase().includes(query)
+        ));
+
+        if (matchingStock1.length === 1) {
+            const found = matchingStock1[0];
+            updateSellProductDropdown();
+            select.value = found.id;
+            updateStockInfoDisplay();
+            const s2Companion = prods.find(p => p.stockLocation === 'stock2' && ((p.barcode && p.barcode === found.barcode) || p.name === found.name));
+            const s2Info = s2Companion ? ` | Stock 2: ${s2Companion.stock}` : '';
+            if (statusElem) {
+                statusElem.innerHTML = `<span class="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">🔍 ${found.name} (Stock 1: ${found.stock}${s2Info})</span>`;
+            }
+            if (isEnter) {
+                playBeep();
+                showSuccessToast(`تم تحديد [${found.name}] للبيع`);
+            }
+        } else if (matchingStock1.length > 1) {
+            let html = `<option value="">-- نتائج البحث (${matchingStock1.length} منتجات) --</option>`;
+            html += matchingStock1.map(p => {
+                const exp = (typeof getProductExpiryInfo === 'function') ? getProductExpiryInfo(p) : null;
+                const expTag = (exp && exp.isNearExpiry) ? (exp.isExpired ? ' [منتهي]' : ` [باقي ${exp.daysLeft} يوم]`) : '';
+                return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - متوفر بـ Stock 1: ${p.stock}${expTag}</option>`;
+            }).join('');
+            select.innerHTML = html;
+            if (statusElem) {
+                statusElem.innerHTML = `<span class="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md">تم إيجاد ${matchingStock1.length} منتجات مطابقة في Stock 1</span>`;
+            }
+        } else {
+            const matchingStock2Only = prods.filter(p => p.stockLocation === 'stock2' && (
+                String(p.barcode || '').toLowerCase().includes(query) ||
+                String(p.name || '').toLowerCase().includes(query)
+            ));
+            if (matchingStock2Only.length > 0) {
+                if (statusElem) {
+                    statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ موجود بالمستودع Stock 2 فقط (${matchingStock2Only[0].stock} قطعة)</span>`;
+                }
             } else {
-                countBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer';
-                doseBtn.className = 'py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer';
+                if (statusElem) {
+                    statusElem.innerHTML = `<span class="text-slate-400 font-medium">لا يوجد منتج مطابق للكود "${query}" في المخزون</span>`;
+                }
             }
         }
+    }
+    window.handlePosProductSearch = handlePosProductSearch;
+    function setSellUnitMode(mode) {
         if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
     }
     window.setSellUnitMode = setSellUnitMode;
@@ -5124,45 +5203,15 @@ window.setElemRequired = setElemRequired;
     function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
         const stockInfo = document.getElementById('stockInfo');
         if (!stockInfo) return; const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
-        const modeWrapper = document.getElementById('sellModeWrapper');
-        const modeInput = document.getElementById('sellUnitModeInput');
         if (!product) { stockInfo.classList.add('hidden');
-            if (modeWrapper) modeWrapper.classList.add('hidden');
             return; } const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
 
-        if (weightVal && weightVal > 0) {
-            if (modeWrapper) modeWrapper.classList.remove('hidden');
-            const perDosePrice = (Number(product.price || 0) / weightVal).toFixed(2);
-            const doseBtn = document.getElementById('sellModeDosesBtn');
-            const countBtn = document.getElementById('sellModeCountBtn');
-            if (doseBtn) doseBtn.innerHTML = `<span>بالجرعة / الدوزة الفردية</span> <span class="text-[10px] opacity-90">(${perDosePrice} دج)</span>`;
-            if (countBtn) countBtn.innerHTML = `<span>بالعلبة / القطعة الكاملة (${weightVal})</span> <span class="text-[10px] opacity-90">(${product.price} دج)</span>`;
-        } else {
-            if (modeWrapper) modeWrapper.classList.add('hidden');
-        }
-
-        let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
-        if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-        let deduction = qty;
-        let unitPrice = Number(product.price || 0);
-        let totalPrice = 0;
-
-        if (weightVal && weightVal > 0 && sellMode === 'doses') {
-            unitPrice = Number((product.price / weightVal).toFixed(2));
-            deduction = qty;
-            totalPrice = (unitPrice * qty).toFixed(2);
-        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-            deduction = qty * weightVal;
-            unitPrice = Number(product.price || 0);
-            totalPrice = (unitPrice * qty).toFixed(2);
-        } else {
-            deduction = qty;
-            unitPrice = Number(product.price || 0);
-            totalPrice = (unitPrice * qty).toFixed(2);
-        }
+        // Automatic calculation based on measurement/weight
+        const deduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+        const unitPrice = Number(product.price || 0);
+        const totalPrice = (unitPrice * qty).toFixed(2);
 
         const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
         stockInfo.classList.remove('hidden'); if (isStock2) {
@@ -5177,17 +5226,15 @@ window.setElemRequired = setElemRequired;
             `; return; } const locName = 'Stock 1 (صالة البيع)';
         const locColor = 'text-blue-700 bg-blue-50 border-blue-200';
         stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
-        const modeText = (weightVal && weightVal > 0)
-            ? (sellMode === 'doses' ? ` (سعر الجرعة: ${unitPrice} دج - خصم: ${deduction})` : ` (سعر العلبة: ${unitPrice} دج - خصم من المخزون: ${deduction})`)
-            : ` (خصم من المخزون: ${deduction})`;
+        const weightBadge = product.weight ? ` <span class="text-[10px] text-indigo-700 font-bold">(${product.weight})</span>` : '';
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
-                <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong></span>
+                <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong>${weightBadge}</span>
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
                 <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
-                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong>${modeText}</span>
+                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong> (سعر الوحدة: ${unitPrice} دج)</span>
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
@@ -5204,30 +5251,10 @@ window.setElemRequired = setElemRequired;
             return; }
 
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-        const modeInput = document.getElementById('sellUnitModeInput');
-        let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
-        if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-        let stockDeduction = qty;
+        let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
         let salePrice = Number(product.price || 0);
-        let saleCost = Number(product.cost || 0);
+        let saleCost = Number(product.cost || 0) * qty;
         let saleLabel = product.name;
-
-        if (weightVal && weightVal > 0 && sellMode === 'doses') {
-            salePrice = Number((salePrice / weightVal).toFixed(2));
-            saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
-            stockDeduction = qty;
-            saleLabel += ' (جرعة/دوزة)';
-        } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-            salePrice = Number(product.price || 0);
-            saleCost = saleCost * qty;
-            stockDeduction = qty * weightVal;
-            saleLabel += ' (علبة كاملة)';
-        } else {
-            salePrice = Number(product.price || 0);
-            saleCost = saleCost * qty;
-            stockDeduction = qty;
-        }
 
         const isStock2 = product.stockLocation === 'stock2';
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
@@ -7849,30 +7876,10 @@ window.setElemRequired = setElemRequired;
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
             const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-            const modeInput = document.getElementById('sellUnitModeInput');
-            let sellMode = modeInput ? (modeInput.value || 'count') : 'count';
-            if (!weightVal || weightVal <= 0) sellMode = 'count';
-
-            let stockDeduction = qty;
+            let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
             let salePrice = Number(product.price || 0);
-            let saleCost = Number(product.cost || 0);
+            let saleCost = Number(product.cost || 0) * qty;
             let unitLabel = '';
-
-            if (weightVal && weightVal > 0 && sellMode === 'doses') {
-                salePrice = Number((salePrice / weightVal).toFixed(2));
-                saleCost = Number((saleCost / weightVal).toFixed(2)) * qty;
-                stockDeduction = qty;
-                unitLabel = ' (جرعة/دوزة)';
-            } else if (weightVal && weightVal > 0 && sellMode === 'count') {
-                salePrice = Number(product.price || 0);
-                saleCost = saleCost * qty;
-                stockDeduction = qty * weightVal;
-                unitLabel = ' (علبة كاملة)';
-            } else {
-                salePrice = Number(product.price || 0);
-                saleCost = saleCost * qty;
-                stockDeduction = qty;
-            }
 
             if (currentStock < stockDeduction) {
                 showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
@@ -7999,11 +8006,7 @@ window.setElemRequired = setElemRequired;
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
                     const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
-                    const modeInputBarcode = document.getElementById('sellUnitModeInput');
-                    let sellModeBarcode = modeInputBarcode ? (modeInputBarcode.value || 'count') : 'count';
-                    if (!weightValBarcode || weightValBarcode <= 0) sellModeBarcode = 'count';
-
-                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0 && sellModeBarcode === 'count') ? (chosenQty * weightValBarcode) : chosenQty;
+                    const requiredStockBarcode = (weightValBarcode && weightValBarcode > 0) ? (chosenQty * weightValBarcode) : chosenQty;
 
                     if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
                         showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
@@ -8033,6 +8036,13 @@ window.setElemRequired = setElemRequired;
                     isProcessingBarcode = false;
                     return;
                 }
+            } else if (scanContext === 'pos_search') {
+                await closeBarcodeCamera();
+                const barcodeInput = document.getElementById('posProductSearchInput');
+                if (barcodeInput) barcodeInput.value = barcode;
+                handlePosProductSearch(barcode, true);
+                isProcessingBarcode = false;
+                return;
             } else if (scanContext === 'inventory_search' || scanContext === 'search') {
                 // Inventory Search scan
                 await closeBarcodeCamera();
@@ -8096,6 +8106,8 @@ window.setElemRequired = setElemRequired;
         if (!reader) return; if (scannerCallbackProcessing) return;
         reader.style.display = 'block'; if (scanContext === 'sales') {
             title.textContent = 'مسح باركود لبيع منتج (صالة البيع)';
+        } else if (scanContext === 'pos_search') {
+            title.textContent = 'مسح باركود للبحث وتحديد المنتج في صالة البيع';
         } else if (scanContext === 'inventory_search' || scanContext === 'search') {
             title.textContent = 'مسح باركود للبحث في المخزون (Stock 1 & Stock 2)';
         } else { title.textContent = 'مسح باركود لإضافة أو تعديل منتج';
@@ -11301,7 +11313,7 @@ window.setElemRequired = setElemRequired;
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }

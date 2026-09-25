@@ -970,30 +970,29 @@
                               </div>
                           </div>
 
-                          <!-- Fallback: Manual Product Selection -->
-                          <div class="pt-2 border-t border-slate-200/80 space-y-3">
+                          <!-- Manual Product Selection & Barcode Search in Inventory -->
+                          <div class="pt-2 border-t border-slate-200/80 space-y-2.5">
                               <div class="flex items-center justify-between">
-                                  <label class="block text-[11px] text-slate-600 font-bold">أو اختيار المنتج يدوياً (في حال عدم وجود باركود):</label>
+                                  <label class="block text-[11px] text-slate-700 font-black flex items-center gap-1.5">
+                                      <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                      <span>البحث في المخزون واختيار المنتج:</span>
+                                  </label>
+                                  <span id="posSearchProductStatus" class="text-[10px]"></span>
+                              </div>
+                              <div class="flex gap-1.5 items-center w-full">
+                                  <div class="relative flex-1 min-w-0">
+                                      <input type="text" id="posProductSearchInput" placeholder="اكتب الكودبار أو اسم المنتج للبحث..." class="w-full border border-slate-200 rounded-xl pr-8 pl-2.5 py-2 text-xs font-bold outline-none focus:border-blue-500 bg-slate-50 focus:bg-white text-slate-800 shadow-2xs" oninput="handlePosProductSearch(this.value)" onkeypress="if(event.key==='Enter'){event.preventDefault(); handlePosProductSearch(this.value, true);}">
+                                      <svg class="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                  </div>
+                                  <button type="button" onclick="openBarcodeCamera('pos_search')" class="shrink-0 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1 shadow-2xs" title="مسح باركود للبحث وتحديد المنتج">
+                                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
+                                      <span>كاميرا</span>
+                                  </button>
+                                  <button type="button" onclick="const i=document.getElementById('posProductSearchInput'); if(i){i.value=''; handlePosProductSearch('');}" class="shrink-0 text-slate-400 hover:text-slate-600 px-2 py-2 text-xs font-bold" title="مسح البحث">✕</button>
                               </div>
                               <select id="sellProdId" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm outline-none focus:border-blue-500 bg-white cursor-pointer shadow-xs font-bold text-slate-800">
-                                  <option value="">-- اختر المنتج يدوياً --</option>
+                                  <option value="">-- اختر المنتج يدوياً من القائمة --</option>
                               </select>
-                          </div>
-                          <!-- Sell Mode Selection (بالدوزة / الكيلو VS بالعلبة / القطعة) -->
-                          <div id="sellModeWrapper" class="p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2 hidden">
-                              <div class="flex items-center justify-between text-xs font-bold text-indigo-950">
-                                  <span>طريقة البيع والاحتساب:</span>
-                                  <span id="sellModeHelpBadge" class="text-[10px] text-blue-700 font-extrabold bg-white px-2 py-0.5 rounded-md border border-blue-200 shadow-2xs"></span>
-                              </div>
-                              <div class="grid grid-cols-2 gap-2">
-                                  <button type="button" id="sellModeCountBtn" onclick="setSellUnitMode('count')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-blue-600 text-white border-blue-600 shadow-xs cursor-pointer">
-                                      <span>بالعلبة / القطعة الكاملة</span>
-                                  </button>
-                                  <button type="button" id="sellModeDosesBtn" onclick="setSellUnitMode('doses')" class="py-2 px-3 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1 bg-white text-slate-700 border-slate-200 hover:bg-slate-100 shadow-2xs cursor-pointer">
-                                      <span>بالجرعة / الدوزة الفردية</span>
-                                  </button>
-                              </div>
-                              <input type="hidden" id="sellUnitModeInput" value="count">
                           </div>
                           <div id="stockInfo" class="text-xs text-blue-800 font-bold p-2.5 bg-blue-50/90 rounded-xl border border-blue-200 hidden">
                           </div>
