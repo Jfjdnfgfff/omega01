@@ -1,5 +1,5 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v3';
+const CACHE_NAME = 'omega-gym-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -29,9 +29,10 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Do not intercept non-GET, dev HMR, Firebase database calls, Google Drive, or WebSockets
+  // Do not intercept non-GET, dev HMR, source modules, Firebase, Google Drive, or WebSockets
   if (req.method !== 'GET') return;
-  if (url.pathname.startsWith('/@') || url.pathname.includes('node_modules') || url.search.includes('t=')) return;
+  if (url.pathname.startsWith('/@') || url.pathname.startsWith('/src/') || url.pathname.includes('node_modules') || url.search.includes('t=')) return;
+  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname.endsWith('.e2b.app')) return;
   if (url.hostname.includes('firebaseio.com') ||
       url.hostname.includes('googleapis.com') ||
       url.hostname.includes('accounts.google.com')) {

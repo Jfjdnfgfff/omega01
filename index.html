@@ -57,6 +57,15 @@
     window.clearMockTestData = window.clearMockTestData || function() {
       console.warn('clearMockTestData is loading...');
     };
+    window.searchSubscriber = window.searchSubscriber || function() {
+      console.warn('searchSubscriber is loading...');
+    };
+    window.handleSearch = window.handleSearch || function() {
+      console.warn('handleSearch is loading...');
+    };
+    window.handleSearchView = window.handleSearchView || function() {
+      console.warn('handleSearchView is loading...');
+    };
   </script>
 </head>
 <body class="text-slate-900 w-full min-h-screen min-h-dvh flex flex-col bg-slate-50">
@@ -282,9 +291,17 @@
                   <span>إضافة مشترك</span>
                 </button> </div> </div>
             <!-- Search Bar -->
-            <div class="relative mb-4">
-              <input type="text" id="searchInput" oninput="handleSearch()" placeholder="البحث عن مشترك بالاسم أو رقم الهاتف..." class="w-full border border-slate-200 rounded-2xl pl-10 pr-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white shadow-sm transition-all">
-              <svg class="w-5 h-5 text-slate-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            <div class="flex gap-2 items-center mb-4">
+              <div class="relative flex-1 min-w-0">
+                <input type="search" id="searchInput" data-search-field="1" autocomplete="off" enterkeyhint="search" oninput="handleSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault(); searchSubscriber(true);}" placeholder="البحث عن مشترك بالاسم أو رقم الهاتف..." class="w-full border border-slate-200 rounded-2xl pr-11 pl-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white shadow-sm transition-all">
+                <button type="button" onclick="searchSubscriber(true)" class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-xl text-slate-400 hover:text-blue-700 hover:bg-blue-50 flex items-center justify-center transition-colors" title="بحث عن مشترك" aria-label="بحث عن مشترك">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                </button>
+              </div>
+              <button type="button" id="searchSubscriberBtn" onclick="searchSubscriber(true)" class="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-3.5 sm:px-4 py-3 rounded-2xl font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition-all" title="بحث عن مشترك">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                <span>بحث</span>
+              </button>
             </div> <!-- Filter Tabs -->
             <div id="filterTabs" class="flex items-center gap-2.5 overflow-x-auto pb-3 mb-5 hide-scrollbar"></div>
             <!-- Cards Grid -->
@@ -1106,10 +1123,10 @@
                       </div> </div>
                   <div class="flex gap-2 items-center mb-3">
                     <div class="relative flex-1 min-w-0">
-                      <input type="text" id="searchInputView" oninput="handleSearchView()" placeholder="البحث عن زبون بالاسم أو الهاتف..." class="w-full border border-slate-200 rounded-xl pr-10 pl-4 py-2.5 text-sm outline-none focus:border-blue-500 bg-white shadow-xs transition-all">
-                      <svg class="w-5 h-5 text-slate-400 absolute right-3 top-2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                      <input type="search" id="searchInputView" data-search-field="1" autocomplete="off" enterkeyhint="search" oninput="handleSearchView()" onkeydown="if(event.key==='Enter'){event.preventDefault(); searchSubscriber(true);}" placeholder="البحث عن زبون بالاسم أو الهاتف..." class="w-full border border-slate-200 rounded-xl pr-10 pl-4 py-2.5 text-sm outline-none focus:border-blue-500 bg-white shadow-xs transition-all">
+                      <svg class="w-5 h-5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                     </div>
-                    <button type="button" onclick="handleSearchView()" class="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs" title="بحث">
+                    <button type="button" onclick="searchSubscriber(true)" class="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs" title="بحث عن مشترك">
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                       <span>بحث</span> </button>
                   </div>
@@ -3212,5 +3229,5 @@
        </div>
    </div>
 
-   <script type="module" src="/src/main.js"></script>
+   <script type="module" src="/src/main.js?v=4"></script>
 </body> </html>
