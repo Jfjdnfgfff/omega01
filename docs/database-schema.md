@@ -30,7 +30,7 @@
 │   ├── coachAbsences/           ← غيابات المدربين
 │   ├── packages/                ← الباقات
 │   ├── quickSessions/           ← الحصص السريعة
-│   ├── caisse/                  ← الصندوق وقيود الإقفال (يُقرأ باسم caisseLogs)
+│   ├── caisse/                  ← الصندوق: type=closing للإقفال، type=credit_payment لتسديد الديون (يُقرأ باسم caisseLogs)
 │   ├── activityLogs/            ← سجل العمليات
 │   ├── staff/                   ← بيانات الطاقم
 │   ├── stats/                   ← تجميعات محسّنة O(1)
