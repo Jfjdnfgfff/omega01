@@ -36,6 +36,9 @@
     "staffPayouts": {
       ".indexOn": ["staffId", "date", "dateKey", "createdAt"]
     },
+    "quickSessions": {
+      ".indexOn": ["date", "createdAt"]
+    },
     "v2": {
       "customers": {
         ".indexOn": ["phone", "barcode", "status", "paymentStatus", "startDate", "endDate", "createdAt", "updatedAt"]
@@ -72,6 +75,9 @@
       },
       "activityLogs": {
         ".indexOn": ["timestamp", "type", "dateStr"]
+      },
+      "quickSessions": {
+        ".indexOn": ["date", "dateKey", "createdAt"]
       }
     }
   }

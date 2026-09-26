@@ -37,6 +37,31 @@ window.setElemText = setElemText;
 window.setElemDisplay = setElemDisplay;
 window.setElemRequired = setElemRequired;
 
+// ============================================================
+// GLOBAL ERROR BOUNDARY — عزل الأجزاء عن بعضها
+// A failure inside ONE part (render, sync, a listener, an event
+// handler...) is contained and logged instead of silently killing
+// the whole site. Remaining parts keep working.
+// ============================================================
+window.__omegaErrorBoundary = { lastToastAt: 0, errors: 0 };
+window.addEventListener('error', () => {
+  const st = window.__omegaErrorBoundary;
+  st.errors += 1;
+  console.warn(`[Omega Error Boundary] contained an error (total: ${st.errors}). The rest of the app keeps running.`);
+  try {
+    if (typeof window.showErrorToast === 'function' && Date.now() - st.lastToastAt > 5000) {
+      st.lastToastAt = Date.now();
+      window.showErrorToast('حدث خطأ في جزء من النظام — بقية الأجزاء تعمل بشكل طبيعي');
+    }
+  } catch (e) {}
+});
+window.addEventListener('unhandledrejection', (event) => {
+  try {
+    console.warn('[Omega Error Boundary] contained a rejected background task:', (event && event.reason && (event.reason.message || event.reason)) || event);
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  } catch (e) {}
+});
+
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
@@ -519,6 +544,9 @@ window.setElemRequired = setElemRequired;
   // Granular section-level updater: merges ONLY the target section with O(N) deduplication
   window.applyFirebaseSectionUpdate = function(sectionName, sectionData, sourceLabel) {
     if (!sectionName || sectionData === undefined || sectionData === null) return false;
+    // Merge isolation: a malformed payload for ONE section can never break
+    // the sync pipeline for the remaining sections.
+    try {
     window.appState = window.appState || {};
     const toArr = (val) => {
       if (!val) return [];
@@ -597,6 +625,10 @@ window.setElemRequired = setElemRequired;
     window.firebaseSyncState.lastSync = new Date();
     updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
     return true;
+    } catch (err) {
+      console.warn(`applyFirebaseSectionUpdate isolated error (${sectionName}):`, err);
+      return false;
+    }
   };
 
   // Clean and sanitize payload to eliminate undefined fields
@@ -691,6 +723,150 @@ window.setElemRequired = setElemRequired;
   window.pendingWrites = window.pendingWrites || new Map();
   window.firebaseWriteQueue = window.firebaseWriteQueue || [];
 
+  // ============================================================
+  // OFFLINE WRITE QUEUE — استئناف المزامنة عند عودة الخدمة
+  // Failed writes are persisted locally and automatically re-sent
+  // when connectivity/service returns, so a temporary Firebase /
+  // network outage NEVER loses data or freezes the site.
+  // ============================================================
+  const WRITE_QUEUE_STORAGE_KEY = 'sm_firebaseWriteQueue';
+  const WRITE_QUEUE_MAX_ENTRIES = 500;
+
+  window.persistFirebaseWriteQueue = function() {
+    try {
+      localStorage.setItem(WRITE_QUEUE_STORAGE_KEY, JSON.stringify(window.firebaseWriteQueue));
+    } catch (e) { /* quota or private mode — queue stays in memory */ }
+  };
+
+  // Hydrate any writes that failed before the last page reload
+  try {
+    const savedQueue = localStorage.getItem(WRITE_QUEUE_STORAGE_KEY);
+    if (savedQueue) {
+      const parsed = JSON.parse(savedQueue);
+      if (Array.isArray(parsed) && parsed.length) {
+        window.firebaseWriteQueue = parsed;
+        console.warn(`[Write Queue] restored ${parsed.length} pending write(s) from a previous session.`);
+      }
+    }
+  } catch (e) {}
+
+  window.queueFirebaseWrite = function(entry) {
+    if (!entry || typeof entry !== 'object') return;
+    try {
+      entry.timestamp = entry.timestamp || Date.now();
+      window.firebaseWriteQueue.push(entry);
+      if (window.firebaseWriteQueue.length > WRITE_QUEUE_MAX_ENTRIES) {
+        window.firebaseWriteQueue.splice(0, window.firebaseWriteQueue.length - WRITE_QUEUE_MAX_ENTRIES);
+      }
+      window.persistFirebaseWriteQueue();
+      if (typeof updateFirebaseUIBadge === 'function' && window.firebaseWriteQueue.length > 0) {
+        updateFirebaseUIBadge('connecting', `Firebase: بانتظار المزامنة (${window.firebaseWriteQueue.length})`);
+      }
+    } catch (e) {}
+  };
+
+  // Drain engine: processes the queue FIFO. Stops at the first hard
+  // failure (service still down) and retries automatically later.
+  window.__drainingWriteQueue = false;
+  window.drainFirebaseWriteQueue = async function() {
+    if (window.__drainingWriteQueue) return 0;
+    if (!Array.isArray(window.firebaseWriteQueue) || window.firebaseWriteQueue.length === 0) return 0;
+    window.__drainingWriteQueue = true;
+    let completed = 0;
+    try {
+      while (window.firebaseWriteQueue.length > 0) {
+        const entry = window.firebaseWriteQueue.shift();
+        if (!entry || !entry.action) continue;
+        // Drop structurally invalid entries so they can never retry forever
+        if ((['saveV2Record', 'updateV2Record', 'deleteV2Record'].includes(entry.action) && !entry.id) ||
+            (['saveSectionItem', 'deleteSectionItem'].includes(entry.action) && !entry.sectionPath && !entry.section)) {
+          console.warn('[Write Queue] dropped an invalid entry:', entry.action);
+          continue;
+        }
+        let ok = false;
+        try {
+          switch (entry.action) {
+            case 'saveV2Record':
+              await saveV2Record(entry.section, entry.id, entry.data);
+              ok = true;
+              break;
+            case 'updateV2Record':
+              await updateV2Record(entry.section, entry.id, entry.updates);
+              ok = true;
+              break;
+            case 'deleteV2Record':
+              await deleteV2Record(entry.section, entry.id);
+              ok = true;
+              break;
+            case 'saveSectionItem':
+              ok = (await window.saveFirebaseSectionItem(entry.sectionPath, entry.itemData)) !== false;
+              break;
+            case 'deleteSectionItem':
+              ok = (await window.deleteFirebaseSectionItem(entry.sectionPath, entry.itemId)) !== false;
+              break;
+            default:
+              console.warn('[Write Queue] unknown action, dropped:', entry.action);
+              ok = true;
+          }
+        } catch (err) {
+          ok = false;
+        }
+        if (!ok) {
+          // The writers above re-queue their own copy on failure; only
+          // re-add here if they did not, so nothing is ever lost.
+          const alreadyQueued = window.firebaseWriteQueue.some(e => e &&
+            e.action === entry.action &&
+            (e.id === entry.id || e.itemId === entry.itemId) &&
+            (e.section === entry.section || e.sectionPath === entry.sectionPath));
+          if (!alreadyQueued) window.firebaseWriteQueue.push(entry);
+          console.warn(`[Write Queue] service still unavailable — ${window.firebaseWriteQueue.length} write(s) kept for the next retry.`);
+          break;
+        }
+        completed += 1;
+        // Small gap between entries so a flaky service is not hammered
+        if (window.firebaseWriteQueue.length > 0) {
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    } catch (err) {
+      console.warn('[Write Queue] drain note:', err);
+    } finally {
+      window.__drainingWriteQueue = false;
+      window.persistFirebaseWriteQueue();
+      if (window.firebaseWriteQueue.length === 0 && typeof updateFirebaseUIBadge === 'function' && navigator.onLine !== false && window.firebaseDB) {
+        updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
+      }
+      if (completed > 0 && typeof showSuccessToast === 'function') {
+        showSuccessToast(`تمت مزامنة ${completed} عملية مؤجلة بنجاح`);
+      }
+    }
+    return completed;
+  };
+
+  // ============================================================
+  // AUTOMATIC RESYNC TRIGGERS — إعادة المحاولة تلقائياً
+  // ============================================================
+  window.addEventListener('online', () => {
+    if (typeof updateFirebaseUIBadge === 'function') {
+      updateFirebaseUIBadge('connecting', 'Firebase: عاد الاتصال — جارٍ استئناف المزامنة');
+    }
+    window.drainFirebaseWriteQueue();
+  });
+  window.addEventListener('offline', () => {
+    if (typeof updateFirebaseUIBadge === 'function') {
+      updateFirebaseUIBadge('error', 'وضع عدم الاتصال', 'سيتم حفظ التغييرات ومزامنتها تلقائياً فور عودة الشبكة');
+    }
+  });
+  // Periodic retry (only when something is pending) — recovers writes
+  // queued while the Firebase service itself was down.
+  setInterval(() => {
+    if (window.firebaseWriteQueue.length > 0 && navigator.onLine !== false) {
+      window.drainFirebaseWriteQueue();
+    }
+  }, 20000);
+  // First pass shortly after boot to pick up persisted leftovers
+  setTimeout(() => window.drainFirebaseWriteQueue(), 8000);
+
   // Unified Incremental V2 Record-Level Writers
   async function saveV2Record(section, id, data) {
     if (!id) throw new Error('ID is required for saveV2Record');
@@ -728,7 +904,7 @@ window.setElemRequired = setElemRequired;
         return cleanId;
       } catch (err) {
         console.warn(`saveV2Record error (${section}/${cleanId}):`, err);
-        window.firebaseWriteQueue.push({ action: 'saveV2Record', section, id: cleanId, data, timestamp: Date.now() });
+        window.queueFirebaseWrite({ action: 'saveV2Record', section, id: cleanId, data, timestamp: Date.now() });
         throw err;
       } finally {
         window.pendingWrites.delete(writeKey);
@@ -776,7 +952,7 @@ window.setElemRequired = setElemRequired;
         return cleanId;
       } catch (err) {
         console.warn(`updateV2Record error (${section}/${cleanId}):`, err);
-        window.firebaseWriteQueue.push({ action: 'updateV2Record', section, id: cleanId, updates, timestamp: Date.now() });
+        window.queueFirebaseWrite({ action: 'updateV2Record', section, id: cleanId, updates, timestamp: Date.now() });
         throw err;
       } finally {
         window.pendingWrites.delete(writeKey);
@@ -822,7 +998,7 @@ window.setElemRequired = setElemRequired;
         return cleanId;
       } catch (err) {
         console.warn(`deleteV2Record error (${section}/${cleanId}):`, err);
-        window.firebaseWriteQueue.push({ action: 'deleteV2Record', section, id: cleanId, timestamp: Date.now() });
+        window.queueFirebaseWrite({ action: 'deleteV2Record', section, id: cleanId, timestamp: Date.now() });
         throw err;
       } finally {
         window.pendingWrites.delete(writeKey);
@@ -1268,7 +1444,7 @@ window.setElemRequired = setElemRequired;
         return true;
       } catch (err) {
         console.warn(`saveFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, err);
-        window.firebaseWriteQueue.push({ action: 'saveSectionItem', sectionPath, itemData, timestamp: Date.now() });
+        window.queueFirebaseWrite({ action: 'saveSectionItem', sectionPath, itemData, timestamp: Date.now() });
         return false;
       } finally {
         window.pendingWrites.delete(writeKey);
@@ -1440,7 +1616,7 @@ window.setElemRequired = setElemRequired;
         return true;
       } catch (err) {
         console.warn(`deleteFirebaseSectionItem error for ${sectionPath}/${cleanId}:`, err);
-        window.firebaseWriteQueue.push({ action: 'deleteSectionItem', sectionPath, itemId: cleanId, timestamp: Date.now() });
+        window.queueFirebaseWrite({ action: 'deleteSectionItem', sectionPath, itemId: cleanId, timestamp: Date.now() });
         return false;
       } finally {
         window.pendingWrites.delete(writeKey);
@@ -1565,58 +1741,73 @@ window.setElemRequired = setElemRequired;
         sections.push({ name: 'sales', v2: 'sales' });
       }
 
-      const fetchPromises = [
+      const coreResults = await Promise.all([
         safeFetch('v2/meta/health.json'),
         safeFetch('v2/stats.json'),
-        safeFetch('appState.json')
-      ];
+        safeFetch('appState.json'),
+        // Phase 1: download ONLY the optimized v2 nodes (source of truth)
+        ...sections.map(sec => safeFetch(`v2/${sec.v2}.json`))
+      ]);
+      const meta = coreResults[0];
+      const v2Stats = coreResults[1];
+      const appStateCfg = coreResults[2];
+      const v2Results = coreResults.slice(3);
 
-      sections.forEach(sec => {
-        fetchPromises.push(safeFetch(`v2/${sec.v2}.json`));
-        fetchPromises.push(safeFetch(`${sec.name}.json`));
-      });
+      const isEmptyData = (d) =>
+        !d ||
+        (Array.isArray(d) && d.length === 0) ||
+        (typeof d === 'object' && Object.keys(d).length === 0);
 
-      const results = await Promise.all(fetchPromises);
-      const meta = results[0];
-      const v2Stats = results[1];
-      const appStateCfg = results[2];
+      // Phase 2: fetch the legacy root copy ONLY for sections where v2 has
+      // no data yet (un/partially-migrated databases). This roughly halves
+      // startup download size and payload parsing time.
+      const legacyResults = await Promise.all(
+        sections.map((sec, i) =>
+          isEmptyData(v2Results[i]) ? safeFetch(`${sec.name}.json`) : Promise.resolve(null)
+        )
+      );
 
       window.__firebaseAlreadyFetched = true;
       window.appState = window.appState || {};
 
-      let resultIdx = 3;
-      sections.forEach(sec => {
-        const v2Data = results[resultIdx++];
-        const rootData = results[resultIdx++];
-        
-        const map = new Map();
-        const addData = (data) => {
-          if (!data) return;
-          if (Array.isArray(data)) {
-            data.forEach((item, idx) => {
-              if (item) {
-                const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || idx);
-                map.set(key, { ...item, id: item.id || key });
-              }
-            });
-          } else if (typeof data === 'object') {
-            Object.entries(data).forEach(([k, item]) => {
-              if (item) {
-                const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || k);
-                map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
-              }
-            });
+      sections.forEach((sec, i) => {
+        // Per-section isolation: one malformed section never blocks the rest
+        try {
+          const v2Data = v2Results[i];
+          const rootData = legacyResults[i];
+
+          const map = new Map();
+          const addData = (data) => {
+            if (!data) return;
+            if (Array.isArray(data)) {
+              data.forEach((item, idx) => {
+                if (item) {
+                  const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || idx);
+                  map.set(key, { ...item, id: item.id || key });
+                }
+              });
+            } else if (typeof data === 'object') {
+              Object.entries(data).forEach(([k, item]) => {
+                if (item) {
+                  const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || k);
+                  map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
+                }
+              });
+            }
+          };
+
+          addData(rootData);
+          addData(v2Data);
+
+          const combinedItems = Array.from(map.values());
+          if (combinedItems.length > 0) {
+            window.applyFirebaseSectionUpdate(sec.name, combinedItems, `Startup ${sec.name} Sync`);
           }
-        };
-
-        addData(rootData);
-        addData(v2Data);
-
-        const combinedItems = Array.from(map.values());
-        if (combinedItems.length > 0) {
-          window.applyFirebaseSectionUpdate(sec.name, combinedItems, `Startup ${sec.name} Sync`);
+          window.firebaseLoadedSections[sec.name] = true;
+        } catch (secErr) {
+          console.warn(`Startup sync isolated error for ${sec.name}:`, secErr);
+          try { window.lazyLoadSection && window.lazyLoadSection(sec.name, true); } catch (e) {}
         }
-        window.firebaseLoadedSections[sec.name] = true;
       });
 
       if (v2Stats) {
@@ -1798,21 +1989,35 @@ window.setElemRequired = setElemRequired;
           { name: 'caisseLogs', q: ref(database, 'v2/caisse') }
         ];
 
+        let firebaseReadyDispatched = false;
         realTimeListeners.forEach(sec => {
-          onValue(sec.q, (snapshot) => {
-            if (snapshot.exists()) {
-              window.applyFirebaseSectionUpdate(sec.name, snapshot.val(), `Realtime ${sec.name}`);
-            }
-            window.firebaseSyncState.rtdb = 'connected';
-            window.firebaseSyncState.lastSync = new Date();
-            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (مباشر Realtime)');
-            window.dispatchEvent(new Event('firebaseReady'));
-          }, (error) => {
-            console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
-            if (error?.message && (error.message.includes('permission_denied') || error.message.includes('Permission denied'))) {
-              updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'يرجى تفعيل .read: true, .write: true في قواعد Realtime Database');
-            }
-          });
+          // Per-listener isolation: a registration/callback failure in ONE
+          // section never prevents the other sections from syncing.
+          try {
+            onValue(sec.q, (snapshot) => {
+              try {
+                if (snapshot.exists()) {
+                  window.applyFirebaseSectionUpdate(sec.name, snapshot.val(), `Realtime ${sec.name}`);
+                }
+                window.firebaseSyncState.rtdb = 'connected';
+                window.firebaseSyncState.lastSync = new Date();
+                updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (مباشر Realtime)');
+                if (!firebaseReadyDispatched) {
+                  firebaseReadyDispatched = true;
+                  window.dispatchEvent(new Event('firebaseReady'));
+                }
+              } catch (cbErr) {
+                console.warn(`Realtime callback isolated error (${sec.name}):`, cbErr);
+              }
+            }, (error) => {
+              console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
+              if (error?.message && (error.message.includes('permission_denied') || error.message.includes('Permission denied'))) {
+                updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'يرجى تفعيل .read: true, .write: true في قواعد Realtime Database');
+              }
+            });
+          } catch (regErr) {
+            console.warn(`Listener registration isolated error (${sec.name}):`, regErr);
+          }
         });
 
         // Ultra-Fast Cursor-Based Pagination: Loads older historical records using orderByKey() & endBefore() without scanning/sorting in memory
@@ -2212,6 +2417,9 @@ window.setElemRequired = setElemRequired;
     function cleanPhone(phone) { if (!phone) return '';
         return phone.toString().trim().replace(/\s+/g, '').replace(/\*/g, '');
     } window.cleanPhone = cleanPhone; function saveState() {
+      // saveState isolation: any failure here (storage, sync, render) is
+      // contained and never propagates to the caller that changed data.
+      try {
       localStorage.setItem('sm_hideFinances', appState.hideFinances);
       const ensureArray = (val) => (!val ? [] : (Array.isArray(val) ? val : Object.values(val)));
       appState.customers = ensureArray(appState.customers);
@@ -2247,8 +2455,9 @@ window.setElemRequired = setElemRequired;
       if (typeof window.triggerGoogleDriveAutoSync === 'function') {
         window.triggerGoogleDriveAutoSync(); }
       if (typeof render === 'function') render();
+      } catch (err) { console.warn('saveState isolated error:', err); }
     }
-    
+
     function handleNavButtonClick(e, callback) {
         if (e && e.preventDefault) e.preventDefault();
         if (typeof callback === 'function') callback();
@@ -9495,15 +9704,17 @@ window.setElemRequired = setElemRequired;
                yearlySubIncome += paidAmount; }
            const status = calculateStatus(c); if (status === 'active' || status === 'near_expiry') {
                activeCount++; if (status === 'near_expiry') nearExpiryCount++;
-           } }); let totalExpenses = appState.expenses.reduce((sum, e) => sum + (parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0), 0);
-        let monthlyExpenses = appState.expenses.filter(e => {
+           } }); const expensesArrForStats = Array.isArray(appState.expenses) ? appState.expenses : [];
+        let totalExpenses = expensesArrForStats.reduce((sum, e) => sum + (parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0), 0);
+        let monthlyExpenses = expensesArrForStats.filter(e => {
             const dStr = e.date || ''; if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
                 const parts = dStr.split('-');
                 return parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
             } const d = new Date(e.date); return !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
         }).reduce((sum, e) => sum + (parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0), 0);
-        let totalStaffPayouts = (appState.staffPayouts || []).reduce((sum, p) => sum + (parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0), 0);
-        let monthlyStaffPayouts = (appState.staffPayouts || []).filter(p => {
+        const staffPayoutsArrForStats = Array.isArray(appState.staffPayouts) ? appState.staffPayouts : [];
+        let totalStaffPayouts = staffPayoutsArrForStats.reduce((sum, p) => sum + (parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0), 0);
+        let monthlyStaffPayouts = staffPayoutsArrForStats.filter(p => {
             const dStr = p.date || p.createdAt || '';
             if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
                 const parts = dStr.split('-');
@@ -9792,8 +10003,9 @@ window.setElemRequired = setElemRequired;
         // Ensure session packages are removed
         if (Array.isArray(appState.packages)) {
             appState.packages = appState.packages.filter(p => p && p.type !== 'session');
-        } renderFilterTabs(); const packageSelect = document.getElementById('packageIdView') || document.getElementById('packageId');
-        if (packageSelect) { packageSelect.innerHTML = appState.packages.map(p => {
+        } try { renderFilterTabs(); } catch (e) { console.warn('renderFilterTabs isolated error:', e); }
+        const packageSelect = document.getElementById('packageIdView') || document.getElementById('packageId');
+        if (packageSelect) { packageSelect.innerHTML = (Array.isArray(appState.packages) ? appState.packages : []).map(p => {
                 const label = `${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
                 return `<option value="${p.id}">${label}</option>`;
             }).join(''); } const packagesContainer = document.getElementById('packagesList');
@@ -9802,12 +10014,12 @@ window.setElemRequired = setElemRequired;
             } else {
                 // Count subscribers for each package
                 const packageCounts = {};
-                appState.customers.forEach(c => {
+                (Array.isArray(appState.customers) ? appState.customers : []).forEach(c => {
                     if (c.packageId) {
                         packageCounts[c.packageId] = (packageCounts[c.packageId] || 0) + 1;
                     } }); packagesContainer.innerHTML = appState.packages.map(p => {
                     const count = packageCounts[p.id] || 0;
-                    const detail = `${p.durationDays} || p.duration || 30} يوم`;
+                    const detail = `${p.durationDays || p.duration || 30} يوم`;
                     return `
                         <div class="bg-white border border-slate-200/60 rounded-2xl px-4 py-3.5 flex items-center justify-between shadow-[0_4px_16px_rgba(0,0,0,0.04)] transition-all">
                             <div class="text-right">
@@ -9854,28 +10066,40 @@ window.setElemRequired = setElemRequired;
             expDateV.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
 
-        if (isModalOpen('expensesModal') && typeof renderExpensesListModal === 'function') renderExpensesListModal();
-        if (isVisible('expensesView') && typeof renderExpensesListView === 'function') renderExpensesListView();
+        // Per-section render isolation: if ONE list fails to render, all the
+        // other lists/views still update — the site never goes down entirely.
+        const safeRenderPart = (label, fn) => {
+            try { if (typeof fn === 'function') fn(); }
+            catch (err) { console.warn(`Render section isolated error (${label}):`, err); }
+        };
+        if (isModalOpen('expensesModal')) safeRenderPart('expensesModal', renderExpensesListModal);
+        if (isVisible('expensesView')) safeRenderPart('expensesView', renderExpensesListView);
         if (isModalOpen('staffPayoutsModal')) {
             const suppliersTabContent = document.getElementById('suppliersTabContent');
             if (suppliersTabContent && !suppliersTabContent.classList.contains('hidden')) {
-                if (typeof renderSuppliersList === 'function') renderSuppliersList();
+                safeRenderPart('suppliersList', renderSuppliersList);
             } else {
-                if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+                safeRenderPart('staffPayouts', renderStaffPayouts);
             }
         }
-        if (isVisible('productsView') || isVisible('dashboardView')) renderProductsList();
-        if (isVisible('dashboardView') || isVisible('productsView')) renderSalesList();
-        if (isVisible('customersView') || isVisible('dashboardView')) renderCustomers();
-        if (isVisible('caisseView') || isModalOpen('caisseModal')) renderCaisseView();
-        if (typeof updateMockDataUIState === 'function') updateMockDataUIState();
+        if (isVisible('productsView') || isVisible('dashboardView')) safeRenderPart('productsList', renderProductsList);
+        if (isVisible('dashboardView') || isVisible('productsView')) safeRenderPart('salesList', renderSalesList);
+        if (isVisible('customersView') || isVisible('dashboardView')) safeRenderPart('customers', renderCustomers);
+        if (isVisible('caisseView') || isModalOpen('caisseModal')) safeRenderPart('caisse', renderCaisseView);
+        safeRenderPart('mockDataUI', updateMockDataUIState);
     }
     function render() {
         if (window.renderScheduled) return;
         window.renderScheduled = true;
         requestAnimationFrame(() => {
             window.renderScheduled = false;
-            performFullRender();
+            // Render isolation: a failure inside one render pass is caught so
+            // the UI never freezes; the next scheduled pass starts clean.
+            try {
+                performFullRender();
+            } catch (err) {
+                console.warn('Render pass isolated error (next pass will retry):', err);
+            }
         });
     }
     window.render = render;
@@ -11933,3 +12157,4 @@ try {
     }
   });
 } catch(e) { console.warn("Window export note:", e); }
+
