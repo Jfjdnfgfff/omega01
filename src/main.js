@@ -44,7 +44,7 @@ window.setElemRequired = setElemRequired;
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {});
     });
   }
 
@@ -5308,13 +5308,9 @@ window.setElemRequired = setElemRequired;
     window.openBulkImportModal = openBulkImportModal;
     window.openEditModal = openEditModal;
     window.openRenewModal = openRenewModal;
-    window.handleRenewPackageChange = handleRenewPackageChange;
-    window.setRenewStartDateMode = setRenewStartDateMode;
-    window.updateRenewEndDate = updateRenewEndDate;
-    window.applyRenewDuration = applyRenewDuration;
-    window.adjustRenewSessions = adjustRenewSessions;
-    window.toggleRenewDebtField = toggleRenewDebtField;
-    window.handleRenewCustomerSubmit = handleRenewCustomerSubmit;
+    // Renew helpers are already attached as window.* function expressions above.
+    // Re-binding the bare names here threw ReferenceError and aborted the rest of
+    // the module — including window.handleSearch — so subscriber search never loaded.
     // --- Smooth Scroll & Drag Navigation for Top Header Icons (PC + Mobile) ---
     let isNavDragging = false; let navDragStartX = 0;
     let navScrollStartLeft = 0; let navHasMoved = false;
@@ -8188,34 +8184,152 @@ window.setElemRequired = setElemRequired;
             }); } else { openModal('staffPayoutsModal');
         } };
     let _customerSearchDebounceTimer = null;
+    function normalizeSearchText(value) {
+        return String(value || '')
+            .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+            .replace(/[أإآٱ]/g, 'ا')
+            .replace(/ى/g, 'ي')
+            .replace(/ة/g, 'ه')
+            .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+            .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+    function customerMatchesQuery(c, rawQuery) {
+        const q = normalizeSearchText(rawQuery);
+        if (!q) return true;
+        const words = q.split(' ').filter(Boolean);
+        const phoneRaw = String((c && c.phone) || '');
+        const phoneDigits = phoneRaw.replace(/\D/g, '');
+        const displayPhone = (typeof getDisplayPhone === 'function') ? getDisplayPhone(c.phone) : phoneRaw;
+        const haystack = normalizeSearchText([
+            c && c.name, c && c.nickname, c && c.barcode, c && c.notes,
+            phoneRaw, displayPhone, phoneDigits
+        ].filter(Boolean).join(' '));
+        const digitHaystack = (phoneDigits + String((c && c.barcode) || '').replace(/\D/g, ''));
+        return words.every((w) => {
+            if (haystack.includes(w)) return true;
+            const wDigits = w.replace(/\D/g, '');
+            return wDigits.length >= 2 && digitHaystack.includes(wDigits);
+        });
+    }
+    window.customerMatchesQuery = customerMatchesQuery;
+    function readCustomerSearchValue() {
+        const active = document.activeElement;
+        if (active && (active.id === 'searchInput' || active.id === 'searchInputView')) {
+            return active.value || '';
+        }
+        const dash = document.getElementById('searchInput');
+        const view = document.getElementById('searchInputView');
+        const viewVisible = view && view.offsetParent !== null;
+        if (viewVisible && view.value) return view.value;
+        if (dash) return dash.value || '';
+        return (view && view.value) || '';
+    }
+    function syncCustomerSearchInputs(val, exceptId) {
+        ['searchInput', 'searchInputView'].forEach((id) => {
+            if (id === exceptId) return;
+            const el = document.getElementById(id);
+            if (el && el.value !== val && document.activeElement !== el) el.value = val;
+        });
+    }
+    function applyCustomerSearch(raw) {
+        const val = raw == null ? readCustomerSearchValue() : String(raw);
+        if (typeof appState !== 'undefined' && appState) {
+            appState.searchQuery = val;
+            appState.customerPage = 1;
+        }
+        if (window.appState) {
+            window.appState.searchQuery = val;
+            window.appState.customerPage = 1;
+        }
+        syncCustomerSearchInputs(val, document.activeElement && document.activeElement.id);
+        if (typeof renderCustomers === 'function') renderCustomers();
+        else if (typeof window.renderCustomers === 'function') window.renderCustomers();
+        return val;
+    }
     async function triggerRemoteCustomerSearch(rawQuery) {
-        if (!rawQuery) return;
+        if (!rawQuery) return null;
         const q = String(rawQuery).trim();
+        if (!q) return null;
+        try {
+            if (typeof window.lazyLoadSection === 'function') {
+                await window.lazyLoadSection('customers');
+            }
+        } catch (e) {}
         const digits = q.replace(/\D/g, '');
-        if (digits.length >= 6) {
+        if (digits.length >= 6 && typeof window.findCustomerByPhone === 'function') {
             const foundByPhone = await window.findCustomerByPhone(q);
             if (foundByPhone) {
-                renderCustomers();
-                return;
+                applyCustomerSearch(q);
+                return foundByPhone;
             }
         }
-        if (q.length >= 4) {
+        if (q.length >= 4 && typeof window.findCustomerByBarcode === 'function') {
             const foundByBc = await window.findCustomerByBarcode(q);
             if (foundByBc) {
-                renderCustomers();
-                return;
+                applyCustomerSearch(q);
+                return foundByBc;
             }
         }
+        applyCustomerSearch(q);
+        return null;
     }
+    function countCustomerMatches(rawQuery) {
+        const list = (window.appState && window.appState.customers) || (typeof appState !== 'undefined' && appState && appState.customers) || [];
+        return list.filter(c => customerMatchesQuery(c, rawQuery)).length;
+    }
+    function announceCustomerSearch(val, remoteDone) {
+        const count = countCustomerMatches(val);
+        const grid = document.getElementById('customersGrid') || document.getElementById('customersGridView');
+        if (grid && typeof grid.scrollIntoView === 'function') {
+            grid.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        if (count > 0 && typeof showSuccessToast === 'function') {
+            showSuccessToast('تم العثور على ' + count + ' مشترك');
+        } else if (remoteDone && typeof showErrorToast === 'function') {
+            showErrorToast('لا يوجد مشترك مطابق لبحثك');
+        } else if (typeof showInfoToast === 'function') {
+            showInfoToast('جاري البحث عن المشترك...');
+        }
+    }
+    function searchSubscriber(fromButton) {
+        const val = readCustomerSearchValue();
+        if (fromButton && !String(val).trim()) {
+            const input = document.getElementById('searchInput') || document.getElementById('searchInputView');
+            if (input) {
+                input.focus();
+                const section = document.getElementById('subscribers-section');
+                if (section && typeof section.scrollIntoView === 'function') section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            if (typeof showErrorToast === 'function') showErrorToast('اكتب اسم المشترك أو رقم الهاتف ثم اضغط بحث');
+            return;
+        }
+        applyCustomerSearch(val);
+        const localCount = countCustomerMatches(val);
+        if (fromButton) {
+            if (localCount > 0) announceCustomerSearch(val, true);
+            else if (typeof showInfoToast === 'function') showInfoToast('جاري البحث عن المشترك...');
+        }
+        Promise.resolve()
+            .then(() => triggerRemoteCustomerSearch(val))
+            .then(() => {
+                applyCustomerSearch(val);
+                if (!fromButton) return;
+                const count = countCustomerMatches(val);
+                if (localCount === 0 || count !== localCount) announceCustomerSearch(val, true);
+            })
+            .catch((e) => console.warn('Customer search note:', e));
+    }
+    window.searchSubscriber = searchSubscriber;
     window.handleSearchView = function() {
         if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
         _customerSearchDebounceTimer = setTimeout(() => {
             const val = getElemVal('searchInputView') || '';
-            appState.searchQuery = val;
-            appState.customerPage = 1;
-            renderCustomers();
+            applyCustomerSearch(val);
             triggerRemoteCustomerSearch(val);
-        }, 150);
+        }, 120);
     };
     window.toggleDebtFieldView = function() {
        const status = getElemVal('paymentStatusView');
@@ -8231,11 +8345,9 @@ window.setElemRequired = setElemRequired;
         if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
         _customerSearchDebounceTimer = setTimeout(() => {
             const val = getElemVal('searchInput') || '';
-            appState.searchQuery = val;
-            appState.customerPage = 1;
-            renderCustomers();
+            applyCustomerSearch(val);
             triggerRemoteCustomerSearch(val);
-        }, 150);
+        }, 120);
     }
     // Exposed for the inline oninput="handleSearch()" in index.html
     window.handleSearch = handleSearch;
@@ -9218,18 +9330,8 @@ window.setElemRequired = setElemRequired;
         const container2 = document.getElementById('filterTabsView');
         if (container2) container2.innerHTML = html;
     } function renderCustomers() { let filtered = (appState.customers || []).filter(c => {
-            if (appState.searchQuery) { const q = appState.searchQuery.toLowerCase().trim();
-                // Word-based matching: EVERY typed word must appear somewhere inside the
-                // name or phone, in any order (e.g. "محمد بن" matches "بن محمد علي",
-                // and partial phone digits match anywhere in the number)
-                const words = q.split(/\s+/).filter(w => w.length > 0);
-                const nameLower = (c.name || '').toLowerCase();
-                const dispPhone = getDisplayPhone(c.phone);
-                const phoneDigits = ((c.phone || '') + ' ' + (dispPhone || '')).replace(/\s+/g, '');
-                const haystack = nameLower + ' ' + phoneDigits;
-                const matched = words.length > 0 && words.every(w => haystack.includes(w));
-                if (!matched) return false;
-            } const status = calculateStatus(c);
+            if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
+            const status = calculateStatus(c);
             const isSession = customerIsSession(c);
             if (appState.filter === 'session') return isSession;
             if (appState.filter === 'male') return c.gender === 'male' || !c.gender;
@@ -9317,7 +9419,7 @@ window.setElemRequired = setElemRequired;
                     </button>
                 </div>
             </div>
-            `; }).join('') || '<div class="col-span-full text-center py-12 text-slate-400 font-medium">لا يوجد مشتركين في هذه الفئة</div>';
+            `; }).join('') || `<div class="col-span-full text-center py-12 text-slate-400 font-medium">${appState.searchQuery ? 'لا توجد نتائج للبحث عن «' + escapeHTML(appState.searchQuery) + '»' : 'لا يوجد مشتركين في هذه الفئة'}</div>`;
         if (filtered.length > visibleCustomers.length) {
             html += `
             <div class="col-span-full flex flex-col sm:flex-row items-center justify-center gap-3 py-6">
@@ -10210,7 +10312,16 @@ window.setElemRequired = setElemRequired;
             // Search fields must NEVER be sanitized as name fields: their placeholders
             // contain the word "الاسم" which used to match the rule below and silently
             // delete digits while typing a phone number or a barcode in the search box
-            const isSearchField = id.includes('search') || type === 'search' || placeholder.includes('بحث');
+            const isSearchField = id.includes('search') || type === 'search' || placeholder.includes('بحث') || target.getAttribute('data-search-field') === '1';
+            // Search boxes must keep both letters and digits. Their placeholders mention
+            // "الاسم" and "هاتف", which used to match the name/phone rules and wipe the
+            // query (names deleted as "phone", phone digits deleted as "name").
+            if (isSearchField) {
+                const raw = target.value;
+                const sanitized = raw.replace(/[<>{}`$\\]/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+                return;
+            }
             // Real-time Name & Nickname restriction (Letters, spaces, hyphens ONLY - strictly NO numbers/symbols)
             const isNameOrNickname = !isSearchField && (
                 id.includes('nickname') ||
