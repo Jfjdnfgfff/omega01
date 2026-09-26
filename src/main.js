@@ -6221,21 +6221,48 @@ window.setElemRequired = setElemRequired;
     window.printFullReportSheet = printFullReportSheet;
     // In-app preview of the generated PNG so it can be saved even where direct
     // downloads are blocked (sandboxed preview iframes, some mobile browsers)
-    function showReportImagePreview(dataUrl, dateStr) {
+    let _lastReportBlobUrl = null;
+    function releaseReportBlobUrl() {
+        if (_lastReportBlobUrl) {
+            try { URL.revokeObjectURL(_lastReportBlobUrl); } catch (e) { /* noop */ }
+            _lastReportBlobUrl = null;
+        }
+    }
+    function showReportImagePreview(url, filename, blob) {
         const modal = document.getElementById('reportImageModal');
         const img = document.getElementById('reportImagePreview');
         const dlBtn = document.getElementById('reportImageDownloadBtn');
+        const shareBtn = document.getElementById('reportImageShareBtn');
         if (!modal || !img) return;
-        img.src = dataUrl;
+        releaseReportBlobUrl();
+        if (blob) _lastReportBlobUrl = url; // only blob: URLs need revoking
+        img.src = url;
+        const fname = filename || 'التقرير_الشامل_المالي_والإداري.png';
         if (dlBtn) {
             dlBtn.onclick = function () {
                 const a = document.createElement('a');
-                a.download = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
-                a.href = dataUrl;
+                a.download = fname;
+                a.href = url;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
             };
+        }
+        if (shareBtn) {
+            // Web Share lets mobile users save the PNG straight to Photos/Files,
+            // which works even when anchor downloads are blocked inside iframes
+            let shareFile = null;
+            try {
+                shareFile = blob ? new File([blob], fname, { type: 'image/png' }) : null;
+            } catch (e) { shareFile = null; }
+            const canShare = !!(shareFile && navigator.canShare && navigator.canShare({ files: [shareFile] }));
+            shareBtn.classList.toggle('hidden', !canShare);
+            if (canShare) {
+                shareBtn.onclick = function () {
+                    navigator.share({ files: [shareFile], title: 'التقرير المالي والإداري الشامل' })
+                        .catch(err => console.warn('Share dismissed/failed:', err));
+                };
+            }
         }
         openModal('reportImageModal');
     }
@@ -6255,8 +6282,18 @@ window.setElemRequired = setElemRequired;
         try {
             const html2canvas = await loadLocalHtml2Canvas();
             if (typeof html2canvas !== 'function') throw new Error('html2canvas-pro failed to load');
+            // Adaptive scale: very long reports at scale 2 can exceed the mobile
+            // canvas pixel limit (~16.7M px on iOS) which makes export fail silently
+            const TARGET_W = 1050;
+            const srcW = Math.max(1, reportElem.scrollWidth || TARGET_W);
+            const estH = Math.max(1, Math.round((reportElem.scrollHeight || 1000) * (TARGET_W / srcW)));
+            const MAX_CANVAS_AREA = 16000000; // safe under iOS Safari's 16777216 px cap
+            let scale = 2;
+            if (TARGET_W * estH * 4 > MAX_CANVAS_AREA) {
+                scale = Math.max(1, Math.sqrt(MAX_CANVAS_AREA / (TARGET_W * estH)));
+            }
             const canvas = await html2canvas(reportElem, {
-                scale: 2, useCORS: true,
+                scale, useCORS: true,
                 backgroundColor: '#ffffff',
                 windowWidth: 1280, width: 1050,
                 scrollX: 0, scrollY: 0, logging: false, onclone: (clonedDoc) => {
@@ -6292,29 +6329,46 @@ window.setElemRequired = setElemRequired;
                             input.parentNode.replaceChild(div, input);
                         } }); }
             });
-            const image = canvas.toDataURL('image/png');
+            // Prefer toBlob (smaller memory footprint, no giant data-URL strings);
+            // fall back to toDataURL only if toBlob is unavailable or empty
             const now = new Date();
             const dateStr = now.toISOString().split('T')[0];
+            const filename = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
+            let blob = null;
+            try {
+                blob = await new Promise((resolve, reject) => {
+                    if (typeof canvas.toBlob !== 'function') { reject(new Error('toBlob unsupported')); return; }
+                    canvas.toBlob(b => b ? resolve(b) : reject(new Error('empty blob')), 'image/png');
+                });
+            } catch (blobErr) { blob = null; }
+            let href = null;
+            if (blob) {
+                href = URL.createObjectURL(blob);
+            } else {
+                href = canvas.toDataURL('image/png');
+                if (!href || href === 'data:,' || href.length < 128) throw new Error('تم توليد صورة فارغة');
+            }
             // 1) Direct download attempt
             const link = document.createElement('a');
-            link.download = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
-            link.href = image;
+            link.download = filename;
+            link.href = href;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             // 2) In-app preview fallback: lets the user save the image (long-press /
-            //    right-click, or the download button) even if the direct download
-            //    was silently blocked by the browser or a sandboxed iframe
-            showReportImagePreview(image, dateStr);
+            //    right-click, share button, or the download button) even if the direct
+            //    download was silently blocked by the browser or a sandboxed iframe
+            showReportImagePreview(href, filename, blob);
             if (typeof showSuccessToast === 'function') {
-                showSuccessToast('تم إنشاء صورة التقرير بنجاح!');
+                showSuccessToast('تم إنشاء صورة التقرير! إن لم يبدأ التنزيل تلقائياً استخدم نافذة المعاينة');
             }
             if (typeof logActivity === 'function') {
                 try { logActivity('system', 'تصدير التقرير المالي كصورة', 'تم إنشاء صورة PNG للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
             }
         } catch (err) {
             console.error('Error exporting image:', err);
-            const msg = 'فشل إنشاء صورة التقرير، حاول مرة أخرى';
+            const detail = (err && err.message) ? ` (${String(err.message).slice(0, 80)})` : '';
+            const msg = 'فشل إنشاء صورة التقرير، حاول مرة أخرى' + detail;
             if (typeof showErrorToast === 'function') showErrorToast(msg);
             else if (typeof showToast === 'function') showToast(msg, 'error');
         } finally {
