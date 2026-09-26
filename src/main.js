@@ -8183,6 +8183,8 @@ window.setElemRequired = setElemRequired;
             triggerRemoteCustomerSearch(val);
         }, 150);
     }
+    // Exposed for the inline oninput="handleSearch()" in index.html
+    window.handleSearch = handleSearch;
     function setFilter(filter) {
         appState.filter = filter;
         appState.customerPage = 1;
@@ -9163,10 +9165,16 @@ window.setElemRequired = setElemRequired;
         if (container2) container2.innerHTML = html;
     } function renderCustomers() { let filtered = (appState.customers || []).filter(c => {
             if (appState.searchQuery) { const q = appState.searchQuery.toLowerCase().trim();
-                const matchName = c.name && c.name.toLowerCase().includes(q);
+                // Word-based matching: EVERY typed word must appear somewhere inside the
+                // name or phone, in any order (e.g. "محمد بن" matches "بن محمد علي",
+                // and partial phone digits match anywhere in the number)
+                const words = q.split(/\s+/).filter(w => w.length > 0);
+                const nameLower = (c.name || '').toLowerCase();
                 const dispPhone = getDisplayPhone(c.phone);
-                const matchPhone = (c.phone && c.phone.includes(q)) || (dispPhone && dispPhone.replace(/\s+/g, '').includes(q.replace(/\s+/g, '')));
-                if (!matchName && !matchPhone) return false;
+                const phoneDigits = ((c.phone || '') + ' ' + (dispPhone || '')).replace(/\s+/g, '');
+                const haystack = nameLower + ' ' + phoneDigits;
+                const matched = words.length > 0 && words.every(w => haystack.includes(w));
+                if (!matched) return false;
             } const status = calculateStatus(c);
             const isSession = customerIsSession(c);
             if (appState.filter === 'session') return isSession;
@@ -10145,8 +10153,13 @@ window.setElemRequired = setElemRequired;
             const type = (target.getAttribute('type') || '').toLowerCase();
             const id = (target.id || '').toLowerCase();
             const placeholder = (target.getAttribute('placeholder') || '').toLowerCase();
+            // Search fields must NEVER be sanitized as name fields: their placeholders
+            // contain the word "الاسم" which used to match the rule below and silently
+            // delete digits while typing a phone number or a barcode in the search box
+            const isSearchField = id.includes('search') || type === 'search' || placeholder.includes('بحث');
             // Real-time Name & Nickname restriction (Letters, spaces, hyphens ONLY - strictly NO numbers/symbols)
-            const isNameOrNickname = ( id.includes('nickname') ||
+            const isNameOrNickname = !isSearchField && (
+                id.includes('nickname') ||
                 id.includes('creditname') || id.includes('custname') ||
                 id.includes('editcustname') ||
                 id.includes('staffname') || id.includes('coachname') ||
