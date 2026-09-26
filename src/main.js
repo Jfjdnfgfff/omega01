@@ -6185,32 +6185,81 @@ window.setElemRequired = setElemRequired;
     let html2canvasInstance = null;
     async function loadLocalHtml2Canvas() {
         if (!html2canvasInstance) {
-            const mod = await import('html2canvas');
-            html2canvasInstance = mod.default || mod;
+            // html2canvas-pro: maintained fork that supports Tailwind v4 oklch()/color-mix()
+            // colors (html2canvas 1.4.1 throws "unsupported color function oklch" and fails)
+            const mod = await import('html2canvas-pro');
+            html2canvasInstance = mod.default || mod.html2canvas || mod;
         }
         return html2canvasInstance;
     }
-    async function printFullReport() { const reportElem = document.getElementById('fullReportContent');
+    // Print ONLY the comprehensive financial report modal content (not the whole app page)
+    function printFullReportSheet() {
+        const modal = document.getElementById('fullReportModal');
+        if (!modal) return;
+        const body = document.body;
+        let cleanedUp = false;
+        const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            body.classList.remove('printing-full-report');
+            window.removeEventListener('afterprint', cleanup);
+        };
+        window.addEventListener('afterprint', cleanup);
+        // Safety net for browsers that never fire the 'afterprint' event
+        setTimeout(cleanup, 120000);
+        body.classList.add('printing-full-report');
+        try {
+            window.print();
+        } catch (err) {
+            console.error('Print failed:', err);
+            if (typeof showToast === 'function') showToast('تعذر فتح نافذة الطباعة', 'error');
+        }
+        if (typeof logActivity === 'function') {
+            try { logActivity('system', 'طباعة التقرير المالي الشامل', 'تم فتح نافذة الطباعة للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
+        }
+    }
+    window.printFullReportSheet = printFullReportSheet;
+    // In-app preview of the generated PNG so it can be saved even where direct
+    // downloads are blocked (sandboxed preview iframes, some mobile browsers)
+    function showReportImagePreview(dataUrl, dateStr) {
+        const modal = document.getElementById('reportImageModal');
+        const img = document.getElementById('reportImagePreview');
+        const dlBtn = document.getElementById('reportImageDownloadBtn');
+        if (!modal || !img) return;
+        img.src = dataUrl;
+        if (dlBtn) {
+            dlBtn.onclick = function () {
+                const a = document.createElement('a');
+                a.download = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
+                a.href = dataUrl;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            };
+        }
+        openModal('reportImageModal');
+    }
+    window.showReportImagePreview = showReportImagePreview;
+    async function printFullReport() {
+        const reportElem = document.getElementById('fullReportContent');
         const printBtn = document.getElementById('printReportBtn');
         if (!reportElem) return;
-        let html2canvas = null;
-        try {
-            html2canvas = await loadLocalHtml2Canvas();
-        } catch (e) {
-            console.warn('html2canvas import fallback:', e);
-        }
-        if (!html2canvas) {
-            window.print(); return;
-        } const originalBtnContent = printBtn ? printBtn.innerHTML : '';
-        if (printBtn) { printBtn.disabled = true;
+        const originalBtnContent = printBtn ? printBtn.innerHTML : '';
+        if (printBtn) {
+            printBtn.disabled = true;
             printBtn.innerHTML = `
                 <svg class="w-4 h-4 animate-spin text-white inline-block" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
                 <span>جاري حفظ الصورة...</span>
-            `; } try { const canvas = await html2canvas(reportElem, {
+            `;
+        }
+        try {
+            const html2canvas = await loadLocalHtml2Canvas();
+            if (typeof html2canvas !== 'function') throw new Error('html2canvas-pro failed to load');
+            const canvas = await html2canvas(reportElem, {
                 scale: 2, useCORS: true,
                 backgroundColor: '#ffffff',
                 windowWidth: 1280, width: 1050,
-                scrollX: 0, scrollY: 0, onclone: (clonedDoc) => {
+                scrollX: 0, scrollY: 0, logging: false, onclone: (clonedDoc) => {
                     const clonedReport = clonedDoc.getElementById('fullReportContent');
                     if (clonedReport) {
                         clonedReport.style.width = '1050px';
@@ -6241,19 +6290,41 @@ window.setElemRequired = setElemRequired;
                         div.textContent = text;
                         if (input.parentNode) {
                             input.parentNode.replaceChild(div, input);
-                        } }); } }); const image = canvas.toDataURL("image/png");
+                        } }); }
+            });
+            const image = canvas.toDataURL('image/png');
+            const now = new Date();
+            const dateStr = now.toISOString().split('T')[0];
+            // 1) Direct download attempt
             const link = document.createElement('a');
-            const now = new Date(); const dateStr = now.toISOString().split('T')[0];
             link.download = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
-            link.href = image; document.body.appendChild(link);
-            link.click(); document.body.removeChild(link);
+            link.href = image;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            // 2) In-app preview fallback: lets the user save the image (long-press /
+            //    right-click, or the download button) even if the direct download
+            //    was silently blocked by the browser or a sandboxed iframe
+            showReportImagePreview(image, dateStr);
             if (typeof showSuccessToast === 'function') {
-                showSuccessToast('تم تنزيل التقرير كصورة بنجاح!');
-            } } catch (err) { console.error('Error exporting image:', err);
-            window.print(); } finally { if (printBtn) {
+                showSuccessToast('تم إنشاء صورة التقرير بنجاح!');
+            }
+            if (typeof logActivity === 'function') {
+                try { logActivity('system', 'تصدير التقرير المالي كصورة', 'تم إنشاء صورة PNG للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
+            }
+        } catch (err) {
+            console.error('Error exporting image:', err);
+            const msg = 'فشل إنشاء صورة التقرير، حاول مرة أخرى';
+            if (typeof showErrorToast === 'function') showErrorToast(msg);
+            else if (typeof showToast === 'function') showToast(msg, 'error');
+        } finally {
+            if (printBtn) {
                 printBtn.disabled = false;
                 printBtn.innerHTML = originalBtnContent;
-            } } } window.printFullReport = printFullReport;
+            }
+        }
+    }
+    window.printFullReport = printFullReport;
     function renderFullReport() { const reportContainer = document.getElementById('fullReportContent');
         if (!reportContainer) return; const now = new Date();
         const formattedDate = now.toLocaleDateString('ar-DZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });

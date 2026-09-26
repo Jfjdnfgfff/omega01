@@ -2804,7 +2804,7 @@
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                       تنزيل التقرير كصورة (PNG)
                   </button>
-                  <button type="button" onclick="window.print()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1 transition-colors">
+                  <button type="button" onclick="printFullReportSheet()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1 transition-colors">
                       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                       طباعة </button>
                   <button type="button" onclick="closeModal('fullReportModal')" class="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
@@ -2814,6 +2814,27 @@
           <div id="fullReportContent" class="space-y-6 text-slate-800">
               <!-- Dynamically populated report content -->
           </div> </div> </div>
+  <!-- Report Image Preview Modal (fallback when direct download is blocked by the browser/iframe) -->
+  <div id="reportImageModal" class="modal-overlay" style="z-index: 140;" onclick="handleOverlayClick(event, 'reportImageModal')">
+      <div class="modal-content relative w-full max-w-2xl bg-white p-5 rounded-2xl shadow-2xl my-6 border border-slate-100">
+          <div class="flex items-center justify-between mb-3">
+              <h3 class="text-base font-extrabold text-slate-800 flex items-center gap-2">
+                  <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                  معاينة صورة التقرير
+              </h3>
+              <button type="button" onclick="closeModal('reportImageModal')" class="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors" title="إغلاق">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-slate-50 overflow-auto max-h-[55vh]">
+              <img id="reportImagePreview" alt="صورة التقرير المالي" class="w-full h-auto block" />
+          </div>
+          <p class="text-[11px] text-slate-500 mt-2 text-center font-medium">إذا لم يبدأ التنزيل تلقائياً، اضغط مطولاً على الصورة (أو انقر عليها بالزر الأيمن) واختر «حفظ الصورة».</p>
+          <button type="button" id="reportImageDownloadBtn" class="w-full mt-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 shadow-md shadow-blue-200 transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              تنزيل الصورة (PNG)
+          </button>
+      </div> </div>
   <!-- Global App Confirm Modal -->
   <div id="appConfirmModal" class="modal-overlay" style="z-index: 200;" onclick="handleOverlayClick(event, 'appConfirmModal')">
       <div class="modal-content relative w-full max-w-sm bg-white p-6 rounded-2xl shadow-2xl text-center border border-slate-100">
