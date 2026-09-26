@@ -65,6 +65,7 @@ window.addEventListener('unhandledrejection', (event) => {
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
+  import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse } from './caisse-credit.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -3414,7 +3415,7 @@ window.addEventListener('unhandledrejection', (event) => {
             // Automatically add to Credits section if there's debt
             if (paymentStatus === 'credit' && debtAmount > 0) {
                 if (!appState.credits) appState.credits = [];
-                const newCredit = { id: 'cr_auto_' + Date.now(),
+                const newCredit = { id: 'cr_auto_' + Date.now(), customerId: newCustomer.id,
                     name: custName, nickname: 'مشترك',
                     phone: cleanPhone(custPhone),
                     desc: `دين اشتراك - باقة: ${pkg ? pkg.name : 'باقة'} (${custPrice} دج)`,
@@ -3611,7 +3612,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (customer.debtAmount > 0) { if (!appState.credits) appState.credits = [];
             const autoId = 'cr_auto_' + customer.id;
             const existingCreditIndex = appState.credits.findIndex(c => c.id === autoId);
-            const creditData = { id: autoId,
+            const creditData = { id: autoId, customerId: customer.id,
                 name: customer.name, nickname: 'مشترك',
                 phone: customer.phone, desc: `دين اشتراك - باقة: ${pkg ? pkg.name : 'باقة'} (${customer.price} دج)`,
                 amount: customer.debtAmount,
@@ -3974,6 +3975,7 @@ window.addEventListener('unhandledrejection', (event) => {
         customer.status = 'active';
         customer.paymentStatus = paymentStatus;
         customer.debtAmount = debtAmount;
+        customer.subscriptionCycleId = 'renew_' + Date.now();
         customer.updatedAt = Date.now();
 
         if (subType === 'session') {
@@ -3993,7 +3995,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (!appState.credits) appState.credits = [];
             const autoId = 'cr_auto_' + customer.id + '_' + Date.now();
             const newCredit = {
-                id: autoId,
+                id: autoId, customerId: customer.id,
                 name: customer.name,
                 nickname: 'مشترك (تجديد)',
                 phone: cleanPhone(customer.phone),
@@ -7189,27 +7191,48 @@ window.addEventListener('unhandledrejection', (event) => {
         const targetId = String(id).trim();
         showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
-            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit ? targetCredit.name : targetId}`, targetCredit ? targetCredit.amount : 0);
+            if (!targetCredit) return; // Already settled (e.g. a second confirmation click).
+            const amount = Number(targetCredit.amount);
+            if (!Number.isFinite(amount) || amount <= 0) {
+                showErrorToast('مبلغ الكريدي غير صالح للتسديد');
+                return;
+            }
+            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId}`, amount);
 
-            // If credit is linked to a customer, clear their debt in customers collection
-            if (targetCredit) {
-                const custId = targetCredit.customerId || (targetId.startsWith('cr_auto_') ? targetId.replace('cr_auto_', '') : null);
-                let linkedCust = null;
-                if (custId && Array.isArray(appState.customers)) {
-                    linkedCust = appState.customers.find(c => String(c && c.id) === String(custId));
-                }
-                if (!linkedCust && targetCredit.phone && Array.isArray(appState.customers)) {
-                    const normP = cleanPhone(targetCredit.phone);
-                    if (normP) {
-                        linkedCust = appState.customers.find(c => cleanPhone(c && c.phone) === normP && c.paymentStatus === 'credit');
-                    }
-                }
-                if (linkedCust) {
-                    linkedCust.debtAmount = 0;
-                    linkedCust.paymentStatus = 'paid';
-                    linkedCust.updatedAt = Date.now();
-                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
-                }
+            // Find the subscriber BEFORE clearing their debt so the original day's paid
+            // portion can be preserved separately from today's cash repayment.
+            const customers = Array.isArray(appState.customers) ? appState.customers : [];
+            const linkedCust = customers.find(c => c && (
+                (targetCredit.customerId && String(c.id) === String(targetCredit.customerId)) ||
+                targetId === `cr_auto_${c.id}` || targetId.startsWith(`cr_auto_${c.id}_`)
+            )) || (targetCredit.phone ? customers.find(c => c && c.paymentStatus === 'credit' &&
+                cleanPhone(c.phone) === cleanPhone(targetCredit.phone)) : null);
+            if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
+            // Stable receipt ID makes a repeated settlement idempotent across syncs.
+            if (!appState.caisseLogs.some(l => l.type === 'credit_payment' && String(l.creditId) === String(targetCredit.id || targetId))) {
+                const subscriptionDate = linkedCust && linkedCust.paymentStatus === 'credit'
+                    ? getLocalDateString(linkedCust.startDate) : '';
+                const pkg = linkedCust ? getPackageById(linkedCust.packageId) : null;
+                const price = linkedCust ? ((linkedCust.price !== undefined && linkedCust.price !== null && linkedCust.price !== '')
+                    ? Number(linkedCust.price) : Number(pkg?.price || 0)) : 0;
+                const payment = {
+                    id: 'credit_payment_' + cleanKey(targetCredit.id || targetId), type: 'credit_payment',
+                    creditId: targetCredit.id || targetId, creditName: targetCredit.name || '',
+                    amount, date: new Date().toISOString(),
+                    ...(subscriptionDate ? {
+                        customerId: linkedCust.id, subscriptionDate,
+                        subscriptionCycleId: linkedCust.subscriptionCycleId || null,
+                        subscriptionPaidBeforeSettlement: Math.max(0, price - Number(linkedCust.debtAmount || 0))
+                    } : {})
+                };
+                appState.caisseLogs.unshift(payment);
+                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', payment);
+            }
+            if (linkedCust) {
+                linkedCust.debtAmount = 0;
+                linkedCust.paymentStatus = 'paid';
+                linkedCust.updatedAt = Date.now();
+                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
             }
 
             if (typeof window.registerDeletedItemId === 'function') {
@@ -10151,6 +10174,9 @@ window.addEventListener('unhandledrejection', (event) => {
         const targetDateStr = getLocalDateString(targetDateInput) || getLocalDateString(new Date());
         let subIncome = 0; let quickIncome = 0;
         let salesIncome = 0;
+        const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
+        const creditPayments = creditPaymentsOnDate(logs, targetDateStr, getLocalDateString);
+        const creditIncome = creditPayments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
         // 1. Subscriptions paid on that specific date
         if (Array.isArray(appState.customers)) {
             appState.customers.forEach(c => { if (!c) return;
@@ -10158,11 +10184,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 if (cDateStr === targetDateStr) {
                     const pkg = getPackageById(c.packageId);
                     const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
-                    let paid = 0; if (c.paymentStatus === 'paid') paid = price;
-                    else if (c.paymentStatus === 'credit') {
-                        const debt = Number(c.debtAmount || 0);
-                        paid = Math.max(0, price - debt);
-                    } subIncome += paid; } }); }
+                    subIncome += subscriptionPaidForCaisse(c, price, logs, getLocalDateString); } }); }
         // 2. Quick sessions on that specific date
         if (Array.isArray(appState.quickSessions)) {
             appState.quickSessions.forEach(qs => {
@@ -10183,10 +10205,9 @@ window.addEventListener('unhandledrejection', (event) => {
             window.appState.v2Stats.daily[targetDateStr]) {
             salesIncome = Number(window.appState.v2Stats.daily[targetDateStr].sales) || 0;
         }
-        const totalIncome = subIncome + quickIncome + salesIncome;
-        // Check if a closing log exists for this date
-        const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
-        const log = logs.find(l => getLocalDateString(l.date) === targetDateStr);
+        const totalIncome = subIncome + quickIncome + salesIncome + creditIncome;
+        // Repayment receipts are not clôture records.
+        const log = logs.find(l => isCaisseClosing(l) && getLocalDateString(l.date) === targetDateStr);
         const isClosed = Boolean(log); const actualAmount = isClosed ? Number(log.actualAmount || 0) : null;
         const difference = isClosed ? (actualAmount - totalIncome) : 0;
         const manque = (isClosed && difference < 0) ? Math.abs(difference) : 0;
@@ -10194,7 +10215,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const cashier = isClosed ? (log.cashier || '') : '';
         const notes = isClosed ? (log.notes || '') : '';
         return { targetDateStr, subIncome,
-            quickIncome, salesIncome,
+            quickIncome, salesIncome, creditIncome, creditPayments,
             totalIncome, log, isClosed,
             actualAmount, difference, manque,
             excedent, cashier, notes }; } window.calculateCaisseDetails = calculateCaisseDetails;
@@ -10205,7 +10226,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let currentMonthExcedent = 0; let currentYearManque = 0;
         let currentYearExcedent = 0; let allTimeManque = 0;
         let allTimeExcedent = 0; logs.forEach(log => {
-            if (!log || !log.date) return; const d = new Date(log.date);
+            if (!isCaisseClosing(log) || !log.date) return; const d = new Date(log.date);
             if (isNaN(d.getTime())) return;
             // Compute exact expected income for that log's date to ensure accuracy
             const details = calculateCaisseDetails(log.date);
@@ -10308,12 +10329,13 @@ window.addEventListener('unhandledrejection', (event) => {
         const details = calculateCaisseDetails(dateVal);
         const difference = actualAmount - details.totalIncome;
         if (!Array.isArray(appState.caisseLogs)) {
-            appState.caisseLogs = []; } const existingIdx = appState.caisseLogs.findIndex(l => getLocalDateString(l.date) === dateVal);
+            appState.caisseLogs = []; } const existingIdx = appState.caisseLogs.findIndex(l => isCaisseClosing(l) && getLocalDateString(l.date) === dateVal);
         const logEntry = { id: existingIdx !== -1 ? appState.caisseLogs[existingIdx].id : 'caisse_' + Date.now(),
-            date: dateVal, expectedIncome: details.totalIncome,
+            type: 'closing', date: dateVal, expectedIncome: details.totalIncome,
             subIncome: details.subIncome,
             quickIncome: details.quickIncome,
             salesIncome: details.salesIncome,
+            creditIncome: details.creditIncome,
             actualAmount: actualAmount,
             difference: difference, cashier: cashier,
             notes: notes, savedAt: new Date().toISOString()
@@ -10325,7 +10347,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('caisseLogs', logEntry);
         }
-        if (typeof logActivity === 'function') logActivity('caisse', 'جرد وإغلاق الخزينة', `تاريخ الجرد: ${dateVal} - المبلغ الفعلي: ${finalActual.toLocaleString()} دج`, finalActual);
+        if (typeof logActivity === 'function') logActivity('caisse', 'جرد وإغلاق الخزينة', `تاريخ الجرد: ${dateVal} - المبلغ الفعلي: ${actualAmount.toLocaleString()} دج`, actualAmount);
         saveState(); renderCaisseView();
         render(); } window.handleCaisseClotureSubmit = handleCaisseClotureSubmit;
     function deleteCaisseLog(logId) { if (!logId) return;
@@ -10375,6 +10397,11 @@ window.addEventListener('unhandledrejection', (event) => {
             setElemHTML('caisseDaySubIncome', formatMoney(details.subIncome));
             setElemHTML('caisseDayQuickIncome', formatMoney(details.quickIncome));
             setElemHTML('caisseDaySalesIncome', formatMoney(details.salesIncome));
+            setElemHTML('caisseDayCreditIncome', formatMoney(details.creditIncome));
+            const paymentList = document.getElementById('caisseDayCreditPaymentsList');
+            if (paymentList) paymentList.innerHTML = details.creditPayments.length
+                ? details.creditPayments.map(p => `<li class="flex justify-between gap-3"><span>${escapeHTML(p.creditName || 'كريدي')}</span><strong>${formatMoney(Number(p.amount) || 0)}</strong></li>`).join('')
+                : '<li>لا توجد تسديدات كريدي لهذا اليوم</li>';
         } const actualElem = document.getElementById('caisseDayActualAmount');
         const statusBadgeElem = document.getElementById('caisseDayStatusBadge');
         if (actualElem) { if (details.isClosed) {
@@ -10454,7 +10481,7 @@ window.addEventListener('unhandledrejection', (event) => {
         // 5. Caisse Closings History Table
         const historyBody = document.getElementById('caisseHistoryTableBody');
         const historyBadge = document.getElementById('caisseHistoryCountBadge');
-        const logs = Array.isArray(appState.caisseLogs) ? [...appState.caisseLogs] : [];
+        const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs.filter(isCaisseClosing) : [];
         if (historyBadge) { historyBadge.textContent = `${logs.length} عملية جرد`;
         } if (historyBody) { if (logs.length === 0) {
                 historyBody.innerHTML = `
