@@ -245,3 +245,40 @@ table {
   }
 }
 
+/* Print ONLY the comprehensive financial report (body.printing-full-report is set by printFullReportSheet) */
+@media print {
+  body.printing-full-report > *:not(#appContainer),
+  body.printing-full-report #appContainer > *:not(#fullReportModal) {
+    display: none !important;
+  }
+  body.printing-full-report #fullReportModal {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    z-index: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    opacity: 1 !important;
+  }
+  body.printing-full-report #fullReportModal .modal-content {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  body.printing-full-report #fullReportModal .no-print {
+    display: none !important;
+  }
+  body.printing-full-report #fullReportContent {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+}
+
