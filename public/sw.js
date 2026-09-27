@@ -3,6 +3,11 @@ const CACHE_NAME = 'omega-gym-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/manifest.json',
+  '/apple-touch-icon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon.svg',
   'https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap'
 ];
 
