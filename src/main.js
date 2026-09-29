@@ -5947,14 +5947,50 @@ window.addEventListener('unhandledrejection', (event) => {
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
 
+    // Current sale total for the selected product/qty/custom price (used by the credit split preview).
+    function getCurrentProductSaleTotal() {
+        const prodId = getElemVal('sellProdId');
+        const product = appState.products ? appState.products.find(p => String(p.id) === String(prodId)) : null;
+        if (!product) return 0;
+        const qty = parseFloat(getElemVal('sellProdQty')) || 1;
+        const priceDetails = getProductSalePriceDetails(product);
+        const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
+        return Math.round(unitPrice * qty * 100) / 100;
+    }
+
+    // Live preview: total / paid now (versé) / remaining credit.
+    window.updateProductCreditSplit = function() {
+        const total = getCurrentProductSaleTotal();
+        const paidInput = document.getElementById('sellCreditPaidNow');
+        let paid = parseFloat(paidInput ? paidInput.value : 0) || 0;
+        if (paid < 0) paid = 0;
+        if (paidInput && total > 0 && paid > total) { paid = total; paidInput.value = String(total); }
+        if (paidInput) paidInput.max = String(total || '');
+        const remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
+        const totalEl = document.getElementById('sellCreditTotalDisplay');
+        const remEl = document.getElementById('sellCreditRemainingDisplay');
+        const hint = document.getElementById('sellCreditSplitHint');
+        if (totalEl) totalEl.textContent = `${total.toLocaleString()} دج`;
+        if (remEl) remEl.textContent = `${remaining.toLocaleString()} دج`;
+        if (hint) {
+            if (total > 0 && remaining === 0) hint.textContent = 'المبلغ مدفوع بالكامل — سيُسجل البيع نقداً بدون كريدي.';
+            else hint.textContent = `يدخل الصندوق الآن: ${paid.toLocaleString()} دج — يُسجل كريدي: ${remaining.toLocaleString()} دج`;
+        }
+    };
+
     window.toggleProductSaleCreditFields = function() {
         const isCredit = getElemVal('sellPaymentMethod') === 'credit';
         const fields = document.getElementById('sellCreditFields');
         const nameInput = document.getElementById('sellCreditName');
         if (fields) fields.classList.toggle('hidden', !isCredit);
         if (nameInput) nameInput.required = isCredit;
+        if (isCredit) window.updateProductCreditSplit();
     };
     window.toggleProductSaleCreditFields();
+    ['sellProdId', 'sellProdQty', 'sellCustomPrice'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.addEventListener('input', () => window.updateProductCreditSplit()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
+    });
 
     function getProductSalePaymentInfo(total) {
         const isCredit = getElemVal('sellPaymentMethod') === 'credit';
@@ -5966,10 +6002,27 @@ window.addEventListener('unhandledrejection', (event) => {
             };
         }
 
-        const creditAmount = Number(total);
-        if (!Number.isFinite(creditAmount) || creditAmount <= 0) {
+        const saleTotalNum = Number(total);
+        if (!Number.isFinite(saleTotalNum) || saleTotalNum <= 0) {
             showErrorToast('لا يمكن تسجيل كريدي بمبلغ غير صالح أو يساوي صفراً');
             return null;
+        }
+        // Split: paid now (versé) goes to the caisse, the remainder becomes the credit.
+        let paidNow = parseFloat(getElemVal('sellCreditPaidNow')) || 0;
+        if (paidNow < 0 || !Number.isFinite(paidNow)) paidNow = 0;
+        if (paidNow > saleTotalNum) {
+            showErrorToast('المبلغ المدفوع الآن لا يمكن أن يتجاوز المبلغ الكلي للبيع');
+            document.getElementById('sellCreditPaidNow')?.focus();
+            return null;
+        }
+        const creditAmount = Math.round((saleTotalNum - paidNow) * 100) / 100;
+        if (creditAmount <= 0) {
+            // Fully paid: record as a normal cash sale.
+            return {
+                paymentStatus: 'paid', paymentMethod: 'cash',
+                cashPaid: saleTotalNum, creditAmount: 0,
+                customerName: '', customerPhone: ''
+            };
         }
         const customerNameInput = getElemVal('sellCreditName').trim();
         const rawPhone = getElemVal('sellCreditPhone').trim();
@@ -5988,8 +6041,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const customerName = nameValidation.value;
         const customerPhone = phoneValidation.value;
         return {
-            paymentStatus: 'credit', paymentMethod: 'credit',
-            cashPaid: 0, creditAmount,
+            paymentStatus: 'credit', paymentMethod: paidNow > 0 ? 'mixed' : 'credit',
+            cashPaid: paidNow, creditAmount,
             customerName, customerPhone
         };
     }
@@ -6006,7 +6059,10 @@ window.addEventListener('unhandledrejection', (event) => {
             name: sale.customerName || 'زبون مبيعات',
             nickname: 'زبون',
             phone: sale.customerPhone || '',
-            desc: `دين بيع منتج: ${sale.prodName || 'منتج'} × ${Number(sale.qty || 1)}`,
+            desc: `دين بيع منتج: ${sale.prodName || 'منتج'} × ${Number(sale.qty || 1)}` +
+                (Number(sale.cashPaid) > 0 ? ` (الكلي ${Number(sale.total).toLocaleString()} دج - مدفوع ${Number(sale.cashPaid).toLocaleString()} دج)` : ''),
+            saleTotal: Number(sale.total) || 0,
+            paidAtSale: Number(sale.cashPaid) || 0,
             amount: Number(sale.creditAmount ?? sale.total) || 0,
             date: sale.date || new Date().toISOString(),
             status: 'open'
@@ -6102,7 +6158,11 @@ window.addEventListener('unhandledrejection', (event) => {
         } updateSellProductDropdown();
         updateStockInfoDisplay();
         if (paymentInfo.paymentStatus === 'credit') {
-            showSuccessToast(`تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
+            const paidPart = Number(paymentInfo.cashPaid) || 0;
+            const creditPart = Number(paymentInfo.creditAmount) || 0;
+            showSuccessToast(paidPart > 0
+                ? `تم البيع: الكلي ${saleTotal.toLocaleString()} دج — دُفع الآن ${paidPart.toLocaleString()} دج (أُضيف للصندوق) — الباقي ${creditPart.toLocaleString()} دج سُجل كريدي`
+                : `تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
         } else {
             showSuccessToast(`تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
