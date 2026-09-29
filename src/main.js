@@ -4130,6 +4130,17 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(y) : y.toISOString().split('T')[0];
         }
     };
+    // Confirms to the user that the expense was deducted from that day's caisse (shows the new expected balance).
+    window.expenseCaisseToast = function(amount, isoDate, label) {
+        try {
+            const dayKey = getLocalDateString(isoDate);
+            const todayKey = getLocalDateString(new Date());
+            const details = (typeof window.calculateCaisseDetails === 'function') ? window.calculateCaisseDetails(dayKey) : null;
+            const dayLabel = dayKey === todayKey ? 'صندوق اليوم' : `صندوق يوم ${dayKey}`;
+            const net = details ? formatMoney(details.netCash) : '';
+            showSuccessToast(`تم تسجيل المصروف ${Number(amount).toLocaleString()} دج (${label}) وخصمه من ${dayLabel}${net ? ` — الرصيد المتوقع الآن: ${net}` : ''}`);
+        } catch (e) { showSuccessToast(`تم تسجيل المصروف بنجاح (${label})`); }
+    };
     window.createSafeExpenseISO = function(dateVal) {
         if (!dateVal) return new Date().toISOString();
         if (dateVal.includes('T')) return new Date(dateVal).toISOString();
@@ -4212,7 +4223,7 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        showSuccessToast(`تم تسجيل المصروف بنجاح (${catDetails.label})`);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label);
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
@@ -4839,6 +4850,16 @@ window.addEventListener('unhandledrejection', (event) => {
             else if (cat === 'fixed_monthly') fixedTotal += amt;
             else generalTotal += amt; });
         // Update Statistics in DOM
+        // Live caisse balance for today, so the user sees each expense leaving the till immediately.
+        try {
+            const netElem = document.getElementById('expensesCaisseNetToday');
+            if (netElem && typeof window.calculateCaisseDetails === 'function') {
+                const cd = window.calculateCaisseDetails(getLocalDateString(new Date()));
+                netElem.innerHTML = formatMoney(cd.netCash);
+                const outElem = document.getElementById('expensesCaisseOutToday');
+                if (outElem) outElem.innerHTML = formatMoney(cd.totalExpenses);
+            }
+        } catch (e) { console.warn('expenses caisse card note:', e); }
         const todayElem = document.getElementById('todayExpenses');
         const weekElem = document.getElementById('weekExpenses');
         const monthElem = document.getElementById('monthExpenses');
@@ -4983,7 +5004,7 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        showSuccessToast(`تم إضافة المصروف بنجاح (${catDetails.label})`);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label);
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
