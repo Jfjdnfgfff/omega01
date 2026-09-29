@@ -3284,6 +3284,7 @@ window.addEventListener('unhandledrejection', (event) => {
             staffName: name,
             type: 'عمولة الإناث (33%)',
             amount: amount,
+            fundSource: getElemVal('femalePayoutFundSource') === 'general' ? 'general' : 'daily',
             date: typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0],
             notes: notes || 'تسديد مستحقات قسم الإناث (33%)',
             createdAt: new Date().toISOString()
@@ -4131,11 +4132,13 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     };
     // Confirms to the user that the expense was deducted from that day's caisse (shows the new expected balance).
-    window.expenseCaisseToast = function(amount, isoDate, label) {
+    window.expenseCaisseToast = function(amount, isoDate, label, fundSource) {
         try {
             const dayKey = getLocalDateString(isoDate);
             const todayKey = getLocalDateString(new Date());
             const details = (typeof window.calculateCaisseDetails === 'function') ? window.calculateCaisseDetails(dayKey) : null;
+            const fromGeneral = fundSource === 'general';
+            if (fromGeneral) { showSuccessToast(`تم تسجيل المصروف ${Number(amount).toLocaleString()} دج (${label}) وخصمه من الصندوق العام — لا يؤثر على رصيد اليوم`); return; }
             const dayLabel = dayKey === todayKey ? 'صندوق اليوم' : `صندوق يوم ${dayKey}`;
             const net = details ? formatMoney(details.netCash) : '';
             showSuccessToast(`تم تسجيل المصروف ${Number(amount).toLocaleString()} دج (${label}) وخصمه من ${dayLabel}${net ? ` — الرصيد المتوقع الآن: ${net}` : ''}`);
@@ -4209,7 +4212,8 @@ window.addEventListener('unhandledrejection', (event) => {
         desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
         const isoDate = window.createSafeExpenseISO(dateVal);
-        const newExp = { id: Date.now().toString(),
+        const fundSource = getElemVal('expenseFundSourceModal') === 'general' ? 'general' : 'daily';
+        const newExp = { id: Date.now().toString(), fundSource,
             desc: desc, amount: amount, category: category,
             date: isoDate
         };
@@ -4223,7 +4227,7 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        window.expenseCaisseToast(amount, isoDate, catDetails.label);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label, fundSource);
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
@@ -4256,6 +4260,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${catDetails.badgeClass}">
                                 ${catDetails.icon} ${catDetails.label}
                             </span>
+                            ${(ex.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                         </div>
                         <div class="text-xs font-bold text-slate-700" dir="ltr" style="text-align: right;">
                             <span class="text-slate-400 font-medium">${dateFormatted}</span> - <span class="text-slate-900 font-black">${Number(ex.amount || 0).toLocaleString()} دج</span>
@@ -4953,6 +4958,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 <span>${catDetails.icon}</span>
                                 <span>${catDetails.label}</span>
                             </span>
+                            ${(ex.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                             <span class="text-xs font-bold text-slate-400 font-mono">${dateFormatted}</span>
                         </div>
                         <div class="font-black text-slate-800 text-sm sm:text-base break-words mt-0.5">${safeDesc}</div>
@@ -4990,8 +4996,9 @@ window.addEventListener('unhandledrejection', (event) => {
         desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
         const isoDate = window.createSafeExpenseISO(dateVal);
+        const fundSource = getElemVal('expenseFundSourceView') === 'general' ? 'general' : 'daily';
         const newExp = { id: Date.now().toString(),
-            desc: desc, amount: amount, category: category,
+            desc: desc, amount: amount, category: category, fundSource,
             date: isoDate };
         appState.expenses.push(newExp);
         if (typeof logActivity === 'function') logActivity('expense', 'تسجيل مصروف جديد', `البيان: ${desc} - الفئة: ${category}`, amount);
@@ -5004,7 +5011,7 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        window.expenseCaisseToast(amount, isoDate, catDetails.label);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label, fundSource);
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
@@ -6293,6 +6300,8 @@ window.addEventListener('unhandledrejection', (event) => {
         if (amountInput) amountInput.value = item.amount || item.price || '';
         const typeInput = document.getElementById('staffPayoutType');
         if (typeInput && item.type) typeInput.value = item.type;
+        const fundInput = document.getElementById('staffPayoutFundSource');
+        if (fundInput) fundInput.value = item.fundSource === 'general' ? 'general' : 'daily';
         const dateInput = document.getElementById('staffPayoutDate');
         if (dateInput) {
             const dStr = item.date || item.payoutDate || '';
@@ -11921,6 +11930,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="font-extrabold text-slate-900 text-sm truncate">${pName}</span>
                             <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${pType}</span>
+                            ${(p.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                             <span class="text-[11px] text-slate-400 font-medium">${dateStr}</span>
                         </div>
                         ${pNotes ? `<div class="text-xs text-slate-500 font-medium truncate mt-0.5">${pNotes}</div>` : ''}
@@ -11988,6 +11998,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     staffName: name,
                     type,
                     amount,
+                    fundSource: getElemVal('staffPayoutFundSource') === 'general' ? 'general' : 'daily',
                     date: dateStr,
                     notes,
                     updatedAt: new Date().toISOString()
@@ -12006,6 +12017,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 staffName: name,
                 type: type,
                 amount: amount,
+                fundSource: getElemVal('staffPayoutFundSource') === 'general' ? 'general' : 'daily',
                 date: dateStr,
                 notes: notes,
                 createdAt: new Date().toISOString()

@@ -114,3 +114,22 @@ test('product sales on credit reduce no cash until repayment is recorded', () =>
     assert.equal(afterRepayment.totalIncome, 3100);
     assert.equal(afterRepayment.transactions.some(transaction => transaction.source === 'creditPayment' && transaction.amount === 2500), true);
 });
+
+test('expenses and payouts paid from the general fund do not touch the daily till', () => {
+    const dateKey = value => String(value || '').slice(0, 10);
+    const today = '2026-09-29';
+    const result = buildCaisseMovements({
+        sales: [{ id: 's1', total: 10000, date: today }],
+        expenses: [
+            { id: 'e1', amount: 500, date: today, fundSource: 'daily' },
+            { id: 'e2', amount: 4000, date: today, fundSource: 'general' }
+        ],
+        staffPayouts: [
+            { id: 'p1', amount: 1000, date: today },
+            { id: 'p2', amount: 9000, date: today, fundSource: 'general' }
+        ]
+    }, today, dateKey);
+    assert.equal(result.expenses, 500);
+    assert.equal(result.staffPayouts, 1000);
+    assert.equal(result.netCash, 8500);
+});

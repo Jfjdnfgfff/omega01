@@ -166,9 +166,12 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
         });
     });
 
+    // Movements marked as paid from the general fund never touch the daily till.
+    const fromGeneralFund = item => item && item.fundSource === 'general';
+
     // General expenses.
     asArray(state.expenses).forEach((expense, index) => {
-        if (!expense) return;
+        if (!expense || fromGeneralFund(expense)) return;
         const expenseId = expense.id || expense._rtdbKey || index;
         pushMovement({
             id: `expense_${expenseId}`,
@@ -184,7 +187,7 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
 
     // Salaries, coach commissions and other staff payouts.
     asArray(state.staffPayouts).forEach((payout, index) => {
-        if (!payout) return;
+        if (!payout || fromGeneralFund(payout)) return;
         const payoutId = payout.id || payout._rtdbKey || index;
         pushMovement({
             id: `staffPayout_${payoutId}`,

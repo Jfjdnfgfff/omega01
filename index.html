@@ -1475,6 +1475,13 @@
                           <label for="expenseAmountView" class="block text-xs text-slate-700 mb-1 font-bold">المبلغ (دج) *</label>
                           <input type="number" id="expenseAmountView" required min="1" step="1" placeholder="0 دج" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-900" dir="ltr" style="text-align: right;">
                       </div>
+<div>
+    <label for="expenseFundSourceView" class="block text-[10px] text-slate-700 font-bold mb-1">الخصم من</label>
+    <select id="expenseFundSourceView" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-900">
+        <option value="daily">صندوق اليوم (يُخصم من رصيد اليوم)</option>
+        <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
+    </select>
+</div>
                       <div>
                           <div class="flex items-center justify-between mb-1">
                               <label for="expenseDateView" class="block text-xs text-slate-700 font-bold">تاريخ المصروف *</label>
@@ -1862,6 +1869,13 @@
                               <label class="block text-[11px] font-bold text-blue-700 mb-1">المبلغ (دج) *</label>
                               <input type="number" id="staffPayoutAmount" required min="1" placeholder="مثال: 30000" class="w-full border border-blue-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 font-bold text-blue-700 transition-all">
                           </div>
+<div>
+    <label for="staffPayoutFundSource" class="block text-[10px] text-slate-700 font-bold mb-1">الخصم من</label>
+    <select id="staffPayoutFundSource" class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 font-bold text-slate-800">
+        <option value="daily">صندوق اليوم (يُخصم من رصيد اليوم)</option>
+        <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
+    </select>
+</div>
                           <div>
                               <label class="block text-[10px] font-bold text-slate-500 mb-0.5">تاريخ المعاملة</label>
                               <input type="date" id="staffPayoutDate" required class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 font-medium text-slate-800 transition-all">
@@ -2235,6 +2249,13 @@
                       <label for="expenseAmountModal" class="block text-xs text-slate-700 mb-1 font-bold">المبلغ (دج) *</label>
                       <input type="number" id="expenseAmountModal" required min="1" step="1" placeholder="0 دج" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-900" dir="ltr" style="text-align: right;">
                   </div>
+<div>
+    <label for="expenseFundSourceModal" class="block text-[10px] text-slate-700 font-bold mb-1">الخصم من</label>
+    <select id="expenseFundSourceModal" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white outline-none focus:border-blue-500 font-bold text-slate-900">
+        <option value="daily">صندوق اليوم (يُخصم من رصيد اليوم)</option>
+        <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
+    </select>
+</div>
                   <!-- Expense Date -->
                   <div>
                       <div class="flex items-center justify-between mb-1">
@@ -2719,7 +2740,11 @@
               </div>
               <div class="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
                   <div class="relative flex-1 min-w-0">
-                      <input type="number" id="femalePayoutAmountInput" placeholder="أدخل المبلغ المسدد (دج)..." class="w-full bg-white text-slate-900 border-0 rounded-xl px-3.5 py-2.5 text-sm font-bold placeholder-slate-400 outline-none shadow-sm">
+<select id="femalePayoutFundSource" class="w-full bg-white text-slate-900 border-0 rounded-xl px-3.5 py-2 text-xs font-bold outline-none shadow-sm mb-2" title="الخصم من">
+                          <option value="daily">الخصم من صندوق اليوم</option>
+                          <option value="general">الخصم من الصندوق العام (لا يؤثر على رصيد اليوم)</option>
+                      </select>
+                                            <input type="number" id="femalePayoutAmountInput" placeholder="أدخل المبلغ المسدد (دج)..." class="w-full bg-white text-slate-900 border-0 rounded-xl px-3.5 py-2.5 text-sm font-bold placeholder-slate-400 outline-none shadow-sm">
                       <span class="absolute left-3 top-2.5 text-xs font-bold text-slate-400">دج</span>
                   </div>
                   <input type="text" id="femalePayoutNotesInput" placeholder="ملاحظات (مثال: مستحقات شهر 09)..." class="flex-1 bg-white/10 text-white placeholder-purple-200 border border-white/20 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none">
