@@ -7417,6 +7417,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             <span class="inline-flex items-center px-2.5 py-1 rounded-xl bg-slate-100 border border-slate-200/90 text-slate-800 font-black text-xs sm:text-sm tracking-tight shadow-2xs" dir="ltr">
                                 ${amountNum.toLocaleString()} دج
                             </span>
+                            ${Number(cr.paidTotal) > 0 ? `<div class="text-[10px] text-blue-700 font-bold mt-1 text-left" dir="rtl">سُدد: ${Number(cr.paidTotal).toLocaleString()} / ${Number(cr.originalAmount || (amountNum + Number(cr.paidTotal))).toLocaleString()} دج</div>` : ''}
                         </div>
                     </div>
 
@@ -7435,7 +7436,11 @@ window.addEventListener('unhandledrejection', (event) => {
                             <button type="button" onclick="openEditCreditModal('${safeId}')" class="w-7 h-7 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center justify-center transition-colors shadow-2xs" title="تعديل">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                             </button>
-                            <button type="button" onclick="settleCredit('${safeId}')" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي">
+                            <button type="button" onclick="openPartialCreditModal('${safeId}')" class="h-7 px-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد جزء من الكريدي">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
+                                <span>تسديد جزء</span>
+                            </button>
+                            <button type="button" onclick="settleCredit('${safeId}')" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي بالكامل">
                                 <svg class="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-blue-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                                 <span>تسديد</span>
                             </button>
@@ -7481,9 +7486,96 @@ window.addEventListener('unhandledrejection', (event) => {
             renderCreditsList();
         }, 120);
     } window.handleCreditSearch = handleCreditSearch;
-    function settleCredit(id) { if (!id || !Array.isArray(appState.credits)) return;
+    function findCreditById(id) {
+        const targetId = String(id || '').trim();
+        return (Array.isArray(appState.credits) ? appState.credits : []).find(c => c && (String(c.id).trim() === targetId || String(c._rtdbKey || '').trim() === targetId)) || null;
+    }
+    window.openPartialCreditModal = function(id) {
+        const cr = findCreditById(id);
+        if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return; }
+        setElemValue('partialCreditId', cr.id || id);
+        const nameEl = document.getElementById('partialCreditName');
+        if (nameEl) nameEl.textContent = `${cr.name || 'بدون اسم'} — ${cr.desc || ''}`;
+        const amountInput = document.getElementById('partialCreditAmount');
+        if (amountInput) { amountInput.value = ''; amountInput.max = String(Number(cr.amount) || 0); }
+        window.updatePartialCreditPreview();
+        openModal('partialCreditModal');
+        setTimeout(() => amountInput && amountInput.focus(), 150);
+    };
+    window.updatePartialCreditPreview = function() {
+        const cr = findCreditById(getElemVal('partialCreditId'));
+        const current = cr ? Number(cr.amount) || 0 : 0;
+        const paid = Math.max(0, parseFloat(getElemVal('partialCreditAmount')) || 0);
+        const after = Math.max(0, current - paid);
+        const curEl = document.getElementById('partialCreditCurrent');
+        const afterEl = document.getElementById('partialCreditAfter');
+        if (curEl) curEl.textContent = `${current.toLocaleString()} دج`;
+        if (afterEl) {
+            afterEl.textContent = paid >= current && current > 0 ? 'خالص ✓' : `${after.toLocaleString()} دج`;
+            afterEl.className = 'block text-base font-black ' + (paid >= current && current > 0 ? 'text-blue-700' : 'text-slate-800');
+        }
+    };
+    window.submitPartialCreditPayment = function(e) {
+        if (e && e.preventDefault) e.preventDefault();
+        const creditId = getElemVal('partialCreditId');
+        const cr = findCreditById(creditId);
+        if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return false; }
+        const current = Number(cr.amount) || 0;
+        const paid = Math.round((parseFloat(getElemVal('partialCreditAmount')) || 0) * 100) / 100;
+        if (!Number.isFinite(paid) || paid <= 0) { showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0'); return false; }
+        if (paid > current) { showErrorToast(`المبلغ المسدد (${paid.toLocaleString()}) أكبر من الباقي (${current.toLocaleString()})`); return false; }
+        closeModal('partialCreditModal');
+        if (paid >= current) {
+            // Paying the full remainder = full settlement.
+            settleCredit(cr.id || creditId, true);
+            return false;
+        }
+        const remaining = Math.round((current - paid) * 100) / 100;
+        const customers = Array.isArray(appState.customers) ? appState.customers : [];
+        const linkedCust = linkedCustomerForCredit(cr, customers, cr.id || creditId, cleanPhone);
+        if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
+        let subscriptionExtra = {};
+        if (linkedCust && linkedCust.paymentStatus === 'credit') {
+            const pkg = getPackageById(linkedCust.packageId);
+            const price = (linkedCust.price !== undefined && linkedCust.price !== null && linkedCust.price !== '')
+                ? Number(linkedCust.price) : Number(pkg?.price || 0);
+            subscriptionExtra = {
+                customerId: linkedCust.id, subscriptionDate: getLocalDateString(linkedCust.startDate),
+                subscriptionCycleId: linkedCust.subscriptionCycleId || null,
+                subscriptionPaidBeforeSettlement: Math.max(0, price - Number(linkedCust.debtAmount || 0))
+            };
+            linkedCust.debtAmount = Math.max(0, Number(linkedCust.debtAmount || 0) - paid);
+            linkedCust.updatedAt = Date.now();
+            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
+        }
+        const payment = {
+            id: 'credit_payment_' + cleanKey(cr.id || creditId) + '_' + Date.now(), type: 'credit_payment',
+            creditId: cr.id || creditId, creditName: cr.name || '', partial: true,
+            amount: paid, remainingAfter: remaining, date: new Date().toISOString(),
+            notes: `تسديد جزئي — الباقي ${remaining.toLocaleString()} دج`,
+            ...subscriptionExtra
+        };
+        appState.caisseLogs.unshift(payment);
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', payment);
+
+        if (!cr.originalAmount) cr.originalAmount = current + (Number(cr.paidTotal) || 0);
+        cr.paidTotal = Math.round(((Number(cr.paidTotal) || 0) + paid) * 100) / 100;
+        cr.amount = remaining;
+        cr.lastPaymentDate = payment.date;
+        cr.payments = Array.isArray(cr.payments) ? cr.payments : [];
+        cr.payments.push({ amount: paid, date: payment.date });
+        cr.updatedAt = Date.now();
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('credits', cr);
+        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج — الباقي ${remaining.toLocaleString()} دج`, paid);
+        saveState();
+        showSuccessToast(`تم تسديد ${paid.toLocaleString()} دج وإضافتها للصندوق — الباقي على ${cr.name || 'الزبون'}: ${remaining.toLocaleString()} دج`);
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
+        renderCreditsList(); render();
+        return false;
+    };
+    function settleCredit(id, skipConfirm) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
-        showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
+        const doSettle = function() {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (!targetCredit) return; // Already settled (e.g. a second confirmation click).
             const amount = Number(targetCredit.amount);
@@ -7538,8 +7630,11 @@ window.addEventListener('unhandledrejection', (event) => {
                 }
             }
             saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
+            if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
             renderCreditsList(); render(); // Update dashboard totals
-        }, { title: 'تسديد الكريدي', confirmText: 'نعم، تم التسديد',
+        };
+        if (skipConfirm === true) { doSettle(); return; }
+        showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي بالكامل وإزالته من القائمة؟', doSettle, { title: 'تسديد الكريدي بالكامل', confirmText: 'نعم، تم التسديد',
             isDanger: false }); } function handleAddCreditSubmit(e) {
         if (e && e.preventDefault) e.preventDefault();
         let name = getElemVal('creditName').trim();

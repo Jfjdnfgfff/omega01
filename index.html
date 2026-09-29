@@ -2975,6 +2975,38 @@
               <button type="button" id="appConfirmOkBtn" class="flex-1 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl text-sm font-bold shadow-md shadow-slate-300 transition-all">تأكيد الحذف</button>
               <button type="button" onclick="closeModal('appConfirmModal')" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-all">إلغاء</button>
           </div> </div> </div>
+  <!-- Partial Credit Payment Modal -->
+  <div id="partialCreditModal" class="modal-overlay" style="z-index: 200;" onclick="handleOverlayClick(event, 'partialCreditModal')">
+      <div class="modal-content relative w-full max-w-sm bg-white p-5 sm:p-6 rounded-2xl shadow-2xl border border-slate-100">
+          <button type="button" onclick="closeModal('partialCreditModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+          <h3 class="text-lg font-black text-slate-800 mb-0.5">تسديد جزء من الكريدي</h3>
+          <p id="partialCreditName" class="text-xs text-slate-500 font-bold mb-4">—</p>
+          <form id="partialCreditForm" onsubmit="return submitPartialCreditPayment(event)" class="space-y-3">
+              <input type="hidden" id="partialCreditId">
+              <div class="grid grid-cols-2 gap-2">
+                  <div class="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-center">
+                      <span class="block text-[10px] text-slate-500 font-bold">المبلغ الباقي حالياً</span>
+                      <span id="partialCreditCurrent" class="block text-base font-black text-slate-800" dir="ltr">0 دج</span>
+                  </div>
+                  <div class="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center">
+                      <span class="block text-[10px] text-blue-800 font-bold">الباقي بعد التسديد</span>
+                      <span id="partialCreditAfter" class="block text-base font-black text-blue-700" dir="ltr">0 دج</span>
+                  </div>
+              </div>
+              <div>
+                  <label for="partialCreditAmount" class="block text-[11px] text-slate-700 font-bold mb-1">المبلغ المسدد الآن (دج) *</label>
+                  <input type="number" id="partialCreditAmount" min="1" step="1" inputmode="numeric" required oninput="updatePartialCreditPreview()" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-base font-black text-slate-800 bg-white outline-none focus:border-blue-500 text-center">
+                  <p class="text-[10px] text-slate-500 mt-1">يدخل هذا المبلغ إلى الصندوق اليومي فوراً. إذا سدّد المبلغ كاملاً يُغلق الكريدي تلقائياً.</p>
+              </div>
+              <div class="flex items-center gap-3 pt-1">
+                  <button type="submit" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-all">تأكيد التسديد</button>
+                  <button type="button" onclick="closeModal('partialCreditModal')" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-all">إلغاء</button>
+              </div>
+          </form>
+      </div>
+  </div>
   <!-- Google Drive Auto-Sync Modal -->
   <div id="googleDriveModal" class="modal-overlay" style="z-index: 120;" onclick="handleOverlayClick(event, 'googleDriveModal')">
       <div class="modal-content relative w-full max-w-lg bg-white p-5 sm:p-6 rounded-2xl shadow-2xl border border-slate-100 space-y-4">

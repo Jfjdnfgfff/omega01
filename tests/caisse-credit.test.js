@@ -53,3 +53,13 @@ test('product-sale credit repayment never links to a membership debt by matching
     assert.equal(linkedCustomerForCredit(standaloneCredit, [memberWithDebt], standaloneCredit.id, normalizePhone), memberWithDebt);
     assert.equal(isCaisseClosing({ type: 'credit_payment' }), false);
 });
+
+test('several partial repayments keep the amount paid on the subscription day', () => {
+    const dateKey = value => String(value || '').slice(0, 10);
+    const customer = { id: 'c1', paymentStatus: 'credit', debtAmount: 1000, startDate: '2026-09-01', subscriptionCycleId: 'cy1' };
+    const logs = [
+        { type: 'credit_payment', customerId: 'c1', subscriptionDate: '2026-09-01', subscriptionCycleId: 'cy1', subscriptionPaidBeforeSettlement: 3000, amount: 1000, date: '2026-09-20' },
+        { type: 'credit_payment', customerId: 'c1', subscriptionDate: '2026-09-01', subscriptionCycleId: 'cy1', subscriptionPaidBeforeSettlement: 2000, amount: 1000, date: '2026-09-10' }
+    ];
+    assert.equal(subscriptionPaidForCaisse(customer, 5000, logs, dateKey), 2000);
+});
