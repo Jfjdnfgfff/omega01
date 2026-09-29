@@ -3012,7 +3012,7 @@
           <button type="button" onclick="closeModal('partialCreditModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition-colors">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
           </button>
-          <h3 class="text-lg font-black text-slate-800 mb-0.5">تسديد جزء من الكريدي</h3>
+          <h3 id="partialCreditTitle" class="text-lg font-black text-slate-800 mb-0.5">تسديد جزء من الكريدي</h3>
           <p id="partialCreditName" class="text-xs text-slate-500 font-bold mb-4">—</p>
           <form id="partialCreditForm" onsubmit="return submitPartialCreditPayment(event)" class="space-y-3">
               <input type="hidden" id="partialCreditId">
@@ -3029,7 +3029,15 @@
               <div>
                   <label for="partialCreditAmount" class="block text-[11px] text-slate-700 font-bold mb-1">المبلغ المسدد الآن (دج) *</label>
                   <input type="number" id="partialCreditAmount" min="1" step="1" inputmode="numeric" required oninput="updatePartialCreditPreview()" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-base font-black text-slate-800 bg-white outline-none focus:border-blue-500 text-center">
-                  <p class="text-[10px] text-slate-500 mt-1">يدخل هذا المبلغ إلى الصندوق اليومي فوراً. إذا سدّد المبلغ كاملاً يُغلق الكريدي تلقائياً.</p>
+                  <p class="text-[10px] text-slate-500 mt-1">إذا سدّد المبلغ كاملاً يُغلق الكريدي تلقائياً.</p>
+              </div>
+              <div>
+                  <label for="partialCreditFundSource" class="block text-[11px] text-slate-700 font-bold mb-1">يدخل المبلغ إلى</label>
+                  <select id="partialCreditFundSource" onchange="updatePartialCreditPreview()" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white outline-none focus:border-blue-500 font-bold text-slate-800">
+                      <option value="daily">صندوق اليوم (يُضاف إلى رصيد اليوم)</option>
+                      <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
+                  </select>
+                  <p id="partialCreditFundHint" class="text-[10px] text-slate-500 mt-1">يُضاف هذا المبلغ إلى رصيد صندوق اليوم فوراً.</p>
               </div>
               <div class="flex items-center gap-3 pt-1">
                   <button type="submit" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-all">تأكيد التسديد</button>

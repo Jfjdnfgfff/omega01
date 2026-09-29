@@ -1,4 +1,4 @@
-import { subscriptionPaidForCaisse } from './caisse-credit.js';
+import { subscriptionPaidForCaisse, isGeneralFund } from './caisse-credit.js';
 
 export const CAISSE_MOVEMENT_TYPE = 'cash_movement';
 
@@ -33,6 +33,8 @@ function movementTimestamp(value) {
  * Existing section records remain the source of truth; cash movement logs are
  * used for subscriptions because a renewal overwrites the customer's previous
  * subscription fields. Credit repayments are already stored in caisseLogs.
+ * Items whose fundSource is "general" (paid from / received into the general
+ * fund) are left out: they never touch the daily till.
  */
 export function buildCaisseMovements(state = {}, targetDate, dateKey) {
     const targetDateKey = typeof dateKey === 'function' ? dateKey(targetDate) : String(targetDate || '').slice(0, 10);
@@ -43,6 +45,9 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
             expenses: 0, staffPayouts: 0, supplierPayments: 0
         };
     }
+
+    // Movements marked as paid from / received into the general fund never touch the daily till.
+    const fromGeneralFund = isGeneralFund;
 
     const logs = asArray(state.caisseLogs);
     const recordedSubscriptionIds = new Set(logs
@@ -92,6 +97,8 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
                 detail: log.detail || log.description
             });
         } else if (log.type === 'credit_payment') {
+            // A repayment received into the general fund is recorded, but not in today's till.
+            if (fromGeneralFund(log)) return;
             pushMovement({
                 id: log.id || `credit_payment_${log.creditId || index}`,
                 source: 'creditPayment',
@@ -165,9 +172,6 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
             detail: Number(sale.qty) > 0 ? `الكمية: ${sale.qty}` : ''
         });
     });
-
-    // Movements marked as paid from the general fund never touch the daily till.
-    const fromGeneralFund = item => item && item.fundSource === 'general';
 
     // General expenses.
     asArray(state.expenses).forEach((expense, index) => {

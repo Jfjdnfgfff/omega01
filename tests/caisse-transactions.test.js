@@ -146,3 +146,25 @@ test('supplier payments from the general fund are excluded from the daily till',
     assert.equal(result.supplierPayments, 2000);
     assert.equal(result.netCash, -2000);
 });
+
+test('credit repayments received into the general fund never touch the daily till', () => {
+    const dateKey = value => String(value || '').slice(0, 10);
+    const today = '2026-09-29';
+    const repayment = (id, amount, fundSource) => ({
+        id, type: 'credit_payment', creditId: 'cr-1', creditName: 'Customer', amount, date: today,
+        ...(fundSource ? { fundSource } : {})
+    });
+    const result = buildCaisseMovements({
+        caisseLogs: [
+            repayment('legacy', 100),                 // saved before the option existed => daily
+            repayment('daily', 200, 'daily'),
+            repayment('general', 5000, 'general'),    // final payment sent to the general fund
+            { id: 'closing', type: 'closing', date: today, actualAmount: 300 }
+        ]
+    }, today, dateKey);
+    assert.equal(result.creditIncome, 300);
+    assert.equal(result.totalIncome, 300);
+    assert.equal(result.netCash, 300);
+    assert.deepEqual(result.transactions.map(t => t.id).sort(), ['daily', 'legacy']);
+    assert.equal(result.transactions.some(t => t.id === 'general'), false);
+});

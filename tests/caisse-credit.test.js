@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse, linkedCustomerForCredit } from '../src/caisse-credit.js';
+import { isCaisseClosing, creditPaymentsOnDate, creditPaymentTotals, normalizeFundSource, isGeneralFund, subscriptionPaidForCaisse, linkedCustomerForCredit } from '../src/caisse-credit.js';
 
 const dateKey = input => String(input || '').slice(0, 10);
 const subscriber = { id: 'member-1', startDate: '2026-09-24T09:00:00Z', price: 1000, paymentStatus: 'credit', debtAmount: 400 };
@@ -62,4 +62,34 @@ test('several partial repayments keep the amount paid on the subscription day', 
         { type: 'credit_payment', customerId: 'c1', subscriptionDate: '2026-09-01', subscriptionCycleId: 'cy1', subscriptionPaidBeforeSettlement: 2000, amount: 1000, date: '2026-09-10' }
     ];
     assert.equal(subscriptionPaidForCaisse(customer, 5000, logs, dateKey), 2000);
+});
+
+test('repayment fund source defaults to the daily till; only "general" selects the general fund', () => {
+    assert.equal(normalizeFundSource(undefined), 'daily');
+    assert.equal(normalizeFundSource(''), 'daily');
+    assert.equal(normalizeFundSource('daily'), 'daily');
+    assert.equal(normalizeFundSource('anything-else'), 'daily');
+    assert.equal(normalizeFundSource('general'), 'general');
+    assert.equal(isGeneralFund({ fundSource: 'general' }), true);
+    assert.equal(isGeneralFund({ fundSource: 'daily' }), false);
+    assert.equal(isGeneralFund({}), false);
+    assert.equal(isGeneralFund(null), false);
+});
+
+test('general-fund repayments stay listed for their day but are totalled apart from the daily till', () => {
+    const logs = [
+        { ...receipt, id: 'legacy', amount: 400 },                                              // saved before the option => daily
+        { ...receipt, id: 'daily', amount: 100, fundSource: 'daily', date: '2026-09-26T12:00:00Z' },
+        { ...receipt, id: 'general', amount: 900, fundSource: 'general', date: '2026-09-26T13:00:00Z' },
+        { ...receipt, id: 'other-day', amount: 50, fundSource: 'general', date: '2026-09-27T09:00:00Z' }
+    ];
+    const sameDay = creditPaymentsOnDate(logs, '2026-09-26', dateKey);
+    assert.deepEqual(sameDay.map(p => p.id), ['legacy', 'daily', 'general']);
+    assert.deepEqual(creditPaymentTotals(sameDay), { daily: 500, general: 900 });
+    assert.deepEqual(creditPaymentTotals(null), { daily: 0, general: 0 });
+});
+
+test('a general-fund repayment does not change what the subscription day kept in the till', () => {
+    const closedSubscriber = { ...subscriber, paymentStatus: 'paid', debtAmount: 0 };
+    assert.equal(subscriptionPaidForCaisse(closedSubscriber, 1000, [{ ...receipt, fundSource: 'general' }], dateKey), 600);
 });

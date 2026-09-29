@@ -2,10 +2,27 @@
 // Keep them in the existing synced caisse collection with a distinct type.
 export const isCaisseClosing = log => Boolean(log && log.type !== 'credit_payment' && log.type !== 'cash_movement');
 
+// Which till a repayment went into: today's till ("daily", the default and the value of
+// every record saved before this option existed) or the "general" fund. General-fund
+// repayments are still recorded and listed, but they never change the daily caisse
+// balance or the end-of-day closing (same rule as expenses, payouts and suppliers).
+export const normalizeFundSource = value => (value === 'general' ? 'general' : 'daily');
+export const isGeneralFund = item => Boolean(item && item.fundSource === 'general');
+
 export function creditPaymentsOnDate(logs, date, dateKey) {
     return (Array.isArray(logs) ? logs : []).filter(log =>
         log && log.type === 'credit_payment' && dateKey(log.date) === date
     );
+}
+
+// Split repayments into what entered the daily till and what went to the general fund.
+export function creditPaymentTotals(payments) {
+    return (Array.isArray(payments) ? payments : []).reduce((totals, payment) => {
+        const amount = Math.abs(Number(payment && payment.amount) || 0);
+        if (isGeneralFund(payment)) totals.general += amount;
+        else totals.daily += amount;
+        return totals;
+    }, { daily: 0, general: 0 });
 }
 
 export function subscriptionPaidForCaisse(customer, price, logs, dateKey) {

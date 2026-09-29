@@ -65,7 +65,7 @@ window.addEventListener('unhandledrejection', (event) => {
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
-  import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
+  import { isCaisseClosing, creditPaymentsOnDate, creditPaymentTotals, linkedCustomerForCredit, normalizeFundSource } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice } from './product-pricing.js';
 
@@ -7451,7 +7451,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
                                 <span>تسديد جزء</span>
                             </button>
-                            <button type="button" onclick="settleCredit('${safeId}')" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي بالكامل">
+                            <button type="button" onclick="openPartialCreditModal('${safeId}', true)" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي بالكامل">
                                 <svg class="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-blue-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                                 <span>تسديد</span>
                             </button>
@@ -7501,14 +7501,23 @@ window.addEventListener('unhandledrejection', (event) => {
         const targetId = String(id || '').trim();
         return (Array.isArray(appState.credits) ? appState.credits : []).find(c => c && (String(c.id).trim() === targetId || String(c._rtdbKey || '').trim() === targetId)) || null;
     }
-    window.openPartialCreditModal = function(id) {
+    // Same modal serves both buttons: "تسديد جزء" (empty amount) and "تسديد" (amount pre-filled
+    // with the whole remainder), so the daily / general till choice is available for both.
+    window.openPartialCreditModal = function(id, fullSettlement) {
         const cr = findCreditById(id);
         if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return; }
+        const isFull = fullSettlement === true;
         setElemValue('partialCreditId', cr.id || id);
+        const titleEl = document.getElementById('partialCreditTitle');
+        if (titleEl) titleEl.textContent = isFull ? 'تسديد الكريدي بالكامل' : 'تسديد جزء من الكريدي';
         const nameEl = document.getElementById('partialCreditName');
         if (nameEl) nameEl.textContent = `${cr.name || 'بدون اسم'} — ${cr.desc || ''}`;
         const amountInput = document.getElementById('partialCreditAmount');
-        if (amountInput) { amountInput.value = ''; amountInput.max = String(Number(cr.amount) || 0); }
+        if (amountInput) {
+            amountInput.value = isFull ? String(Number(cr.amount) || '') : '';
+            amountInput.max = String(Number(cr.amount) || 0);
+        }
+        setElemValue('partialCreditFundSource', 'daily'); // safe default: today's till
         window.updatePartialCreditPreview();
         openModal('partialCreditModal');
         setTimeout(() => amountInput && amountInput.focus(), 150);
@@ -7525,6 +7534,12 @@ window.addEventListener('unhandledrejection', (event) => {
             afterEl.textContent = paid >= current && current > 0 ? 'خالص ✓' : `${after.toLocaleString()} دج`;
             afterEl.className = 'block text-base font-black ' + (paid >= current && current > 0 ? 'text-blue-700' : 'text-slate-800');
         }
+        const fundHintEl = document.getElementById('partialCreditFundHint');
+        if (fundHintEl) {
+            fundHintEl.textContent = normalizeFundSource(getElemVal('partialCreditFundSource')) === 'general'
+                ? 'يُسجَّل هذا المبلغ في الصندوق العام ولا يؤثر على رصيد اليوم ولا على جرد الصندوق.'
+                : 'يُضاف هذا المبلغ إلى رصيد صندوق اليوم فوراً.';
+        }
     };
     window.submitPartialCreditPayment = function(e) {
         if (e && e.preventDefault) e.preventDefault();
@@ -7535,10 +7550,11 @@ window.addEventListener('unhandledrejection', (event) => {
         const paid = Math.round((parseFloat(getElemVal('partialCreditAmount')) || 0) * 100) / 100;
         if (!Number.isFinite(paid) || paid <= 0) { showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0'); return false; }
         if (paid > current) { showErrorToast(`المبلغ المسدد (${paid.toLocaleString()}) أكبر من الباقي (${current.toLocaleString()})`); return false; }
+        const fundSource = normalizeFundSource(getElemVal('partialCreditFundSource'));
         closeModal('partialCreditModal');
         if (paid >= current) {
-            // Paying the full remainder = full settlement.
-            settleCredit(cr.id || creditId, true);
+            // Paying the full remainder = full settlement (into the same till the user picked).
+            settleCredit(cr.id || creditId, true, fundSource);
             return false;
         }
         const remaining = Math.round((current - paid) * 100) / 100;
@@ -7563,6 +7579,7 @@ window.addEventListener('unhandledrejection', (event) => {
             id: 'credit_payment_' + cleanKey(cr.id || creditId) + '_' + Date.now(), type: 'credit_payment',
             creditId: cr.id || creditId, creditName: cr.name || '', partial: true,
             amount: paid, remainingAfter: remaining, date: new Date().toISOString(),
+            fundSource,
             notes: `تسديد جزئي — الباقي ${remaining.toLocaleString()} دج`,
             ...subscriptionExtra
         };
@@ -7574,18 +7591,23 @@ window.addEventListener('unhandledrejection', (event) => {
         cr.amount = remaining;
         cr.lastPaymentDate = payment.date;
         cr.payments = Array.isArray(cr.payments) ? cr.payments : [];
-        cr.payments.push({ amount: paid, date: payment.date });
+        cr.payments.push({ amount: paid, date: payment.date, fundSource });
         cr.updatedAt = Date.now();
         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('credits', cr);
-        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج — الباقي ${remaining.toLocaleString()} دج`, paid);
+        const toGeneral = fundSource === 'general';
+        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج — الباقي ${remaining.toLocaleString()} دج${toGeneral ? ' — إلى الصندوق العام' : ''}`, paid);
         saveState();
-        showSuccessToast(`تم تسديد ${paid.toLocaleString()} دج وإضافتها للصندوق — الباقي على ${cr.name || 'الزبون'}: ${remaining.toLocaleString()} دج`);
+        showSuccessToast(toGeneral
+            ? `تم تسديد ${paid.toLocaleString()} دج وإضافتها للصندوق العام (لا تؤثر على رصيد اليوم) — الباقي على ${cr.name || 'الزبون'}: ${remaining.toLocaleString()} دج`
+            : `تم تسديد ${paid.toLocaleString()} دج وإضافتها لصندوق اليوم — الباقي على ${cr.name || 'الزبون'}: ${remaining.toLocaleString()} دج`);
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         renderCreditsList(); render();
         return false;
     };
-    function settleCredit(id, skipConfirm) { if (!id || !Array.isArray(appState.credits)) return;
+    function settleCredit(id, skipConfirm, fundSourceArg) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
+        // Which till the final payment goes into: today's till (default) or the general fund.
+        const fundSource = normalizeFundSource(fundSourceArg);
         const doSettle = function() {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (!targetCredit) return; // Already settled (e.g. a second confirmation click).
@@ -7594,24 +7616,27 @@ window.addEventListener('unhandledrejection', (event) => {
                 showErrorToast('مبلغ الكريدي غير صالح للتسديد');
                 return;
             }
-            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId}`, amount);
+            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId}${fundSource === 'general' ? ' — إلى الصندوق العام' : ''}`, amount);
 
             // Preserve membership debt semantics without matching product-sale credits
             // to a subscriber merely because their phone numbers happen to be equal.
             const customers = Array.isArray(appState.customers) ? appState.customers : [];
             const linkedCust = linkedCustomerForCredit(targetCredit, customers, targetId, cleanPhone);
             if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
-            // Stable receipt ID makes a repeated settlement idempotent across syncs.
-            if (!appState.caisseLogs.some(l => l.type === 'credit_payment' && String(l.creditId) === String(targetCredit.id || targetId))) {
+            // The final receipt has a stable ID, so settling the same credit twice (double click,
+            // repeated sync) is recorded once. Earlier *partial* receipts carry their own timestamped
+            // IDs and must not block it, otherwise the last payment would never reach the caisse.
+            const settlementReceiptId = 'credit_payment_' + cleanKey(targetCredit.id || targetId);
+            if (!appState.caisseLogs.some(l => l && String(l.id) === settlementReceiptId)) {
                 const subscriptionDate = linkedCust && linkedCust.paymentStatus === 'credit'
                     ? getLocalDateString(linkedCust.startDate) : '';
                 const pkg = linkedCust ? getPackageById(linkedCust.packageId) : null;
                 const price = linkedCust ? ((linkedCust.price !== undefined && linkedCust.price !== null && linkedCust.price !== '')
                     ? Number(linkedCust.price) : Number(pkg?.price || 0)) : 0;
                 const payment = {
-                    id: 'credit_payment_' + cleanKey(targetCredit.id || targetId), type: 'credit_payment',
+                    id: settlementReceiptId, type: 'credit_payment',
                     creditId: targetCredit.id || targetId, creditName: targetCredit.name || '',
-                    amount, date: new Date().toISOString(),
+                    amount, date: new Date().toISOString(), fundSource,
                     ...(subscriptionDate ? {
                         customerId: linkedCust.id, subscriptionDate,
                         subscriptionCycleId: linkedCust.subscriptionCycleId || null,
@@ -7640,7 +7665,10 @@ window.addEventListener('unhandledrejection', (event) => {
                     window.deleteFirebaseSectionItem('credits', targetCredit._rtdbKey, targetCredit);
                 }
             }
-            saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
+            saveState();
+            showSuccessToast(fundSource === 'general'
+                ? `تم تسديد الكريدي بنجاح — أُضيف ${amount.toLocaleString()} دج إلى الصندوق العام (لا يؤثر على رصيد اليوم)`
+                : 'تم تسديد الكريدي بنجاح');
             if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
             renderCreditsList(); render(); // Update dashboard totals
         };
@@ -10870,9 +10898,22 @@ window.addEventListener('unhandledrejection', (event) => {
             setElemHTML('caisseDayNetCash', formatMoney(details.netCash));
 
             const paymentList = document.getElementById('caisseDayCreditPaymentsList');
-            if (paymentList) paymentList.innerHTML = details.creditPayments.length
-                ? details.creditPayments.map(p => `<li class="flex justify-between gap-3"><span>${escapeHTML(p.creditName || 'كريدي')}</span><strong>${formatMoney(Number(p.amount) || 0)}</strong></li>`).join('')
-                : '<li>لا توجد تسديدات كريدي لهذا اليوم</li>';
+            if (paymentList) {
+                // Repayments received into the general fund stay visible here (with a badge) but are
+                // not part of today's "تسديد كريدي" figure or the expected balance above.
+                const repayTotals = creditPaymentTotals(details.creditPayments);
+                const repayRows = details.creditPayments.map(p => {
+                    const toGeneral = p.fundSource === 'general';
+                    const badge = toGeneral ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام — لا يدخل رصيد اليوم</span>' : '';
+                    return `<li class="flex justify-between items-center gap-3"><span class="flex flex-wrap items-center gap-1.5">${escapeHTML(p.creditName || 'كريدي')} ${badge}</span><strong class="${toGeneral ? 'text-violet-700' : ''}">${formatMoney(Number(p.amount) || 0)}</strong></li>`;
+                }).join('');
+                const generalSummary = repayTotals.general > 0
+                    ? `<li class="flex justify-between gap-3 border-t border-slate-100 pt-2 text-violet-800 font-bold"><span>المجموع في الصندوق العام (غير محسوب في رصيد اليوم)</span><strong>${formatMoney(repayTotals.general)}</strong></li>`
+                    : '';
+                paymentList.innerHTML = details.creditPayments.length
+                    ? repayRows + generalSummary
+                    : '<li>لا توجد تسديدات كريدي لهذا اليوم</li>';
+            }
 
             const transactions = Array.isArray(details.transactions) ? details.transactions : [];
             const transactionBody = document.getElementById('caisseTransactionsTableBody');
