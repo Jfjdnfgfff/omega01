@@ -4,6 +4,12 @@ export const isCaisseClosing = log => Boolean(log && log.type !== 'credit_paymen
 
 export function creditPaymentsOnDate(logs, date, dateKey) {
     return (Array.isArray(logs) ? logs : []).filter(log =>
+        log && log.type === 'credit_payment' && dateKey(log.date) === date && log.fundSource !== 'general'
+    );
+}
+
+export function allCreditPaymentsOnDate(logs, date, dateKey) {
+    return (Array.isArray(logs) ? logs : []).filter(log =>
         log && log.type === 'credit_payment' && dateKey(log.date) === date
     );
 }
