@@ -30,11 +30,11 @@
 │   ├── coachAbsences/           ← غيابات المدربين
 │   ├── packages/                ← الباقات
 │   ├── quickSessions/           ← الحصص السريعة
-│   ├── caisse/                  ← الصندوق: type=closing للإقفال، type=credit_payment لتسديد الديون (يُقرأ باسم caisseLogs)
+│   ├── caisse/                  ← الصندوق: closing للإقفال، credit_payment لتسديد الديون، cash_movement لإيصالات الاشتراكات (يُقرأ باسم caisseLogs)
 │   ├── activityLogs/            ← سجل العمليات
 │   ├── staff/                   ← بيانات الطاقم
 │   ├── stats/                   ← تجميعات محسّنة O(1)
-│   │   ├── daily/   (YYYY-MM-DD → { sales, salesCount, subIncome, profit... })
+│   │   ├── daily/   (YYYY-MM-DD → { sales, cashIn, salesCount, subIncome, profit... })
 │   │   ├── monthly/ (YYYY-MM   → {...})
 │   │   └── yearly/  (YYYY      → {...})
 │   └── meta/
@@ -44,6 +44,13 @@
 ├── appState/                    ← إعدادات عامة (hideFinances, lastUpdated)
 └── appState/{section}/{id}      ← مسارات حذف توافقية
 ```
+
+تعرض شاشة الصندوق سجلّاً يومياً موحّداً من الاشتراكات والحصص والمبيعات وتسديدات الكريدي
+والمصاريف وخلاصات الموظفين ومدفوعات الموردين؛ وتُحتسب المدفوعات للموردين بالقيمة المدفوعة فعلياً فقط.
+تُحفظ مبيعات المنتجات الآجلة في `sales` مع `paymentStatus=credit`, و`cashPaid=0` ومرجع `creditId`،
+ويقابلها سجل مفتوح في `credits` بمصدر `product_sale`. لا تدخل قيمتها في الصندوق حتى إنشاء
+إيصال `credit_payment` عند التسديد. ويمكن لعملية بيع العلبة المغلفة حفظ سعر وحدة خاص في `sales.price`
+من دون تعديل السعر الأساسي في سجل المنتج.
 
 ## 2. فهارس الاستعلام (`.indexOn` في `database.rules.json`)
 

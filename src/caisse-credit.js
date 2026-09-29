@@ -1,6 +1,6 @@
 // Credit repayments are cash movements, not sales or caisse closings.
 // Keep them in the existing synced caisse collection with a distinct type.
-export const isCaisseClosing = log => Boolean(log && log.type !== 'credit_payment');
+export const isCaisseClosing = log => Boolean(log && log.type !== 'credit_payment' && log.type !== 'cash_movement');
 
 export function creditPaymentsOnDate(logs, date, dateKey) {
     return (Array.isArray(logs) ? logs : []).filter(log =>
@@ -25,4 +25,20 @@ export function subscriptionPaidForCaisse(customer, price, logs, dateKey) {
         log.subscriptionPaidBeforeSettlement !== undefined
     );
     return settlement ? Number(settlement.subscriptionPaidBeforeSettlement) : paid;
+}
+
+export function linkedCustomerForCredit(credit, customers, creditId, normalizePhone) {
+    if (!credit || credit.source === 'product_sale' || credit.saleId) return null;
+    const list = Array.isArray(customers) ? customers : [];
+    const targetId = String(creditId || credit.id || '').trim();
+    const linkedById = list.find(customer => customer && (
+        (credit.customerId && String(customer.id) === String(credit.customerId)) ||
+        targetId === `cr_auto_${customer.id}` || targetId.startsWith(`cr_auto_${customer.id}_`)
+    ));
+    if (linkedById || !credit.phone) return linkedById || null;
+    const normalize = typeof normalizePhone === 'function'
+        ? normalizePhone
+        : value => String(value || '').trim();
+    return list.find(customer => customer && customer.paymentStatus === 'credit' &&
+        normalize(customer.phone) === normalize(credit.phone)) || null;
 }
