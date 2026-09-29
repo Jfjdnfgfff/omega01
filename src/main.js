@@ -3060,6 +3060,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (modal) modal.classList.add('active');
         }
         renderFemaleCoachModal();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
     };
     window.openFemaleCommissionModal = window.openFemaleCoachModal;
 
@@ -3283,6 +3284,7 @@ window.addEventListener('unhandledrejection', (event) => {
             staffName: name,
             type: 'عمولة الإناث (33%)',
             amount: amount,
+            fundSource: getElemVal('femalePayoutFundSource') === 'general' ? 'general' : 'daily',
             date: typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0],
             notes: notes || 'تسديد مستحقات قسم الإناث (33%)',
             createdAt: new Date().toISOString()
@@ -4129,6 +4131,19 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(y) : y.toISOString().split('T')[0];
         }
     };
+    // Confirms to the user that the expense was deducted from that day's caisse (shows the new expected balance).
+    window.expenseCaisseToast = function(amount, isoDate, label, fundSource) {
+        try {
+            const dayKey = getLocalDateString(isoDate);
+            const todayKey = getLocalDateString(new Date());
+            const details = (typeof window.calculateCaisseDetails === 'function') ? window.calculateCaisseDetails(dayKey) : null;
+            const fromGeneral = fundSource === 'general';
+            if (fromGeneral) { showSuccessToast(`تم تسجيل المصروف ${Number(amount).toLocaleString()} دج (${label}) وخصمه من الصندوق العام — لا يؤثر على رصيد اليوم`); return; }
+            const dayLabel = dayKey === todayKey ? 'صندوق اليوم' : `صندوق يوم ${dayKey}`;
+            const net = details ? formatMoney(details.netCash) : '';
+            showSuccessToast(`تم تسجيل المصروف ${Number(amount).toLocaleString()} دج (${label}) وخصمه من ${dayLabel}${net ? ` — الرصيد المتوقع الآن: ${net}` : ''}`);
+        } catch (e) { showSuccessToast(`تم تسجيل المصروف بنجاح (${label})`); }
+    };
     window.createSafeExpenseISO = function(dateVal) {
         if (!dateVal) return new Date().toISOString();
         if (dateVal.includes('T')) return new Date(dateVal).toISOString();
@@ -4197,7 +4212,8 @@ window.addEventListener('unhandledrejection', (event) => {
         desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
         const isoDate = window.createSafeExpenseISO(dateVal);
-        const newExp = { id: Date.now().toString(),
+        const fundSource = getElemVal('expenseFundSourceModal') === 'general' ? 'general' : 'daily';
+        const newExp = { id: Date.now().toString(), fundSource,
             desc: desc, amount: amount, category: category,
             date: isoDate
         };
@@ -4211,9 +4227,10 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        showSuccessToast(`تم تسجيل المصروف بنجاح (${catDetails.label})`);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label, fundSource);
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (window.renderExpensesListView) window.renderExpensesListView();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         render(); // Update totals
     }); function renderExpensesListModal() {
         const container = document.getElementById('expensesListModal');
@@ -4243,6 +4260,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${catDetails.badgeClass}">
                                 ${catDetails.icon} ${catDetails.label}
                             </span>
+                            ${(ex.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                         </div>
                         <div class="text-xs font-bold text-slate-700" dir="ltr" style="text-align: right;">
                             <span class="text-slate-400 font-medium">${dateFormatted}</span> - <span class="text-slate-900 font-black">${Number(ex.amount || 0).toLocaleString()} دج</span>
@@ -4837,6 +4855,16 @@ window.addEventListener('unhandledrejection', (event) => {
             else if (cat === 'fixed_monthly') fixedTotal += amt;
             else generalTotal += amt; });
         // Update Statistics in DOM
+        // Live caisse balance for today, so the user sees each expense leaving the till immediately.
+        try {
+            const netElem = document.getElementById('expensesCaisseNetToday');
+            if (netElem && typeof window.calculateCaisseDetails === 'function') {
+                const cd = window.calculateCaisseDetails(getLocalDateString(new Date()));
+                netElem.innerHTML = formatMoney(cd.netCash);
+                const outElem = document.getElementById('expensesCaisseOutToday');
+                if (outElem) outElem.innerHTML = formatMoney(cd.totalExpenses);
+            }
+        } catch (e) { console.warn('expenses caisse card note:', e); }
         const todayElem = document.getElementById('todayExpenses');
         const weekElem = document.getElementById('weekExpenses');
         const monthElem = document.getElementById('monthExpenses');
@@ -4930,6 +4958,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 <span>${catDetails.icon}</span>
                                 <span>${catDetails.label}</span>
                             </span>
+                            ${(ex.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                             <span class="text-xs font-bold text-slate-400 font-mono">${dateFormatted}</span>
                         </div>
                         <div class="font-black text-slate-800 text-sm sm:text-base break-words mt-0.5">${safeDesc}</div>
@@ -4967,8 +4996,9 @@ window.addEventListener('unhandledrejection', (event) => {
         desc = sanitizeInputText(desc, 100);
         if (!Array.isArray(appState.expenses)) appState.expenses = [];
         const isoDate = window.createSafeExpenseISO(dateVal);
+        const fundSource = getElemVal('expenseFundSourceView') === 'general' ? 'general' : 'daily';
         const newExp = { id: Date.now().toString(),
-            desc: desc, amount: amount, category: category,
+            desc: desc, amount: amount, category: category, fundSource,
             date: isoDate };
         appState.expenses.push(newExp);
         if (typeof logActivity === 'function') logActivity('expense', 'تسجيل مصروف جديد', `البيان: ${desc} - الفئة: ${category}`, amount);
@@ -4981,9 +5011,10 @@ window.addEventListener('unhandledrejection', (event) => {
             dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         }
         const catDetails = getExpenseCategoryDetails(category);
-        showSuccessToast(`تم إضافة المصروف بنجاح (${catDetails.label})`);
+        window.expenseCaisseToast(amount, isoDate, catDetails.label, fundSource);
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (window.renderExpensesListModal) window.renderExpensesListModal();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         render(); }); function deleteExpense(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مصروف', prompt: 'أدخل كلمة المرور لتأكيد حذف المصروف', buttonText: 'تأكيد الحذف' }, () => {
@@ -5923,14 +5954,50 @@ window.addEventListener('unhandledrejection', (event) => {
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
 
+    // Current sale total for the selected product/qty/custom price (used by the credit split preview).
+    function getCurrentProductSaleTotal() {
+        const prodId = getElemVal('sellProdId');
+        const product = appState.products ? appState.products.find(p => String(p.id) === String(prodId)) : null;
+        if (!product) return 0;
+        const qty = parseFloat(getElemVal('sellProdQty')) || 1;
+        const priceDetails = getProductSalePriceDetails(product);
+        const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
+        return Math.round(unitPrice * qty * 100) / 100;
+    }
+
+    // Live preview: total / paid now (versé) / remaining credit.
+    window.updateProductCreditSplit = function() {
+        const total = getCurrentProductSaleTotal();
+        const paidInput = document.getElementById('sellCreditPaidNow');
+        let paid = parseFloat(paidInput ? paidInput.value : 0) || 0;
+        if (paid < 0) paid = 0;
+        if (paidInput && total > 0 && paid > total) { paid = total; paidInput.value = String(total); }
+        if (paidInput) paidInput.max = String(total || '');
+        const remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
+        const totalEl = document.getElementById('sellCreditTotalDisplay');
+        const remEl = document.getElementById('sellCreditRemainingDisplay');
+        const hint = document.getElementById('sellCreditSplitHint');
+        if (totalEl) totalEl.textContent = `${total.toLocaleString()} دج`;
+        if (remEl) remEl.textContent = `${remaining.toLocaleString()} دج`;
+        if (hint) {
+            if (total > 0 && remaining === 0) hint.textContent = 'المبلغ مدفوع بالكامل — سيُسجل البيع نقداً بدون كريدي.';
+            else hint.textContent = `يدخل الصندوق الآن: ${paid.toLocaleString()} دج — يُسجل كريدي: ${remaining.toLocaleString()} دج`;
+        }
+    };
+
     window.toggleProductSaleCreditFields = function() {
         const isCredit = getElemVal('sellPaymentMethod') === 'credit';
         const fields = document.getElementById('sellCreditFields');
         const nameInput = document.getElementById('sellCreditName');
         if (fields) fields.classList.toggle('hidden', !isCredit);
         if (nameInput) nameInput.required = isCredit;
+        if (isCredit) window.updateProductCreditSplit();
     };
     window.toggleProductSaleCreditFields();
+    ['sellProdId', 'sellProdQty', 'sellCustomPrice'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.addEventListener('input', () => window.updateProductCreditSplit()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
+    });
 
     function getProductSalePaymentInfo(total) {
         const isCredit = getElemVal('sellPaymentMethod') === 'credit';
@@ -5942,10 +6009,27 @@ window.addEventListener('unhandledrejection', (event) => {
             };
         }
 
-        const creditAmount = Number(total);
-        if (!Number.isFinite(creditAmount) || creditAmount <= 0) {
+        const saleTotalNum = Number(total);
+        if (!Number.isFinite(saleTotalNum) || saleTotalNum <= 0) {
             showErrorToast('لا يمكن تسجيل كريدي بمبلغ غير صالح أو يساوي صفراً');
             return null;
+        }
+        // Split: paid now (versé) goes to the caisse, the remainder becomes the credit.
+        let paidNow = parseFloat(getElemVal('sellCreditPaidNow')) || 0;
+        if (paidNow < 0 || !Number.isFinite(paidNow)) paidNow = 0;
+        if (paidNow > saleTotalNum) {
+            showErrorToast('المبلغ المدفوع الآن لا يمكن أن يتجاوز المبلغ الكلي للبيع');
+            document.getElementById('sellCreditPaidNow')?.focus();
+            return null;
+        }
+        const creditAmount = Math.round((saleTotalNum - paidNow) * 100) / 100;
+        if (creditAmount <= 0) {
+            // Fully paid: record as a normal cash sale.
+            return {
+                paymentStatus: 'paid', paymentMethod: 'cash',
+                cashPaid: saleTotalNum, creditAmount: 0,
+                customerName: '', customerPhone: ''
+            };
         }
         const customerNameInput = getElemVal('sellCreditName').trim();
         const rawPhone = getElemVal('sellCreditPhone').trim();
@@ -5964,8 +6048,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const customerName = nameValidation.value;
         const customerPhone = phoneValidation.value;
         return {
-            paymentStatus: 'credit', paymentMethod: 'credit',
-            cashPaid: 0, creditAmount,
+            paymentStatus: 'credit', paymentMethod: paidNow > 0 ? 'mixed' : 'credit',
+            cashPaid: paidNow, creditAmount,
             customerName, customerPhone
         };
     }
@@ -5982,7 +6066,10 @@ window.addEventListener('unhandledrejection', (event) => {
             name: sale.customerName || 'زبون مبيعات',
             nickname: 'زبون',
             phone: sale.customerPhone || '',
-            desc: `دين بيع منتج: ${sale.prodName || 'منتج'} × ${Number(sale.qty || 1)}`,
+            desc: `دين بيع منتج: ${sale.prodName || 'منتج'} × ${Number(sale.qty || 1)}` +
+                (Number(sale.cashPaid) > 0 ? ` (الكلي ${Number(sale.total).toLocaleString()} دج - مدفوع ${Number(sale.cashPaid).toLocaleString()} دج)` : ''),
+            saleTotal: Number(sale.total) || 0,
+            paidAtSale: Number(sale.cashPaid) || 0,
             amount: Number(sale.creditAmount ?? sale.total) || 0,
             date: sale.date || new Date().toISOString(),
             status: 'open'
@@ -6078,7 +6165,11 @@ window.addEventListener('unhandledrejection', (event) => {
         } updateSellProductDropdown();
         updateStockInfoDisplay();
         if (paymentInfo.paymentStatus === 'credit') {
-            showSuccessToast(`تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
+            const paidPart = Number(paymentInfo.cashPaid) || 0;
+            const creditPart = Number(paymentInfo.creditAmount) || 0;
+            showSuccessToast(paidPart > 0
+                ? `تم البيع: الكلي ${saleTotal.toLocaleString()} دج — دُفع الآن ${paidPart.toLocaleString()} دج (أُضيف للصندوق) — الباقي ${creditPart.toLocaleString()} دج سُجل كريدي`
+                : `تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
         } else {
             showSuccessToast(`تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
@@ -6209,6 +6300,8 @@ window.addEventListener('unhandledrejection', (event) => {
         if (amountInput) amountInput.value = item.amount || item.price || '';
         const typeInput = document.getElementById('staffPayoutType');
         if (typeInput && item.type) typeInput.value = item.type;
+        const fundInput = document.getElementById('staffPayoutFundSource');
+        if (fundInput) fundInput.value = item.fundSource === 'general' ? 'general' : 'daily';
         const dateInput = document.getElementById('staffPayoutDate');
         if (dateInput) {
             const dStr = item.date || item.payoutDate || '';
@@ -6377,6 +6470,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 items: items || (isPur ? 'سلع ومكملات' : 'تسديد دفعة / فرسيمو لتخفيض الدين'),
                 totalAmount: isPur ? (paid + debt) : paid,
                 paidAmount: paid, remainingDebt: debt,
+                fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
                 date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
                 notes: notes || '', createdAt: new Date().toISOString()
             };
@@ -6407,6 +6501,7 @@ window.addEventListener('unhandledrejection', (event) => {
             supplierName: name, supplierInfo: info || '',
             type: 'purchase', items: items,
             totalAmount: paid + debt, paidAmount: paid,
+            fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: debt, date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
             notes: notes || '', createdAt: new Date().toISOString()
         };
@@ -7333,6 +7428,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             <span class="inline-flex items-center px-2.5 py-1 rounded-xl bg-slate-100 border border-slate-200/90 text-slate-800 font-black text-xs sm:text-sm tracking-tight shadow-2xs" dir="ltr">
                                 ${amountNum.toLocaleString()} دج
                             </span>
+                            ${Number(cr.paidTotal) > 0 ? `<div class="text-[10px] text-blue-700 font-bold mt-1 text-left" dir="rtl">سُدد: ${Number(cr.paidTotal).toLocaleString()} / ${Number(cr.originalAmount || (amountNum + Number(cr.paidTotal))).toLocaleString()} دج</div>` : ''}
                         </div>
                     </div>
 
@@ -7351,7 +7447,11 @@ window.addEventListener('unhandledrejection', (event) => {
                             <button type="button" onclick="openEditCreditModal('${safeId}')" class="w-7 h-7 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center justify-center transition-colors shadow-2xs" title="تعديل">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                             </button>
-                            <button type="button" onclick="settleCredit('${safeId}')" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي">
+                            <button type="button" onclick="openPartialCreditModal('${safeId}')" class="h-7 px-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد جزء من الكريدي">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
+                                <span>تسديد جزء</span>
+                            </button>
+                            <button type="button" onclick="settleCredit('${safeId}')" class="h-7 px-2 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 border border-slate-200/90 hover:border-blue-200 flex items-center gap-1 font-bold text-xs transition-colors shadow-2xs active:scale-95" title="تسديد الكريدي بالكامل">
                                 <svg class="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-blue-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg>
                                 <span>تسديد</span>
                             </button>
@@ -7397,9 +7497,96 @@ window.addEventListener('unhandledrejection', (event) => {
             renderCreditsList();
         }, 120);
     } window.handleCreditSearch = handleCreditSearch;
-    function settleCredit(id) { if (!id || !Array.isArray(appState.credits)) return;
+    function findCreditById(id) {
+        const targetId = String(id || '').trim();
+        return (Array.isArray(appState.credits) ? appState.credits : []).find(c => c && (String(c.id).trim() === targetId || String(c._rtdbKey || '').trim() === targetId)) || null;
+    }
+    window.openPartialCreditModal = function(id) {
+        const cr = findCreditById(id);
+        if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return; }
+        setElemValue('partialCreditId', cr.id || id);
+        const nameEl = document.getElementById('partialCreditName');
+        if (nameEl) nameEl.textContent = `${cr.name || 'بدون اسم'} — ${cr.desc || ''}`;
+        const amountInput = document.getElementById('partialCreditAmount');
+        if (amountInput) { amountInput.value = ''; amountInput.max = String(Number(cr.amount) || 0); }
+        window.updatePartialCreditPreview();
+        openModal('partialCreditModal');
+        setTimeout(() => amountInput && amountInput.focus(), 150);
+    };
+    window.updatePartialCreditPreview = function() {
+        const cr = findCreditById(getElemVal('partialCreditId'));
+        const current = cr ? Number(cr.amount) || 0 : 0;
+        const paid = Math.max(0, parseFloat(getElemVal('partialCreditAmount')) || 0);
+        const after = Math.max(0, current - paid);
+        const curEl = document.getElementById('partialCreditCurrent');
+        const afterEl = document.getElementById('partialCreditAfter');
+        if (curEl) curEl.textContent = `${current.toLocaleString()} دج`;
+        if (afterEl) {
+            afterEl.textContent = paid >= current && current > 0 ? 'خالص ✓' : `${after.toLocaleString()} دج`;
+            afterEl.className = 'block text-base font-black ' + (paid >= current && current > 0 ? 'text-blue-700' : 'text-slate-800');
+        }
+    };
+    window.submitPartialCreditPayment = function(e) {
+        if (e && e.preventDefault) e.preventDefault();
+        const creditId = getElemVal('partialCreditId');
+        const cr = findCreditById(creditId);
+        if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return false; }
+        const current = Number(cr.amount) || 0;
+        const paid = Math.round((parseFloat(getElemVal('partialCreditAmount')) || 0) * 100) / 100;
+        if (!Number.isFinite(paid) || paid <= 0) { showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0'); return false; }
+        if (paid > current) { showErrorToast(`المبلغ المسدد (${paid.toLocaleString()}) أكبر من الباقي (${current.toLocaleString()})`); return false; }
+        closeModal('partialCreditModal');
+        if (paid >= current) {
+            // Paying the full remainder = full settlement.
+            settleCredit(cr.id || creditId, true);
+            return false;
+        }
+        const remaining = Math.round((current - paid) * 100) / 100;
+        const customers = Array.isArray(appState.customers) ? appState.customers : [];
+        const linkedCust = linkedCustomerForCredit(cr, customers, cr.id || creditId, cleanPhone);
+        if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
+        let subscriptionExtra = {};
+        if (linkedCust && linkedCust.paymentStatus === 'credit') {
+            const pkg = getPackageById(linkedCust.packageId);
+            const price = (linkedCust.price !== undefined && linkedCust.price !== null && linkedCust.price !== '')
+                ? Number(linkedCust.price) : Number(pkg?.price || 0);
+            subscriptionExtra = {
+                customerId: linkedCust.id, subscriptionDate: getLocalDateString(linkedCust.startDate),
+                subscriptionCycleId: linkedCust.subscriptionCycleId || null,
+                subscriptionPaidBeforeSettlement: Math.max(0, price - Number(linkedCust.debtAmount || 0))
+            };
+            linkedCust.debtAmount = Math.max(0, Number(linkedCust.debtAmount || 0) - paid);
+            linkedCust.updatedAt = Date.now();
+            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
+        }
+        const payment = {
+            id: 'credit_payment_' + cleanKey(cr.id || creditId) + '_' + Date.now(), type: 'credit_payment',
+            creditId: cr.id || creditId, creditName: cr.name || '', partial: true,
+            amount: paid, remainingAfter: remaining, date: new Date().toISOString(),
+            notes: `تسديد جزئي — الباقي ${remaining.toLocaleString()} دج`,
+            ...subscriptionExtra
+        };
+        appState.caisseLogs.unshift(payment);
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', payment);
+
+        if (!cr.originalAmount) cr.originalAmount = current + (Number(cr.paidTotal) || 0);
+        cr.paidTotal = Math.round(((Number(cr.paidTotal) || 0) + paid) * 100) / 100;
+        cr.amount = remaining;
+        cr.lastPaymentDate = payment.date;
+        cr.payments = Array.isArray(cr.payments) ? cr.payments : [];
+        cr.payments.push({ amount: paid, date: payment.date });
+        cr.updatedAt = Date.now();
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('credits', cr);
+        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج — الباقي ${remaining.toLocaleString()} دج`, paid);
+        saveState();
+        showSuccessToast(`تم تسديد ${paid.toLocaleString()} دج وإضافتها للصندوق — الباقي على ${cr.name || 'الزبون'}: ${remaining.toLocaleString()} دج`);
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
+        renderCreditsList(); render();
+        return false;
+    };
+    function settleCredit(id, skipConfirm) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
-        showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي وإزالته من القائمة؟', function() {
+        const doSettle = function() {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (!targetCredit) return; // Already settled (e.g. a second confirmation click).
             const amount = Number(targetCredit.amount);
@@ -7454,8 +7641,11 @@ window.addEventListener('unhandledrejection', (event) => {
                 }
             }
             saveState(); showSuccessToast('تم تسديد الكريدي بنجاح');
+            if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
             renderCreditsList(); render(); // Update dashboard totals
-        }, { title: 'تسديد الكريدي', confirmText: 'نعم، تم التسديد',
+        };
+        if (skipConfirm === true) { doSettle(); return; }
+        showAppConfirm('هل أنت متأكد من تسديد هذا الكريدي بالكامل وإزالته من القائمة؟', doSettle, { title: 'تسديد الكريدي بالكامل', confirmText: 'نعم، تم التسديد',
             isDanger: false }); } function handleAddCreditSubmit(e) {
         if (e && e.preventDefault) e.preventDefault();
         let name = getElemVal('creditName').trim();
@@ -9646,7 +9836,15 @@ window.addEventListener('unhandledrejection', (event) => {
             }
         });
     } window.deleteSale = deleteSale; function getLocalDateString(dateInput) {
-        if (!dateInput) return ''; const d = new Date(dateInput);
+        if (!dateInput) return '';
+        // Date-only strings (e.g. staff payouts / expenses saved as "YYYY-MM-DD") must map to
+        // that same calendar day. `new Date('YYYY-MM-DD')` is parsed as UTC midnight, which can
+        // shift the day depending on the device timezone and make the caisse miss the movement.
+        if (typeof dateInput === 'string') {
+            const m = dateInput.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+        }
+        const d = new Date(dateInput);
         if (isNaN(d.getTime())) return ''; const year = d.getFullYear();
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const day = String(d.getDate()).padStart(2, '0');
@@ -10829,6 +11027,11 @@ window.addEventListener('unhandledrejection', (event) => {
                             </td>
                         </tr>
                     `; }).join(''); } } } window.renderCaisseView = renderCaisseView;
+    // Refresh the caisse immediately when a cash movement (expense, payout, supplier...) is recorded while it is open.
+    window.refreshCaisseIfVisible = function() {
+        const el = document.getElementById('caisseView');
+        if (el && !el.classList.contains('hidden')) { try { renderCaisseView(); } catch (e) { console.warn('caisse refresh note:', e); } }
+    };
     // ==========================================
     // REAL-TIME INPUT GUARDS & SECURITY BINDINGS
     // ==========================================
@@ -11569,6 +11772,7 @@ window.addEventListener('unhandledrejection', (event) => {
             supplierName: supplierName, type: 'payment',
             items: `فرسيمو وتسديد دفعة مالية بقيمة ${amount.toLocaleString()} دج`,
             totalAmount: amount, paidAmount: amount,
+            fundSource: getElemVal('quickVersFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: remainingDebt, date: new Date(dateStr).toISOString(),
             notes: notes || 'فرسيمو دفع مباشر لتسوية الكريدي',
             createdAt: new Date().toISOString()
@@ -11729,6 +11933,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="font-extrabold text-slate-900 text-sm truncate">${pName}</span>
                             <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${pType}</span>
+                            ${(p.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
                             <span class="text-[11px] text-slate-400 font-medium">${dateStr}</span>
                         </div>
                         ${pNotes ? `<div class="text-xs text-slate-500 font-medium truncate mt-0.5">${pNotes}</div>` : ''}
@@ -11796,6 +12001,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     staffName: name,
                     type,
                     amount,
+                    fundSource: getElemVal('staffPayoutFundSource') === 'general' ? 'general' : 'daily',
                     date: dateStr,
                     notes,
                     updatedAt: new Date().toISOString()
@@ -11814,6 +12020,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 staffName: name,
                 type: type,
                 amount: amount,
+                fundSource: getElemVal('staffPayoutFundSource') === 'general' ? 'general' : 'daily',
                 date: dateStr,
                 notes: notes,
                 createdAt: new Date().toISOString()
@@ -11835,6 +12042,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         saveState();
         renderStaffPayouts();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) {
             renderWorkerTransactionsModal();
         }
@@ -11928,6 +12136,7 @@ window.addEventListener('unhandledrejection', (event) => {
             items: items || 'معاملة تسديد/مشتريات',
             totalAmount: paid + debt,
             paidAmount: paid,
+            fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: debt,
             date: new Date(dateStr).toISOString(),
             notes: notes,
@@ -12128,7 +12337,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         </div>
                         <div class="text-slate-800 font-medium leading-relaxed">${escapeHTML(tx.items || '')}</div>
                         <div class="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
-                            <span class="text-blue-700 font-bold">المفرسي: ${(Number(tx.paidAmount) || 0).toLocaleString()} دج</span>
+                            <span class="text-blue-700 font-bold">المفرسي: ${(Number(tx.paidAmount) || 0).toLocaleString()} دج ${tx.fundSource === 'general' ? '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}</span>
                             <span class="text-slate-500 font-bold">الكريدي: ${(Number(tx.remainingDebt) || 0).toLocaleString()} دج</span>
                         </div>
                     </div>

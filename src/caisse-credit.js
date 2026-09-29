@@ -17,14 +17,17 @@ export function subscriptionPaidForCaisse(customer, price, logs, dateKey) {
     // Preserve what actually entered the till on the original subscription date;
     // the remainder belongs only to the day the credit was settled.
     const startDate = dateKey(customer.startDate);
-    const settlement = (Array.isArray(logs) ? logs : []).find(log =>
+    // With partial repayments there can be several receipts; the smallest
+    // "paid before" value is what entered the till on the subscription day.
+    const settlements = (Array.isArray(logs) ? logs : []).filter(log =>
         log && log.type === 'credit_payment' &&
         String(log.customerId) === String(customer.id) &&
         log.subscriptionDate === startDate &&
         (log.subscriptionCycleId || null) === (customer.subscriptionCycleId || null) &&
         log.subscriptionPaidBeforeSettlement !== undefined
     );
-    return settlement ? Number(settlement.subscriptionPaidBeforeSettlement) : paid;
+    if (!settlements.length) return paid;
+    return Math.min(...settlements.map(log => Number(log.subscriptionPaidBeforeSettlement) || 0));
 }
 
 export function linkedCustomerForCredit(credit, customers, creditId, normalizePhone) {
