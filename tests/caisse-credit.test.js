@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse } from '../src/caisse-credit.js';
+import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse, linkedCustomerForCredit } from '../src/caisse-credit.js';
 
 const dateKey = input => String(input || '').slice(0, 10);
 const subscriber = { id: 'member-1', startDate: '2026-09-24T09:00:00Z', price: 1000, paymentStatus: 'credit', debtAmount: 400 };
@@ -38,4 +38,18 @@ test('standalone credits count as repayment income and unrelated subscribers are
         .reduce((sum, p) => sum + p.amount, 0), 650);
     assert.equal(subscriptionPaidForCaisse({ ...subscriber, id: 'member-2', paymentStatus: 'paid' }, 1000, [receipt], dateKey), 1000);
     assert.deepEqual(creditPaymentsOnDate(null, '2026-09-26', dateKey), []);
+});
+
+test('product-sale credit repayment never links to a membership debt by matching phone', () => {
+    const memberWithDebt = { id: 'member-3', phone: '0550123456', paymentStatus: 'credit', debtAmount: 700 };
+    const productSaleCredit = {
+        id: 'cr_sale_123', source: 'product_sale', saleId: '123',
+        phone: memberWithDebt.phone, amount: 1200
+    };
+    const standaloneCredit = { id: 'credit-standalone', phone: memberWithDebt.phone, amount: 700 };
+    const normalizePhone = value => String(value || '');
+
+    assert.equal(linkedCustomerForCredit(productSaleCredit, [memberWithDebt], productSaleCredit.id, normalizePhone), null);
+    assert.equal(linkedCustomerForCredit(standaloneCredit, [memberWithDebt], standaloneCredit.id, normalizePhone), memberWithDebt);
+    assert.equal(isCaisseClosing({ type: 'credit_payment' }), false);
 });

@@ -65,7 +65,9 @@ window.addEventListener('unhandledrejection', (event) => {
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
   import { initializeApp } from "firebase/app";
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
-  import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse } from './caisse-credit.js';
+  import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
+  import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
+  import { resolveSaleUnitPrice } from './product-pricing.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -1049,6 +1051,39 @@ window.addEventListener('unhandledrejection', (event) => {
   }
   window.cleanKey = cleanKey;
 
+  // Store subscription receipts in the caisse ledger. Unlike the customer card,
+  // this event record survives future renewals and keeps the original cash date.
+  function recordCaisseMovement({ source, sourceId, direction = 'in', amount, date, title, detail, sourceLabel } = {}) {
+    const value = Number(String(amount ?? 0).replace(/,/g, ''));
+    if (!source || sourceId === undefined || sourceId === null || !Number.isFinite(value) || value <= 0) return null;
+    if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
+
+    const normalizedSourceId = String(sourceId);
+    const existingIdx = appState.caisseLogs.findIndex(log => log && log.type === CAISSE_MOVEMENT_TYPE &&
+      log.source === source && String(log.sourceId) === normalizedSourceId);
+    const existing = existingIdx >= 0 ? appState.caisseLogs[existingIdx] : null;
+    const movement = {
+      id: existing?.id || `cash_${cleanKey(source)}_${cleanKey(normalizedSourceId)}`,
+      type: CAISSE_MOVEMENT_TYPE,
+      source,
+      sourceId: normalizedSourceId,
+      direction: direction === 'out' ? 'out' : 'in',
+      amount: Math.abs(value),
+      date: date || new Date().toISOString(),
+      title: title || 'معاملة نقدية',
+      detail: detail || '',
+      ...(sourceLabel ? { sourceLabel } : {}),
+      createdAt: existing?.createdAt || new Date().toISOString()
+    };
+
+    if (existingIdx >= 0) appState.caisseLogs[existingIdx] = movement;
+    else appState.caisseLogs.unshift(movement);
+    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', movement);
+    if (typeof window.scheduleRender === 'function') window.scheduleRender();
+    return movement;
+  }
+  window.recordCaisseMovement = recordCaisseMovement;
+
   // Deleted Items Tombstone Registry (prevents deleted items like credits from resurrecting on reload or sync)
   window.registerDeletedItemId = function(sectionPath, id) {
     if (!sectionPath || !id) return;
@@ -1146,6 +1181,9 @@ window.addEventListener('unhandledrejection', (event) => {
     const total = Number(sale.total || 0);
     const profit = Number(sale.profit || 0);
     const qty = Number(sale.qty || 1);
+    const cashPaid = sale.cashPaid !== undefined && sale.cashPaid !== null
+      ? Math.max(0, Number(sale.cashPaid) || 0)
+      : (sale.paymentStatus === 'credit' ? 0 : total);
 
     window.appState = window.appState || {};
     window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
@@ -1160,7 +1198,7 @@ window.addEventListener('unhandledrejection', (event) => {
       s.salesCount = Math.max(0, s.salesCount - 1);
       s.profit = Math.max(0, s.profit - profit);
       s.productsSold = Math.max(0, s.productsSold - qty);
-      s.cashIn = Math.max(0, s.cashIn - total);
+      s.cashIn = Math.max(0, s.cashIn - cashPaid);
       targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
     });
 
@@ -1183,6 +1221,9 @@ window.addEventListener('unhandledrejection', (event) => {
     const total = Number(sale.total || 0);
     const profit = Number(sale.profit || 0);
     const qty = Number(sale.qty || 1);
+    const cashPaid = sale.cashPaid !== undefined && sale.cashPaid !== null
+      ? Math.max(0, Number(sale.cashPaid) || 0)
+      : (sale.paymentStatus === 'credit' ? 0 : total);
 
     window.appState = window.appState || {};
     window.appState.v2Stats = window.appState.v2Stats || { daily: {}, monthly: {}, yearly: {} };
@@ -1196,7 +1237,7 @@ window.addEventListener('unhandledrejection', (event) => {
       s.salesCount += 1;
       s.profit += profit;
       s.productsSold += qty;
-      s.cashIn += total;
+      s.cashIn += cashPaid;
       targetUpdates[`v2/stats/${period}/${key}`] = { ...s };
     });
 
@@ -1311,6 +1352,9 @@ window.addEventListener('unhandledrejection', (event) => {
           const total = Number(itemData.total || 0);
           const profit = Number(itemData.profit || 0);
           const qty = Number(itemData.qty || 1);
+          const cashPaid = itemData.cashPaid !== undefined && itemData.cashPaid !== null
+            ? Math.max(0, Number(itemData.cashPaid) || 0)
+            : (itemData.paymentStatus === 'credit' ? 0 : total);
           const enrichedSale = { ...itemData, id: cleanId, dateKey, total, profit, qty };
 
           v2Updates[`v2/sales/${cleanId}`] = enrichedSale;
@@ -1352,7 +1396,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
           const statsUpdates = applySaleStats(itemData, oldSale);
           Object.assign(v2Updates, statsUpdates);
-          window._processedStats.set(statKey, { total, profit, qty, date: itemData.date });
+          window._processedStats.set(statKey, { total, profit, qty, cashPaid, paymentStatus: itemData.paymentStatus, date: itemData.date });
         } else if (sectionPath === 'expenses') {
           const dateKey = getDateKey(itemData.date);
           const amt = parseFloat(String(itemData.amount || 0).replace(/,/g, '')) || 0;
@@ -1727,6 +1771,7 @@ window.addEventListener('unhandledrejection', (event) => {
       const sections = [
         { name: 'customers', v2: 'customers' },
         { name: 'products', v2: 'products' },
+        { name: 'quickSessions', v2: 'quickSessions' },
         { name: 'expenses', v2: 'expenses' },
         { name: 'credits', v2: 'credits' },
         { name: 'suppliers', v2: 'suppliers' },
@@ -1981,9 +2026,11 @@ window.addEventListener('unhandledrejection', (event) => {
           { name: 'products', q: ref(database, 'v2/products') },
           { name: 'customers', q: ref(database, 'v2/customers') },
           { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(window.SALES_REALTIME_WINDOW || 3000)) },
+          { name: 'quickSessions', q: ref(database, 'v2/quickSessions') },
           { name: 'expenses', q: ref(database, 'v2/expenses') },
           { name: 'credits', q: ref(database, 'v2/credits') },
           { name: 'suppliers', q: ref(database, 'v2/suppliers') },
+          { name: 'supplierTransactions', q: ref(database, 'v2/supplierTransactions') },
           { name: 'packages', q: ref(database, 'v2/packages') },
           { name: 'staffPayouts', q: ref(database, 'v2/staffPayouts') },
           { name: 'coachAbsences', q: ref(database, 'v2/coachAbsences') },
@@ -2521,8 +2568,9 @@ window.addEventListener('unhandledrejection', (event) => {
         } else if (view === 'caisse') {
             if (caisseV) {
                 if (typeof window.lazyLoadSection === 'function') {
-                    window.lazyLoadSection('caisseLogs');
-                    window.lazyLoadSection('sales');
+                    // The caisse aggregates live cash movement from every finance section.
+                    ['caisseLogs', 'sales', 'customers', 'packages', 'quickSessions', 'expenses',
+                     'staffPayouts', 'suppliers', 'supplierTransactions'].forEach(section => window.lazyLoadSection(section));
                 }
                 const openCaisseInternal = () => {
                     caisseV.classList.remove('hidden');
@@ -3393,7 +3441,9 @@ window.addEventListener('unhandledrejection', (event) => {
             if (!Array.isArray(appState.customers)) {
                 appState.customers = appState.customers ? Object.values(appState.customers) : [];
             }
-            const newCustomer = { id: Date.now().toString(),
+            const newCustomerId = Date.now().toString();
+            const newCustomer = { id: newCustomerId,
+                subscriptionCycleId: 'sub_' + newCustomerId,
                 imageUrl, name: custName, phone: cleanPhone(custPhone),
                 gender: custGender, dob: custDob,
                 age: dobValidation.age, weight: custWeight,
@@ -3408,6 +3458,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 status: 'active', startDate: startDate.toISOString(),
                 endDate: endDate.toISOString() };
             appState.customers.unshift(newCustomer);
+            const subscriptionCashPaid = paymentStatus === 'paid'
+                ? Number(custPrice || 0)
+                : (paymentStatus === 'credit' ? Math.max(0, Number(custPrice || 0) - Number(debtAmount || 0)) : 0);
+            recordCaisseMovement({
+                source: 'subscription', sourceId: newCustomer.subscriptionCycleId,
+                direction: 'in', amount: subscriptionCashPaid, date: new Date().toISOString(),
+                title: `اشتراك: ${custName}`, detail: pkg ? pkg.name : 'اشتراك', sourceLabel: 'الاشتراكات'
+            });
             if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'}`, custPrice);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', newCustomer);
@@ -3989,6 +4047,16 @@ window.addEventListener('unhandledrejection', (event) => {
             if (startVal) customer.startDate = new Date(startVal).toISOString();
             if (endVal) customer.endDate = new Date(endVal).toISOString();
         }
+
+        const renewalCashPaid = paymentStatus === 'paid'
+            ? Number(renewPrice || 0)
+            : (paymentStatus === 'credit' ? Math.max(0, Number(renewPrice || 0) - Number(debtAmount || 0)) : 0);
+        recordCaisseMovement({
+            source: 'subscription', sourceId: customer.subscriptionCycleId,
+            direction: 'in', amount: renewalCashPaid, date: new Date().toISOString(),
+            title: `تجديد اشتراك: ${customer.name || 'مشترك'}`,
+            detail: pkg ? pkg.name : 'تجديد اشتراك', sourceLabel: 'الاشتراكات'
+        });
 
         // Credit record handling
         if (paymentStatus === 'credit' && debtAmount > 0) {
@@ -5771,17 +5839,63 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.setSellUnitMode = setSellUnitMode;
 
+    function isSealedBoxProduct(product) {
+        if (!product) return false;
+        const explicitCategory = String(product.category || '').toLowerCase().trim();
+        if (explicitCategory === 'boxes') return true;
+        if (['doses', 'frigo', 'other'].includes(explicitCategory)) return false;
+        return typeof getProductCategory === 'function' && getProductCategory(product) === 'boxes';
+    }
+
+    function getProductSalePriceDetails(product) {
+        const priceInput = document.getElementById('sellCustomPrice');
+        const productId = String(product?.id ?? '');
+        const selectedProductId = String(getElemVal('sellProdId') || '');
+        return resolveSaleUnitPrice(product, {
+            allowCustom: isSealedBoxProduct(product) &&
+                selectedProductId === productId && priceInput?.dataset.productId === productId,
+            customPrice: priceInput?.value ?? ''
+        });
+    }
+
     function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
         const stockInfo = document.getElementById('stockInfo');
-        if (!stockInfo) return; const product = appState.products ? appState.products.find(p => p.id === prodId) : null;
-        if (!product) { stockInfo.classList.add('hidden');
-            return; } const qty = parseFloat(getElemVal('sellProdQty')) || 1;
+        const customPriceFields = document.getElementById('sellCustomPriceFields');
+        const customPriceInput = document.getElementById('sellCustomPrice');
+        if (!stockInfo) return;
+        const product = appState.products ? appState.products.find(p => String(p.id) === String(prodId)) : null;
+        if (!product) {
+            stockInfo.classList.add('hidden');
+            if (customPriceFields) customPriceFields.classList.add('hidden');
+            if (customPriceInput) {
+                customPriceInput.value = '';
+                customPriceInput.dataset.productId = '';
+                customPriceInput.dataset.userEdited = 'false';
+            }
+            return;
+        }
+        const isBoxProduct = isSealedBoxProduct(product);
+        if (customPriceFields) customPriceFields.classList.toggle('hidden', !isBoxProduct);
+        if (customPriceInput) {
+            if (isBoxProduct && customPriceInput.dataset.productId !== String(product.id)) {
+                const defaultPrice = Number(product.price || 0);
+                customPriceInput.value = defaultPrice > 0 ? String(defaultPrice) : '';
+                customPriceInput.dataset.productId = String(product.id);
+                customPriceInput.dataset.userEdited = 'false';
+            } else if (!isBoxProduct) {
+                customPriceInput.value = '';
+                customPriceInput.dataset.productId = '';
+                customPriceInput.dataset.userEdited = 'false';
+            }
+        }
+        const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
 
         // Automatic calculation based on measurement/weight
         const deduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
-        const unitPrice = Number(product.price || 0);
+        const priceDetails = getProductSalePriceDetails(product);
+        const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
         const totalPrice = (unitPrice * qty).toFixed(2);
 
         const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
@@ -5808,8 +5922,84 @@ window.addEventListener('unhandledrejection', (event) => {
                 <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong> (سعر الوحدة: ${unitPrice} دج)</span>
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
+
+    window.toggleProductSaleCreditFields = function() {
+        const isCredit = getElemVal('sellPaymentMethod') === 'credit';
+        const fields = document.getElementById('sellCreditFields');
+        const nameInput = document.getElementById('sellCreditName');
+        if (fields) fields.classList.toggle('hidden', !isCredit);
+        if (nameInput) nameInput.required = isCredit;
+    };
+    window.toggleProductSaleCreditFields();
+
+    function getProductSalePaymentInfo(total) {
+        const isCredit = getElemVal('sellPaymentMethod') === 'credit';
+        if (!isCredit) {
+            return {
+                paymentStatus: 'paid', paymentMethod: 'cash',
+                cashPaid: Number(total) || 0, creditAmount: 0,
+                customerName: '', customerPhone: ''
+            };
+        }
+
+        const creditAmount = Number(total);
+        if (!Number.isFinite(creditAmount) || creditAmount <= 0) {
+            showErrorToast('لا يمكن تسجيل كريدي بمبلغ غير صالح أو يساوي صفراً');
+            return null;
+        }
+        const customerNameInput = getElemVal('sellCreditName').trim();
+        const rawPhone = getElemVal('sellCreditPhone').trim();
+        const nameValidation = validateSafeName(customerNameInput, 'اسم صاحب الكريدي', true, 60);
+        if (!nameValidation.valid) {
+            showErrorToast(nameValidation.error || 'يرجى كتابة اسم صاحب الكريدي بشكل صحيح');
+            document.getElementById('sellCreditName')?.focus();
+            return null;
+        }
+        const phoneValidation = validateSafePhone(rawPhone, false);
+        if (!phoneValidation.valid) {
+            showErrorToast(phoneValidation.error || 'يرجى إدخال رقم هاتف صحيح');
+            document.getElementById('sellCreditPhone')?.focus();
+            return null;
+        }
+        const customerName = nameValidation.value;
+        const customerPhone = phoneValidation.value;
+        return {
+            paymentStatus: 'credit', paymentMethod: 'credit',
+            cashPaid: 0, creditAmount,
+            customerName, customerPhone
+        };
+    }
+
+    function createProductSaleCredit(sale) {
+        if (!sale || sale.paymentStatus !== 'credit') return null;
+        if (!Array.isArray(appState.credits)) appState.credits = [];
+        const creditId = sale.creditId || `cr_sale_${cleanKey(sale.id)}`;
+        const credit = {
+            id: creditId,
+            source: 'product_sale',
+            saleId: String(sale.id),
+            productId: String(sale.prodId || ''),
+            name: sale.customerName || 'زبون مبيعات',
+            nickname: 'زبون',
+            phone: sale.customerPhone || '',
+            desc: `دين بيع منتج: ${sale.prodName || 'منتج'} × ${Number(sale.qty || 1)}`,
+            amount: Number(sale.creditAmount ?? sale.total) || 0,
+            date: sale.date || new Date().toISOString(),
+            status: 'open'
+        };
+        const existingIdx = appState.credits.findIndex(item => String(item && item.id) === String(creditId));
+        if (existingIdx >= 0) appState.credits[existingIdx] = credit;
+        else appState.credits.unshift(credit);
+        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('credits', credit);
+        return credit;
+    }
+
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
     document.getElementById('sellProdQty')?.addEventListener('input', updateStockInfoDisplay);
+    document.getElementById('sellCustomPrice')?.addEventListener('input', function() {
+        this.dataset.userEdited = 'true';
+        updateStockInfoDisplay();
+    });
     document.getElementById('sellProductForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const prodId = getElemVal('sellProdId');
         const qty = parseFloat(getElemVal('sellProdQty'));
@@ -5823,7 +6013,13 @@ window.addEventListener('unhandledrejection', (event) => {
 
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
-        let salePrice = Number(product.price || 0);
+        const salePriceDetails = getProductSalePriceDetails(product);
+        if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
+            showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
+            document.getElementById('sellCustomPrice')?.focus();
+            return;
+        }
+        let salePrice = salePriceDetails.unitPrice;
         let saleCost = Number(product.cost || 0) * qty;
         let saleLabel = product.name;
 
@@ -5836,6 +6032,8 @@ window.addEventListener('unhandledrejection', (event) => {
 
         let saleTotal = Number((salePrice * qty).toFixed(2));
         let saleProfit = saleTotal - saleCost;
+        const paymentInfo = getProductSalePaymentInfo(saleTotal);
+        if (!paymentInfo) return;
         const coachInput = document.getElementById('sellCoachName');
         const coachVal = (coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام';
         const dateVal = getElemVal('sellDate') || '';
@@ -5851,7 +6049,8 @@ window.addEventListener('unhandledrejection', (event) => {
 
         product.stock = Number(product.stock || 0) - stockDeduction;
 
-        const newSale = { id: Date.now().toString(),
+        const saleId = Date.now().toString();
+        const newSale = { id: saleId,
             prodId: product.id, prodName: saleLabel,
             category: prodCategory,
             stockLocation: product.stockLocation || 'stock1',
@@ -5862,19 +6061,28 @@ window.addEventListener('unhandledrejection', (event) => {
             cost: saleCost, total: saleTotal,
             profit: saleProfit, coachName: coachVal,
             coachCommission: coachCommission,
+            ...paymentInfo,
+            ...(paymentInfo.paymentStatus === 'credit' ? { creditId: `cr_sale_${cleanKey(saleId)}` } : {}),
             date: dateStr };
         appState.sales.unshift(newSale);
+        createProductSaleCredit(newSale);
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('sales', newSale);
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
-        if (typeof logActivity === 'function') logActivity('sale', 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${qty} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
+        if (typeof window.toggleProductSaleCreditFields === 'function') window.toggleProductSaleCreditFields();
+        if (typeof logActivity === 'function') logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج بالكريدي' : 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${qty} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
         updateStockInfoDisplay();
-        showSuccessToast(`تم البيع بنجاح وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
+        if (paymentInfo.paymentStatus === 'credit') {
+            showSuccessToast(`تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
+            if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+        } else {
+            showSuccessToast(`تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
+        }
         render(); }); function deleteCustomer(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
@@ -6185,6 +6393,7 @@ window.addEventListener('unhandledrejection', (event) => {
             autoFillSupplierInfo('');
             showSuccessToast(`تم تحديث حساب المورد (${existing.name}) بنجاح. الكريدي المتبقي: ${existing.debt.toLocaleString()} دج`);
             renderSuppliersList();
+            render();
             return; }
         if (!items) { showErrorToast('يرجى كتابة تفاصيل السلع المشتراة للمورد الجديد');
             return; } const newSupObj = { id: Date.now().toString(),
@@ -6213,6 +6422,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (sDate) sDate.value = new Date().toISOString().split('T')[0];
         showSuccessToast('تم تسجيل فاتورة / معاملة المورد بنجاح');
         renderSuppliersList();
+        render();
         }); function deleteSupplier(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف معاملة مورد', prompt: 'أدخل كلمة المرور لتأكيد حذف معاملة المورد', buttonText: 'تأكيد الحذف' }, () => {
@@ -7199,14 +7409,10 @@ window.addEventListener('unhandledrejection', (event) => {
             }
             if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId}`, amount);
 
-            // Find the subscriber BEFORE clearing their debt so the original day's paid
-            // portion can be preserved separately from today's cash repayment.
+            // Preserve membership debt semantics without matching product-sale credits
+            // to a subscriber merely because their phone numbers happen to be equal.
             const customers = Array.isArray(appState.customers) ? appState.customers : [];
-            const linkedCust = customers.find(c => c && (
-                (targetCredit.customerId && String(c.id) === String(targetCredit.customerId)) ||
-                targetId === `cr_auto_${c.id}` || targetId.startsWith(`cr_auto_${c.id}_`)
-            )) || (targetCredit.phone ? customers.find(c => c && c.paymentStatus === 'credit' &&
-                cleanPhone(c.phone) === cleanPhone(targetCredit.phone)) : null);
+            const linkedCust = linkedCustomerForCredit(targetCredit, customers, targetId, cleanPhone);
             if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
             // Stable receipt ID makes a repeated settlement idempotent across syncs.
             if (!appState.caisseLogs.some(l => l.type === 'credit_payment' && String(l.creditId) === String(targetCredit.id || targetId))) {
@@ -7355,25 +7561,13 @@ window.addEventListener('unhandledrejection', (event) => {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (typeof logActivity === 'function') logActivity('credit', 'حذف كريدي', `حذف سجل الكريدي الخاص بـ: ${targetCredit ? targetCredit.name : targetId}`);
 
-            // If credit is linked to a customer, clear their debt in customers collection
-            if (targetCredit) {
-                const custId = targetCredit.customerId || (targetId.startsWith('cr_auto_') ? targetId.replace('cr_auto_', '') : null);
-                let linkedCust = null;
-                if (custId && Array.isArray(appState.customers)) {
-                    linkedCust = appState.customers.find(c => String(c && c.id) === String(custId));
-                }
-                if (!linkedCust && targetCredit.phone && Array.isArray(appState.customers)) {
-                    const normP = cleanPhone(targetCredit.phone);
-                    if (normP) {
-                        linkedCust = appState.customers.find(c => cleanPhone(c && c.phone) === normP && c.paymentStatus === 'credit');
-                    }
-                }
-                if (linkedCust) {
-                    linkedCust.debtAmount = 0;
-                    linkedCust.paymentStatus = 'paid';
-                    linkedCust.updatedAt = Date.now();
-                    if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
-                }
+            // Clear a linked customer debt only for customer/subscription credits.
+            const linkedCust = linkedCustomerForCredit(targetCredit, appState.customers, targetId, cleanPhone);
+            if (linkedCust) {
+                linkedCust.debtAmount = 0;
+                linkedCust.paymentStatus = 'paid';
+                linkedCust.updatedAt = Date.now();
+                if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', linkedCust);
             }
 
             if (typeof window.registerDeletedItemId === 'function') {
@@ -8663,7 +8857,9 @@ window.addEventListener('unhandledrejection', (event) => {
         const qtyInput = document.getElementById('sellProdQty');
         if (qtyInput) { qtyInput.focus();
             qtyInput.select(); }
-        showSuccessToast(`تم اختيار (${product.name}) — أدخل الكمية المطلوبة ثم اضغط تأكيد البيع`);
+        showSuccessToast(isSealedBoxProduct(product)
+            ? `تم اختيار (${product.name}) — أدخل الكمية واختر سعر بيع العلبة ثم اضغط تأكيد البيع`
+            : `تم اختيار (${product.name}) — أدخل الكمية المطلوبة ثم اضغط تأكيد البيع`);
         isProcessingBarcode = false; } window.chooseStockForSale = chooseStockForSale;
     function setQuickSellQty(qty) {
         const input = document.getElementById('sellProdQty');
@@ -8712,7 +8908,13 @@ window.addEventListener('unhandledrejection', (event) => {
 
             const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
             let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
-            let salePrice = Number(product.price || 0);
+            const salePriceDetails = getProductSalePriceDetails(product);
+            if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
+                showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
+                document.getElementById('sellCustomPrice')?.focus();
+                return false;
+            }
+            let salePrice = salePriceDetails.unitPrice;
             let saleCost = Number(product.cost || 0) * qty;
             let unitLabel = '';
 
@@ -8741,6 +8943,8 @@ window.addEventListener('unhandledrejection', (event) => {
 
             let saleTotal = Number((salePrice * qty).toFixed(2));
             let saleProfit = saleTotal - saleCost;
+            const paymentInfo = getProductSalePaymentInfo(saleTotal);
+            if (!paymentInfo) return false;
             let coachCommission = (coachVal && coachVal !== 'عام' && saleProfit > 0) ? Math.round(saleProfit * 0.33) : 0;
             let prodCategory = product.category || (typeof getProductCategory === 'function' ? getProductCategory(product) : 'other');
             let saleLabel = product.name + unitLabel;
@@ -8749,8 +8953,9 @@ window.addEventListener('unhandledrejection', (event) => {
             product.stock = currentStock - stockDeduction;
 
             if (!appState.sales) appState.sales = [];
+            const saleId = Date.now().toString();
             const newSale = {
-                id: Date.now().toString(),
+                id: saleId,
                 prodId: product.id,
                 prodName: saleLabel,
                 category: prodCategory,
@@ -8764,10 +8969,13 @@ window.addEventListener('unhandledrejection', (event) => {
                 profit: saleProfit,
                 coachName: coachVal,
                 coachCommission: coachCommission,
+                ...paymentInfo,
+                ...(paymentInfo.paymentStatus === 'credit' ? { creditId: `cr_sale_${cleanKey(saleId)}` } : {}),
                 date: dateStr
             };
 
             appState.sales.unshift(newSale);
+            createProductSaleCredit(newSale);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('sales', newSale);
                 window.saveFirebaseSectionItem('products', product);
@@ -8775,12 +8983,24 @@ window.addEventListener('unhandledrejection', (event) => {
             saveState();
 
             if (typeof logActivity === 'function') {
-                logActivity('sale', 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} (خصم مخزون: ${stockDeduction}) - الإجمالي: ${saleTotal} دج`, saleTotal);
+                logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج فوري بالكريدي' : 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}) - الإجمالي: ${saleTotal} دج`, saleTotal);
             }
 
             playBeep();
-            showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] بنجاح بدون تأكيد! (خصم المخزون: ${stockDeduction} - المتبقي: ${product.stock})`);
+            if (paymentInfo.paymentStatus === 'credit') {
+                showSuccessToast(`تم البيع بالكريدي لـ (${paymentInfo.customerName}) بقيمة ${saleTotal.toLocaleString()} دج، سُجل الدين وخُصمت الكمية (${stockDeduction})`);
+                if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+            } else {
+                showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] نقداً بدون تأكيد! (خصم المخزون: ${stockDeduction} - المتبقي: ${product.stock})`);
+            }
 
+            const customPriceInput = document.getElementById('sellCustomPrice');
+            if (customPriceInput && customPriceInput.dataset.userEdited === 'true' &&
+                customPriceInput.dataset.productId === String(product.id)) {
+                const defaultPrice = Number(product.price || 0);
+                customPriceInput.value = defaultPrice > 0 ? String(defaultPrice) : '';
+                customPriceInput.dataset.userEdited = 'false';
+            }
             if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
             if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
             if (typeof render === 'function') render();
@@ -8847,6 +9067,26 @@ window.addEventListener('unhandledrejection', (event) => {
                         showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
                         await closeBarcodeCamera();
                         isProcessingBarcode = false;
+                        return;
+                    }
+
+                    const selectedProductId = String(getElemVal('sellProdId') || '');
+                    const customPriceInput = document.getElementById('sellCustomPrice');
+                    const hasChosenBoxPrice = selectedProductId === String(prodStock1.id) &&
+                        customPriceInput?.dataset.productId === String(prodStock1.id) &&
+                        customPriceInput.dataset.userEdited === 'true';
+                    if (isSealedBoxProduct(prodStock1) && !hasChosenBoxPrice) {
+                        updateSellProductDropdown();
+                        const sellProductSelect = document.getElementById('sellProdId');
+                        if (sellProductSelect) sellProductSelect.value = String(prodStock1.id);
+                        if (qtyInput) qtyInput.value = String(chosenQty);
+                        updateStockInfoDisplay();
+                        await closeBarcodeCamera();
+                        isProcessingBarcode = false;
+                        showInfoToast(`تم تحديد العلبة (${prodStock1.name}). راجع السعر الافتراضي أو اختر سعراً آخر، ثم اضغط «تأكيد البيع اليدوي».`);
+                        document.getElementById('sellCustomPriceFields')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        customPriceInput?.focus();
+                        customPriceInput?.select();
                         return;
                     }
 
@@ -9376,11 +9616,31 @@ window.addEventListener('unhandledrejection', (event) => {
                 }
             }
             if (typeof logActivity === 'function') logActivity('sale', 'إلغاء عملية بيع', `إلغاء البيع واسترجاع الكمية: ${sale ? sale.prodName || sale.name : saleId}`);
+            const relatedSaleCredits = (Array.isArray(appState.credits) ? appState.credits : []).filter(credit => credit && (
+                (sale.creditId && String(credit.id) === String(sale.creditId)) ||
+                String(credit.saleId || '') === String(sale.id)
+            ));
+            relatedSaleCredits.forEach(credit => {
+                if (typeof window.registerDeletedItemId === 'function') {
+                    if (credit.id) window.registerDeletedItemId('credits', credit.id);
+                    if (credit._rtdbKey) window.registerDeletedItemId('credits', credit._rtdbKey);
+                }
+                if (window.deleteFirebaseSectionItem) {
+                    if (credit.id) window.deleteFirebaseSectionItem('credits', credit.id, credit);
+                    if (credit._rtdbKey && credit._rtdbKey !== credit.id) window.deleteFirebaseSectionItem('credits', credit._rtdbKey, credit);
+                }
+            });
+            if (relatedSaleCredits.length) {
+                const relatedCreditIds = new Set(relatedSaleCredits);
+                appState.credits = appState.credits.filter(credit => !relatedCreditIds.has(credit));
+                window.appState.credits = appState.credits;
+            }
             appState.sales.splice(idx, 1);
             if (window.deleteFirebaseSectionItem) {
                 window.deleteFirebaseSectionItem('sales', saleId, sale);
             }
             saveState(); showSuccessToast('تم إلغاء عملية البيع واسترجاع الكمية للمخزون');
+            if (relatedSaleCredits.length && typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render(); if (typeof updateFullReportSalesSection === 'function') {
                 updateFullReportSalesSection();
             }
@@ -9458,6 +9718,9 @@ window.addEventListener('unhandledrejection', (event) => {
            const isStock2 = s.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="text-[9px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">مخزون 2</span>`
                 : `<span class="text-[9px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">مخزون 1</span>`;
+           const paymentBadge = s.paymentStatus === 'credit'
+                ? `<span class="text-[9px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">كريدي</span>`
+                : '';
            const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
            let catBadge = ''; if (cat === 'doses') {
                catBadge = `<span class="text-[9px] font-bold text-blue-800 bg-blue-100/90 px-1.5 py-0.5 rounded-md border border-blue-200">بروتين دوز</span>`;
@@ -9466,6 +9729,7 @@ window.addEventListener('unhandledrejection', (event) => {
            } else if (cat === 'frigo') {
                catBadge = `<span class="text-[9px] font-bold text-blue-900 bg-blue-100/90 px-1.5 py-0.5 rounded-md border border-blue-200">فريغو</span>`;
            } const sProfit = Number(s.profit) || 0;
+           const saleUnitPrice = Number(s.price ?? ((Number(s.total) || 0) / Math.max(1, Number(s.qty) || 1)));
            const coachCommission = s.coachCommission !== undefined ? Number(s.coachCommission) : ((coachName !== 'عام' && sProfit > 0) ? Math.round(sProfit * 0.33) : 0);
            return `
            <div class="flex justify-between items-center p-3 border border-slate-200 rounded-xl mb-2 bg-white hover:bg-slate-50/80 transition-all shadow-xs">
@@ -9474,6 +9738,7 @@ window.addEventListener('unhandledrejection', (event) => {
                        <span>${name}</span>
                        <span class="text-xs text-slate-500 font-normal">(x${s.qty || 1})</span>
                        ${stockBadge}
+                       ${paymentBadge}
                        ${catBadge}
                    </div>
                    <div class="flex items-center gap-1.5 text-[11px] text-slate-500 flex-wrap">
@@ -9497,6 +9762,7 @@ window.addEventListener('unhandledrejection', (event) => {
                <div class="flex items-center gap-2">
                    <div class="text-left">
                        <div class="font-extrabold text-blue-600 text-sm" dir="ltr">${Number(s.total || 0).toLocaleString()} دج</div>
+                       ${cat === 'boxes' ? `<div class="text-[10px] font-bold text-slate-500">سعر العلبة: ${saleUnitPrice.toLocaleString()} دج</div>` : ''}
                        ${sProfit > 0 ? `<div class="text-[10px] font-bold text-blue-600">الربح الصافي: ${sProfit.toLocaleString()} دج</div>` : ''}
                    </div>
                    <button onclick="deleteSale('${safeId}')" class="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg transition-colors" title="إلغاء البيع">
@@ -10172,53 +10438,48 @@ window.addEventListener('unhandledrejection', (event) => {
     } window.calculateStockValuation = calculateStockValuation;
     function calculateCaisseDetails(targetDateInput) {
         const targetDateStr = getLocalDateString(targetDateInput) || getLocalDateString(new Date());
-        let subIncome = 0; let quickIncome = 0;
-        let salesIncome = 0;
         const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
+        const movementTotals = buildCaisseMovements(appState, targetDateStr, getLocalDateString);
         const creditPayments = creditPaymentsOnDate(logs, targetDateStr, getLocalDateString);
-        const creditIncome = creditPayments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
-        // 1. Subscriptions paid on that specific date
-        if (Array.isArray(appState.customers)) {
-            appState.customers.forEach(c => { if (!c) return;
-                const cDateStr = getLocalDateString(c.startDate);
-                if (cDateStr === targetDateStr) {
-                    const pkg = getPackageById(c.packageId);
-                    const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
-                    subIncome += subscriptionPaidForCaisse(c, price, logs, getLocalDateString); } }); }
-        // 2. Quick sessions on that specific date
-        if (Array.isArray(appState.quickSessions)) {
-            appState.quickSessions.forEach(qs => {
-                if (!qs) return; const qDateStr = getLocalDateString(qs.date || Number(qs.id) || Date.now());
-                if (qDateStr === targetDateStr) {
-                    quickIncome += Number(qs.price || 0);
-                } }); }
-        // 3. Product sales on that specific date
-        if (Array.isArray(appState.sales)) {
-            appState.sales.forEach(s => { if (!s) return;
-                const sDateStr = getLocalDateString(s.date);
-                if (sDateStr === targetDateStr) {
-                    salesIncome += Number(s.total || 0);
-                } }); }
-        // Prefer exact pre-aggregated daily stats while older sales history is still loading
+        const subIncome = movementTotals.subIncome;
+        const quickIncome = movementTotals.quickIncome;
+        let salesIncome = movementTotals.salesIncome;
+        const creditIncome = movementTotals.creditIncome;
+
+        // Prefer exact pre-aggregated daily sales while older sales history is loading.
         if (window.salesHistoryLoading && !window.salesHistoryComplete &&
             window.appState && window.appState.v2Stats && window.appState.v2Stats.daily &&
             window.appState.v2Stats.daily[targetDateStr]) {
-            salesIncome = Number(window.appState.v2Stats.daily[targetDateStr].sales) || 0;
+            const salesStatsForDate = window.appState.v2Stats.daily[targetDateStr];
+            salesIncome = salesStatsForDate.cashIn !== undefined
+                ? (Number(salesStatsForDate.cashIn) || 0)
+                : (Number(salesStatsForDate.sales) || 0);
         }
-        const totalIncome = subIncome + quickIncome + salesIncome + creditIncome;
-        // Repayment receipts are not clôture records.
+        const totalIncome = movementTotals.totalIncome - movementTotals.salesIncome + salesIncome;
+        const totalExpenses = movementTotals.totalExpenses;
+        const netCash = totalIncome - totalExpenses;
+
+        // Repayment receipts and movements are not clôture records.
         const log = logs.find(l => isCaisseClosing(l) && getLocalDateString(l.date) === targetDateStr);
-        const isClosed = Boolean(log); const actualAmount = isClosed ? Number(log.actualAmount || 0) : null;
-        const difference = isClosed ? (actualAmount - totalIncome) : 0;
+        const isClosed = Boolean(log);
+        const actualAmount = isClosed ? Number(log.actualAmount || 0) : null;
+        const difference = isClosed ? (actualAmount - netCash) : 0;
         const manque = (isClosed && difference < 0) ? Math.abs(difference) : 0;
         const excedent = (isClosed && difference > 0) ? difference : 0;
         const cashier = isClosed ? (log.cashier || '') : '';
         const notes = isClosed ? (log.notes || '') : '';
-        return { targetDateStr, subIncome,
-            quickIncome, salesIncome, creditIncome, creditPayments,
-            totalIncome, log, isClosed,
-            actualAmount, difference, manque,
-            excedent, cashier, notes }; } window.calculateCaisseDetails = calculateCaisseDetails;
+        return {
+            targetDateStr,
+            subIncome, quickIncome, salesIncome, creditIncome, creditPayments,
+            expenseTotal: movementTotals.expenses,
+            staffPayouts: movementTotals.staffPayouts,
+            supplierPayments: movementTotals.supplierPayments,
+            totalIncome, totalExpenses, netCash,
+            transactions: movementTotals.transactions,
+            log, isClosed, actualAmount, difference, manque, excedent, cashier, notes
+        };
+    }
+    window.calculateCaisseDetails = calculateCaisseDetails;
     function calculateAllCaisseShortages() {
         const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
         const now = new Date(); const curMonth = now.getMonth();
@@ -10231,7 +10492,7 @@ window.addEventListener('unhandledrejection', (event) => {
             // Compute exact expected income for that log's date to ensure accuracy
             const details = calculateCaisseDetails(log.date);
             const actual = Number(log.actualAmount || 0);
-            const diff = actual - details.totalIncome;
+            const diff = actual - details.netCash;
             const isCurMonth = (d.getMonth() === curMonth && d.getFullYear() === curYear);
             const isCurYear = (d.getFullYear() === curYear);
             if (diff < 0) { const shortage = Math.abs(diff);
@@ -10279,7 +10540,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const valStr = actualInput.value.trim();
         if (valStr === '') { previewContainer.classList.add('hidden');
             return; } const actual = parseFloat(valStr) || 0;
-        const diff = actual - details.totalIncome;
+        const diff = actual - details.netCash;
         previewContainer.classList.remove('hidden');
         if (diff < 0) { previewContainer.className = 'p-3 rounded-2xl border text-xs font-bold bg-slate-100 border-slate-200 text-slate-800';
             previewTitle.textContent = 'عجز ونقص في الصندوق (Manque):';
@@ -10325,17 +10586,23 @@ window.addEventListener('unhandledrejection', (event) => {
             showErrorToast('يرجى إدخال المبلغ الفعلي الموجود في الصندوق');
             return; } const cashier = (cashierInput?.value || '').trim();
         const notes = (notesInput?.value || '').trim();
-        // Calculate expected income for this date
+        // Compare the actual cash with the day's net cash movement (receipts minus paid expenses).
         const details = calculateCaisseDetails(dateVal);
-        const difference = actualAmount - details.totalIncome;
+        const difference = actualAmount - details.netCash;
         if (!Array.isArray(appState.caisseLogs)) {
             appState.caisseLogs = []; } const existingIdx = appState.caisseLogs.findIndex(l => isCaisseClosing(l) && getLocalDateString(l.date) === dateVal);
         const logEntry = { id: existingIdx !== -1 ? appState.caisseLogs[existingIdx].id : 'caisse_' + Date.now(),
-            type: 'closing', date: dateVal, expectedIncome: details.totalIncome,
+            type: 'closing', date: dateVal, expectedIncome: details.netCash,
+            expectedNetCash: details.netCash,
+            totalIncome: details.totalIncome, totalExpenses: details.totalExpenses,
+            netCash: details.netCash,
             subIncome: details.subIncome,
             quickIncome: details.quickIncome,
             salesIncome: details.salesIncome,
             creditIncome: details.creditIncome,
+            expenseTotal: details.expenseTotal,
+            staffPayouts: details.staffPayouts,
+            supplierPayments: details.supplierPayments,
             actualAmount: actualAmount,
             difference: difference, cashier: cashier,
             notes: notes, savedAt: new Date().toISOString()
@@ -10398,10 +10665,35 @@ window.addEventListener('unhandledrejection', (event) => {
             setElemHTML('caisseDayQuickIncome', formatMoney(details.quickIncome));
             setElemHTML('caisseDaySalesIncome', formatMoney(details.salesIncome));
             setElemHTML('caisseDayCreditIncome', formatMoney(details.creditIncome));
+            setElemHTML('caisseDayTotalExpenses', formatMoney(details.totalExpenses));
+            setElemHTML('caisseDayExpenses', formatMoney(details.expenseTotal));
+            setElemHTML('caisseDayStaffPayouts', formatMoney(details.staffPayouts));
+            setElemHTML('caisseDaySupplierPayments', formatMoney(details.supplierPayments));
+            setElemHTML('caisseDayNetCash', formatMoney(details.netCash));
+
             const paymentList = document.getElementById('caisseDayCreditPaymentsList');
             if (paymentList) paymentList.innerHTML = details.creditPayments.length
                 ? details.creditPayments.map(p => `<li class="flex justify-between gap-3"><span>${escapeHTML(p.creditName || 'كريدي')}</span><strong>${formatMoney(Number(p.amount) || 0)}</strong></li>`).join('')
                 : '<li>لا توجد تسديدات كريدي لهذا اليوم</li>';
+
+            const transactions = Array.isArray(details.transactions) ? details.transactions : [];
+            const transactionBody = document.getElementById('caisseTransactionsTableBody');
+            const transactionCount = document.getElementById('caisseTransactionsCount');
+            if (transactionCount) transactionCount.textContent = `${transactions.length} معاملة`;
+            if (transactionBody) transactionBody.innerHTML = transactions.length
+                ? transactions.map(transaction => {
+                    const isIncoming = transaction.direction === 'in';
+                    const title = escapeHTML(transaction.title || 'معاملة نقدية');
+                    const detail = escapeHTML(transaction.detail || '');
+                    const sourceLabel = escapeHTML(transaction.sourceLabel || 'قسم آخر');
+                    return `<tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-3 font-bold text-slate-700 whitespace-nowrap">${sourceLabel}</td>
+                        <td class="p-3 text-slate-800"><div class="font-bold">${title}</div>${detail ? `<div class="text-[10px] text-slate-400 mt-0.5">${detail}</div>` : ''}</td>
+                        <td class="p-3 text-left font-black ${isIncoming ? 'text-blue-700' : 'text-slate-300'}">${isIncoming ? formatMoney(transaction.amount) : '—'}</td>
+                        <td class="p-3 text-left font-black ${!isIncoming ? 'text-slate-800' : 'text-slate-300'}">${!isIncoming ? formatMoney(transaction.amount) : '—'}</td>
+                    </tr>`;
+                }).join('')
+                : '<tr><td colspan="4" class="p-6 text-center text-slate-400">لا توجد حركات نقدية لهذا التاريخ</td></tr>';
         } const actualElem = document.getElementById('caisseDayActualAmount');
         const statusBadgeElem = document.getElementById('caisseDayStatusBadge');
         if (actualElem) { if (details.isClosed) {
@@ -10456,7 +10748,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (clotureDateInput && clotureDateInput.value !== targetDate) {
             clotureDateInput.value = targetDate;
         } const expIncomeDisplay = document.getElementById('clotureFormExpectedIncome');
-        if (expIncomeDisplay) { expIncomeDisplay.innerHTML = formatMoney(details.totalIncome);
+        if (expIncomeDisplay) { expIncomeDisplay.innerHTML = formatMoney(details.netCash);
         } const actualInput = document.getElementById('clotureFormActualAmount');
         const cashierInput = document.getElementById('clotureFormCashier');
         const notesInput = document.getElementById('clotureFormNotes');
@@ -10497,7 +10789,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 historyBody.innerHTML = sortedLogs.map(l => {
                     const lDetails = calculateCaisseDetails(l.date);
                     const actualAmt = Number(l.actualAmount || 0);
-                    const expectedAmt = lDetails.totalIncome;
+                    const expectedAmt = lDetails.netCash;
                     const diff = actualAmt - expectedAmt;
                     let diffBadgeHtml = ''; if (diff < 0) {
                         diffBadgeHtml = `<span class="inline-flex items-center gap-1 bg-slate-100 text-slate-800 px-2 py-0.5 rounded-md font-black text-[11px] border border-slate-200"><span>عجز:</span><span>-${formatMoney(Math.abs(diff))}</span></span>`;
@@ -11289,6 +11581,7 @@ window.addEventListener('unhandledrejection', (event) => {
         saveState(); closeModal('quickSupplierVersementModal');
         showSuccessToast(`تم تسجيل فرسيمو بقيمة ${amount.toLocaleString()} دج للمورد (${supplierName}) بنجاح`);
         renderSuppliersList();
+        if (typeof render === 'function') render();
         return false;
     };
 
