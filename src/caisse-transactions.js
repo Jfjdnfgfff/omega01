@@ -213,7 +213,7 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
         }));
     }
     supplierTransactions.forEach((transaction, index) => {
-        if (!transaction) return;
+        if (!transaction || fromGeneralFund(transaction)) return;
         const transactionId = transaction.id || transaction._rtdbKey || index;
         pushMovement({
             id: `supplier_${transactionId}`,

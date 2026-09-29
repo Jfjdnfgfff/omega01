@@ -6470,6 +6470,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 items: items || (isPur ? 'سلع ومكملات' : 'تسديد دفعة / فرسيمو لتخفيض الدين'),
                 totalAmount: isPur ? (paid + debt) : paid,
                 paidAmount: paid, remainingDebt: debt,
+                fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
                 date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
                 notes: notes || '', createdAt: new Date().toISOString()
             };
@@ -6500,6 +6501,7 @@ window.addEventListener('unhandledrejection', (event) => {
             supplierName: name, supplierInfo: info || '',
             type: 'purchase', items: items,
             totalAmount: paid + debt, paidAmount: paid,
+            fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: debt, date: dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(),
             notes: notes || '', createdAt: new Date().toISOString()
         };
@@ -11770,6 +11772,7 @@ window.addEventListener('unhandledrejection', (event) => {
             supplierName: supplierName, type: 'payment',
             items: `فرسيمو وتسديد دفعة مالية بقيمة ${amount.toLocaleString()} دج`,
             totalAmount: amount, paidAmount: amount,
+            fundSource: getElemVal('quickVersFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: remainingDebt, date: new Date(dateStr).toISOString(),
             notes: notes || 'فرسيمو دفع مباشر لتسوية الكريدي',
             createdAt: new Date().toISOString()
@@ -12133,6 +12136,7 @@ window.addEventListener('unhandledrejection', (event) => {
             items: items || 'معاملة تسديد/مشتريات',
             totalAmount: paid + debt,
             paidAmount: paid,
+            fundSource: getElemVal('supplierFundSource') === 'general' ? 'general' : 'daily',
             remainingDebt: debt,
             date: new Date(dateStr).toISOString(),
             notes: notes,
@@ -12333,7 +12337,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         </div>
                         <div class="text-slate-800 font-medium leading-relaxed">${escapeHTML(tx.items || '')}</div>
                         <div class="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
-                            <span class="text-blue-700 font-bold">المفرسي: ${(Number(tx.paidAmount) || 0).toLocaleString()} دج</span>
+                            <span class="text-blue-700 font-bold">المفرسي: ${(Number(tx.paidAmount) || 0).toLocaleString()} دج ${tx.fundSource === 'general' ? '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}</span>
                             <span class="text-slate-500 font-bold">الكريدي: ${(Number(tx.remainingDebt) || 0).toLocaleString()} دج</span>
                         </div>
                     </div>

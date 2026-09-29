@@ -133,3 +133,16 @@ test('expenses and payouts paid from the general fund do not touch the daily til
     assert.equal(result.staffPayouts, 1000);
     assert.equal(result.netCash, 8500);
 });
+
+test('supplier payments from the general fund are excluded from the daily till', () => {
+    const dateKey = value => String(value || '').slice(0, 10);
+    const today = '2026-09-29';
+    const result = buildCaisseMovements({
+        supplierTransactions: [
+            { id: 't1', supplierName: 'A', paidAmount: 2000, date: today },
+            { id: 't2', supplierName: 'B', paidAmount: 7000, date: today, fundSource: 'general' }
+        ]
+    }, today, dateKey);
+    assert.equal(result.supplierPayments, 2000);
+    assert.equal(result.netCash, -2000);
+});
