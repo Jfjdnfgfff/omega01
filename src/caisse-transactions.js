@@ -45,6 +45,7 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
     }
 
     const logs = asArray(state.caisseLogs);
+    const fromGeneralFund = item => item && item.fundSource === 'general';
     const recordedSubscriptionIds = new Set(logs
         .filter(log => log && log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription')
         .map(log => String(log.sourceId || ''))
@@ -92,6 +93,8 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
                 detail: log.detail || log.description
             });
         } else if (log.type === 'credit_payment') {
+            // If the repayment was assigned to the general fund, it must not affect the daily till.
+            if (fromGeneralFund(log)) return;
             pushMovement({
                 id: log.id || `credit_payment_${log.creditId || index}`,
                 source: 'creditPayment',
@@ -100,7 +103,8 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
                 amount: log.amount,
                 date: log.date,
                 title: `تسديد كريدي: ${log.creditName || 'كريدي'}`,
-                detail: log.notes || ''
+                detail: (log.notes || '') + (log.fundSource === 'general' ? ' · الصندوق العام' : log.fundSource === 'daily' ? ' · صندوق اليوم' : ''),
+                sourceLabel: log.fundSource === 'general' ? 'تسديد الكريدي (عام)' : SOURCE_LABELS.creditPayment
             });
         }
     });
@@ -165,9 +169,6 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
             detail: Number(sale.qty) > 0 ? `الكمية: ${sale.qty}` : ''
         });
     });
-
-    // Movements marked as paid from the general fund never touch the daily till.
-    const fromGeneralFund = item => item && item.fundSource === 'general';
 
     // General expenses.
     asArray(state.expenses).forEach((expense, index) => {
