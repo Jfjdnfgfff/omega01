@@ -3060,6 +3060,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (modal) modal.classList.add('active');
         }
         renderFemaleCoachModal();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
     };
     window.openFemaleCommissionModal = window.openFemaleCoachModal;
 
@@ -4214,6 +4215,7 @@ window.addEventListener('unhandledrejection', (event) => {
         showSuccessToast(`تم تسجيل المصروف بنجاح (${catDetails.label})`);
         if (window.renderExpensesListModal) window.renderExpensesListModal();
         if (window.renderExpensesListView) window.renderExpensesListView();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         render(); // Update totals
     }); function renderExpensesListModal() {
         const container = document.getElementById('expensesListModal');
@@ -4984,6 +4986,7 @@ window.addEventListener('unhandledrejection', (event) => {
         showSuccessToast(`تم إضافة المصروف بنجاح (${catDetails.label})`);
         if (window.renderExpensesListView) window.renderExpensesListView();
         if (window.renderExpensesListModal) window.renderExpensesListModal();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         render(); }); function deleteExpense(id) {
         if (!id) return;
         promptWithPassword({ title: 'حذف مصروف', prompt: 'أدخل كلمة المرور لتأكيد حذف المصروف', buttonText: 'تأكيد الحذف' }, () => {
@@ -9646,7 +9649,15 @@ window.addEventListener('unhandledrejection', (event) => {
             }
         });
     } window.deleteSale = deleteSale; function getLocalDateString(dateInput) {
-        if (!dateInput) return ''; const d = new Date(dateInput);
+        if (!dateInput) return '';
+        // Date-only strings (e.g. staff payouts / expenses saved as "YYYY-MM-DD") must map to
+        // that same calendar day. `new Date('YYYY-MM-DD')` is parsed as UTC midnight, which can
+        // shift the day depending on the device timezone and make the caisse miss the movement.
+        if (typeof dateInput === 'string') {
+            const m = dateInput.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+        }
+        const d = new Date(dateInput);
         if (isNaN(d.getTime())) return ''; const year = d.getFullYear();
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const day = String(d.getDate()).padStart(2, '0');
@@ -10829,6 +10840,11 @@ window.addEventListener('unhandledrejection', (event) => {
                             </td>
                         </tr>
                     `; }).join(''); } } } window.renderCaisseView = renderCaisseView;
+    // Refresh the caisse immediately when a cash movement (expense, payout, supplier...) is recorded while it is open.
+    window.refreshCaisseIfVisible = function() {
+        const el = document.getElementById('caisseView');
+        if (el && !el.classList.contains('hidden')) { try { renderCaisseView(); } catch (e) { console.warn('caisse refresh note:', e); } }
+    };
     // ==========================================
     // REAL-TIME INPUT GUARDS & SECURITY BINDINGS
     // ==========================================
@@ -11835,6 +11851,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         saveState();
         renderStaffPayouts();
+        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         if (typeof renderWorkerTransactionsModal === 'function' && isModalOpen('workerTransactionsModal')) {
             renderWorkerTransactionsModal();
         }
