@@ -21,10 +21,60 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.json" />
+
+  <!-- ============================================================
+       CRITICAL CSS (inline) — يسمح بأول رسم (First Paint) بدون أي
+       طلب خارجي حاجب للعرض. بقية التنسيقات تُحمّل بشكل غير حاجب أدناه.
+       ============================================================ -->
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html{-webkit-text-size-adjust:100%;overflow-x:hidden;overflow-y:auto}
+    body{margin:0;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;
+      font-family:'Tajawal',system-ui,-apple-system,'Segoe UI',sans-serif;background-color:#f8fafc;
+      color:#0f172a;overflow-x:hidden;-webkit-overflow-scrolling:touch;touch-action:manipulation}
+    .hidden{display:none}
+    input,select,textarea,button{font-family:inherit;font-size:16px;line-height:1.5;max-width:100%}
+    button,a{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+    .no-scrollbar::-webkit-scrollbar,.hide-scrollbar::-webkit-scrollbar{display:none}
+    .no-scrollbar,.hide-scrollbar{-ms-overflow-style:none;scrollbar-width:none}
+    .safe-top{padding-top:max(0.5rem,env(safe-area-inset-top,0px))}
+    .safe-bottom{padding-bottom:max(0.5rem,env(safe-area-inset-bottom,0px))}
+    .modal-overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+      z-index:50;padding:1rem;background:rgba(15,23,42,.6);overflow-y:auto;
+      padding-top:max(0.75rem,env(safe-area-inset-top,0px));padding-bottom:max(0.75rem,env(safe-area-inset-bottom,0px))}
+    .modal-overlay.active{display:flex}
+    .modal-content{background:#fff;border-radius:1.5rem;width:100%;max-width:32rem;padding:1.5rem;
+      max-height:92dvh;overflow-y:auto;margin:auto}
+    @media (max-width:640px){
+      .modal-overlay{padding:.5rem;padding-top:max(.5rem,env(safe-area-inset-top,0px));padding-bottom:max(.5rem,env(safe-area-inset-bottom,0px))}
+      .modal-content{border-radius:1.25rem;padding:1.15rem .9rem;max-height:95dvh}
+    }
+  </style>
+
+  <!-- ============================================================
+       الخطوط (Tajawal) — تُحمّل بشكل غير حاجب للعرض (non-render-blocking).
+       كان هذا الطلب الخارجي هو أكبر سبب في حجب العرض (~1410ms).
+       ============================================================ -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet';window.__fontApplied=true">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap">
+  </noscript>
+
+  <!-- ============================================================
+       CSS التطبيق — يبقى حاجباً للعرض عمداً: ملف واحد صغير من نفس
+       النطاق (13.9 Kio مضغوط) وهو ما يمنع وميض الواجهة غير المنسقة
+       (FOUC). الطلب الخارجي الكبير الوحيد (خطوط Google) أصبح غير حاجب أعلاه،
+       والـ CSS الحرج مضمّن فوقه لرسم الهيكل فوراً.
+       ============================================================ -->
   <link rel="stylesheet" href="/src/style.css" />
+
+  <!-- فتح الاتصال بطبقة البيانات مبكراً (لا يؤثر على الرسم) -->
+  <link rel="preconnect" href="https://omega-a7040-default-rtdb.firebaseio.com" crossorigin>
+  <link rel="dns-prefetch" href="https://firebaseinstallations.googleapis.com">
+  <link rel="dns-prefetch" href="https://www.googleapis.com">
+
   <script>
     // Ensure critical inline event handlers and navigation have safe global functions immediately
     window.handleNavButtonClick = function(event, callback) {
@@ -80,6 +130,15 @@
     window.handleSearchView = window.handleSearchView || function() {
       console.warn('handleSearchView is loading...');
     };
+    // شبكة أمان للخطوط غير الحاجبة: إذا لم يُطبَّق preload (متصفح قديم/فشل الطلب)
+    // نضيف رابط stylesheet عادياً بعد ثانية واحدة حتى لا يبقى النص بلا خط Tajawal.
+    window.__ensureWebFont = function() {
+      if (window.__fontApplied) return;
+      var pre = document.querySelector('link[rel="preload"][as="style"]');
+      if (pre && pre.rel !== 'stylesheet') { pre.rel = 'stylesheet'; }
+      window.__fontApplied = true;
+    };
+    setTimeout(window.__ensureWebFont, 1500);
   </script>
 </head>
 <body class="text-slate-900 w-full min-h-screen min-h-dvh flex flex-col bg-slate-50">

@@ -1,5 +1,8 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v4';
+// v5: build with lazy Firebase chunk + async web fonts. Bumping the name makes
+// every client drop the previous cache on activate, so a deploy is picked up
+// immediately instead of serving stale hashed assets.
+const CACHE_NAME = 'omega-gym-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -15,7 +18,11 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch(() => {});
+      // One request per asset: a single failure (e.g. the Google Fonts CSS while
+      // offline) can no longer abort the whole precache like cache.addAll() did.
+      return Promise.allSettled(STATIC_ASSETS.map(url =>
+        cache.add(new Request(url, { mode: url.startsWith('https://fonts.') ? 'cors' : 'same-origin' }))
+      ));
     })
   );
 });
@@ -58,7 +65,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static Assets (JS, CSS, Fonts, Images): Cache First with Background Update (Stale-While-Revalidate)
+  // Content-hashed build assets (/assets/index-abc123.js) are immutable: serve
+  // straight from cache and never spend a request re-validating them.
+  const isImmutableAsset = url.pathname.startsWith('/assets/') && /\.[0-9a-zA-Z_-]{8}\.(js|css)$/.test(url.pathname);
+  if (isImmutableAsset) {
+    event.respondWith(
+      caches.match(req).then(cached => cached || fetch(req).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(req, clone));
+        }
+        return res;
+      }))
+    );
+    return;
+  }
+
+  // Other static assets (JS, CSS, fonts, images): Cache First + background update.
   event.respondWith(
     caches.match(req).then((cachedResponse) => {
       const fetchPromise = fetch(req).then((networkResponse) => {

@@ -62,9 +62,15 @@ window.addEventListener('unhandledrejection', (event) => {
   } catch (e) {}
 });
 
-  // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
-  import { initializeApp } from "firebase/app";
-  import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
+  // Firebase Realtime Database Engine — loaded on demand (Code Splitting).
+  // The SDK (~230 KB raw / ~51 KB gzip) is NOT part of the initial bundle any
+  // more: it is fetched as its own chunk the moment the data layer boots,
+  // right after the first paint. See src/firebase-sdk.js.
+  import { loadFirebaseSdk } from './firebase-sdk.js';
+  import {
+    isRenderVisible, setHTMLIfChanged, setTextIfChanged,
+    renderListChunked, yieldToMain, onIdle, runSliced
+  } from './dom-perf.js';
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice } from './product-pricing.js';
@@ -267,7 +273,8 @@ window.addEventListener('unhandledrejection', (event) => {
   // (orderByKey + endBefore) — no full-node re-downloads, no toasts, no blocked UI.
   window.completeSalesHistorySilently = async function() {
     if (window.salesHistoryLoading || window.salesHistoryComplete) return;
-    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return;
+    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet ||
+        !window.firebaseQuery || !window.firebaseOrderByKey || !window.firebaseLimitToLast) return;
     window.salesHistoryLoading = true;
     try {
       const pageSize = window.SALES_REALTIME_WINDOW || 3000;
@@ -287,11 +294,11 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         let olderQ;
         if (oldestKey) {
-          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), endBefore(oldestKey), limitToLast(pageSize));
+          olderQ = window.firebaseQuery(window.firebaseRef(window.firebaseDB, 'v2/sales'), window.firebaseOrderByKey(), window.firebaseEndBefore(oldestKey), window.firebaseLimitToLast(pageSize));
         } else {
-          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), limitToLast(pageSize));
+          olderQ = window.firebaseQuery(window.firebaseRef(window.firebaseDB, 'v2/sales'), window.firebaseOrderByKey(), window.firebaseLimitToLast(pageSize));
         }
-        let snap = await get(olderQ);
+        let snap = await window.firebaseGet(olderQ);
         if (!snap || !snap.exists()) { window.salesHistoryComplete = true; break; }
         const data = snap.val();
         const keys = Object.keys(data);
@@ -1967,12 +1974,28 @@ window.addEventListener('unhandledrejection', (event) => {
 
   // Single immediate fast fetch (no duplicate event listeners)
   window.runStartupFirebaseFetch();
-  async function initFirebase() { try { try {
-        const cfgRes = await fetch('/firebase.config.json');
-        if (cfgRes.ok) { const cfgJson = await cfgRes.json();
-          if (cfgJson && cfgJson.apiKey) {
-            firebaseConfig = { ...firebaseConfig, ...cfgJson };
-          } } } catch (e) {} const app = initializeApp(firebaseConfig);
+  async function initFirebase() { try {
+      // === Lazy SDK chunk (code splitting) =====================================
+      // The Firebase SDK is downloaded/parsed here, in parallel with the config
+      // probe, instead of being bundled into the render-critical entry chunk.
+      const [sdk] = await Promise.all([
+        loadFirebaseSdk(),
+        (async () => {
+          try {
+            const cfgRes = await fetch('/firebase.config.json');
+            if (cfgRes.ok) {
+              const cfgJson = await cfgRes.json();
+              if (cfgJson && cfgJson.apiKey) { firebaseConfig = { ...firebaseConfig, ...cfgJson }; }
+            }
+          } catch (e) {}
+        })()
+      ]);
+      const {
+        initializeApp, getDatabase, ref, set, update, push, remove, onValue, get,
+        query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore,
+        orderByKey, orderByChild, equalTo
+      } = sdk;
+      const app = initializeApp(firebaseConfig);
       // Realtime Database High-Speed Sectional WebSocket Listeners & Bounded Queries
       try {
         const database = getDatabase(app);
@@ -2367,9 +2390,16 @@ window.addEventListener('unhandledrejection', (event) => {
     // HIGH-PERFORMANCE WORKER & CACHE ENGINE
     // ============================================================================
     let perfWorker = null;
+    let perfWorkerRequested = false;
     let workerMsgId = 0;
     const workerCallbacks = new Map();
-    try {
+    // Lazy worker: only heavy optional jobs use it (mock-data generation,
+    // parallel aggregations), so it is created on the first task instead of at
+    // boot. A normal session never downloads or parses perfWorker.js at all.
+    function ensurePerfWorker() {
+      if (perfWorker || perfWorkerRequested) return perfWorker;
+      perfWorkerRequested = true;
+      try {
       perfWorker = new Worker(new URL('./perfWorker.js', import.meta.url), { type: 'module' });
       perfWorker.onmessage = function(e) {
         const { id, success, result, error } = e.data || {};
@@ -2383,16 +2413,21 @@ window.addEventListener('unhandledrejection', (event) => {
       perfWorker.onerror = function(err) {
         console.warn('Worker background thread notice:', err);
       };
-    } catch (e) {
-      console.info('Worker running in main-thread mode.');
+      } catch (e) {
+        perfWorker = null;
+        console.info('Worker running in main-thread mode.');
+      }
+      return perfWorker;
     }
+    window.ensurePerfWorker = ensurePerfWorker;
 
     function runWorkerTask(type, payload) {
-      if (!perfWorker) return Promise.reject(new Error('Worker unavailable'));
+      const worker = ensurePerfWorker();
+      if (!worker) return Promise.reject(new Error('Worker unavailable'));
       return new Promise((resolve, reject) => {
         const id = ++workerMsgId;
         workerCallbacks.set(id, { resolve, reject });
-        perfWorker.postMessage({ id, type, payload });
+        worker.postMessage({ id, type, payload });
       });
     }
     window.runWorkerTask = runWorkerTask;
@@ -7376,8 +7411,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const totalAmount = (appState.credits || []).reduce((sum, c) => sum + Number(c?.amount || 0), 0);
         const totalAmountElem = document.getElementById('creditsTotalAmountSummary');
         const countSummaryElem = document.getElementById('creditsCountSummary');
-        if (totalAmountElem) totalAmountElem.textContent = `${totalAmount.toLocaleString()} دج`;
-        if (countSummaryElem) countSummaryElem.textContent = `${appState.credits.length} سجل`;
+        if (totalAmountElem) setTextIfChanged(totalAmountElem, `${totalAmount.toLocaleString()} دج`);
+        if (countSummaryElem) setTextIfChanged(countSummaryElem, `${appState.credits.length} سجل`);
         if (filtered.length === 0) { container.innerHTML = `
                 <div class="col-span-full flex flex-col items-center justify-center py-16 text-slate-300">
                     <div class="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center mb-3 border border-slate-100">
@@ -7481,7 +7516,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 </div>
             </div>` : '';
 
-        container.innerHTML = cardsHtml + paginationHtml;
+        setHTMLIfChanged(container, cardsHtml + paginationHtml);
     }
     window.changeCreditPage = function(delta) {
         const sorted = (appState.credits || []);
@@ -9740,7 +9775,7 @@ window.addEventListener('unhandledrejection', (event) => {
            }
            filteredProducts.push(p);
        }
-       container.innerHTML = filteredProducts.map(p => {
+       renderListChunked(container, filteredProducts, (p) => {
            const isStock2 = p.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200"><svg class="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 21h18M3 7v14M21 7v14M6 11h4M6 15h4M14 11h4M14 15h4M9 3l3 4 3-4"></path></svg><span>Stock 2</span></span>`
                : `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200"><svg class="w-3 h-3 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg><span>Stock 1</span></span>`;
@@ -9824,7 +9859,7 @@ window.addEventListener('unhandledrejection', (event) => {
                    </button>
                </div>
            </div>
-           `; }).join('') || `
+           `; }, `
             <div class="text-center py-10 px-4 border border-dashed border-slate-200 rounded-2xl bg-slate-50/60 my-2">
                 <div class="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
@@ -9836,7 +9871,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     <span>إضافة منتج جديد الآن</span>
                 </button>
             </div>
-        `; updateSellProductDropdown();
+        `, { chunkSize: 24 }); updateSellProductDropdown();
        updateStockInfoDisplay(); } window.renderProductsList = renderProductsList;
     function getUniqueCoaches() { const set = new Set();
         if (appState.staffPayouts && Array.isArray(appState.staffPayouts)) {
@@ -9912,13 +9947,28 @@ window.addEventListener('unhandledrejection', (event) => {
             renderSalesList(); } }; window.clearPosFilterDate = function() {
         const input = document.getElementById('posFilterDate');
         if (input) { input.value = '';
-            renderSalesList(); } }; function renderSalesList() {
+            renderSalesList(); } }; // Cached numeric sort key: the old comparator allocated two `new Date()`
+    // objects per comparison (~70k allocations per pass on a 3000-sale history).
+    function saleSortKey(sale) {
+        if (!sale) return 0;
+        const raw = sale.date;
+        if (sale.__sortFor !== raw) {
+            const t = raw ? Date.parse(raw) : NaN;
+            const ts = Number.isFinite(t) ? t : (Number(raw) || Number(sale.id) || 0);
+            // Non-enumerable on purpose: the cache must never leak into
+            // JSON.stringify() (Firebase writes / Drive backups / exports).
+            Object.defineProperty(sale, '__sortFor', { value: raw, writable: true, enumerable: false, configurable: true });
+            Object.defineProperty(sale, '__sortTs', { value: ts, writable: true, enumerable: false, configurable: true });
+        }
+        return sale.__sortTs;
+    }
+    function renderSalesList() {
        const container = document.getElementById('salesList');
        if(!container) return; if (!appState.sales) appState.sales = [];
        // Populate datalist for coach input in sell form
        const coachesDatalist = document.getElementById('coachesList');
        const uniqueCoaches = getUniqueCoaches();
-       if (coachesDatalist) { coachesDatalist.innerHTML = uniqueCoaches.map(c => `<option value="${c}">`).join('');
+       if (coachesDatalist) { setHTMLIfChanged(coachesDatalist, uniqueCoaches.map(c => `<option value="${c}">`).join(''));
        }
        // Populate filter dropdowns if present
        const posFilterStockElem = document.getElementById('posFilterStock');
@@ -9931,12 +9981,12 @@ window.addEventListener('unhandledrejection', (event) => {
        const curProd = posFilterProdElem ? posFilterProdElem.value : 'all';
        const curCoach = posFilterCoachElem ? posFilterCoachElem.value : 'all';
        if (posFilterProdElem) { const uniqueProds = Array.from(new Set(appState.sales.map(s => s.prodName || s.productName).filter(Boolean)));
-           posFilterProdElem.innerHTML = '<option value="all">جميع المنتجات</option>' + uniqueProds.map(p => `<option value="${p}">${p}</option>`).join('');
+           setHTMLIfChanged(posFilterProdElem, '<option value="all">جميع المنتجات</option>' + uniqueProds.map(p => `<option value="${p}">${p}</option>`).join(''));
            if (uniqueProds.includes(curProd)) posFilterProdElem.value = curProd;
        } if (posFilterCoachElem) {
-           posFilterCoachElem.innerHTML = '<option value="all">جميع المدربين</option>' +
+           setHTMLIfChanged(posFilterCoachElem, '<option value="all">جميع المدربين</option>' +
                '<option value="عام">عام / بدون مدرب</option>' +
-               uniqueCoaches.map(c => `<option value="${c}">${c}</option>`).join('');
+               uniqueCoaches.map(c => `<option value="${c}">${c}</option>`).join(''));
            if (uniqueCoaches.includes(curCoach) || curCoach === 'عام') posFilterCoachElem.value = curCoach;
        } let filtered = [...appState.sales];
        const selStock = posFilterStockElem ? posFilterStockElem.value : 'all';
@@ -9960,8 +10010,9 @@ window.addEventListener('unhandledrejection', (event) => {
        const totalAmt = filtered.reduce((sum, s) => sum + (Number(s.total) || 0), 0);
        const summaryElem = document.getElementById('salesListSummary');
        if (summaryElem) { summaryElem.textContent = `المجموع: ${totalAmt.toLocaleString()} دج (${filtered.length} عملية)`;
-       } if (filtered.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-slate-100 font-medium">لا توجد مبيعات مسجلة بهذا التصنيف</div>';
-           return; } container.innerHTML = filtered.sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0, 50).map(s => {
+       } if (filtered.length === 0) { setHTMLIfChanged(container, '<div class="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-slate-100 font-medium">لا توجد مبيعات مسجلة بهذا التصنيف</div>');
+           return; } if (!isRenderVisible(container)) { return; }
+       setHTMLIfChanged(container, filtered.sort((a, b) => saleSortKey(b) - saleSortKey(a)).slice(0, 50).map(s => {
            const d = s.date ? new Date(s.date) : null;
            const isValidDate = d && !isNaN(d.getTime());
            const dateStr = isValidDate ? `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}` : '';
@@ -10024,7 +10075,7 @@ window.addEventListener('unhandledrejection', (event) => {
                    </button>
                </div>
            </div>
-           `; }).join('') || '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد عمليات بيع مسجلة بعد</div>';
+           `; }).join('') || '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد عمليات بيع مسجلة بعد</div>');
     } window.renderSalesList = renderSalesList;
     function calculateAge(dobStr) { if (!dobStr) return null;
         const dob = new Date(dobStr); if (isNaN(dob.getTime())) return null;
@@ -10053,7 +10104,28 @@ window.addEventListener('unhandledrejection', (event) => {
         'female': 'الإناث', 'all': 'الكل',
         'active': 'النشطة', 'near_expiry': 'قريبة الانتهاء',
         'expired': 'المنتهية', 'frozen': 'المجمدة',
-        'credit': 'الكريدي' }; function getFilterCount(filterKey) {
+        'credit': 'الكريدي' }; // Single-pass filter counters: getFilterCount() used to scan the entire
+    // customer list once per tab (8 scans x calculateStatus per customer) on
+    // every render pass — a major main-thread long task.
+    function getFilterCounts() {
+        const counts = { all: 0, male: 0, female: 0, active: 0, near_expiry: 0, expired: 0, frozen: 0, credit: 0 };
+        const list = Array.isArray(appState.customers) ? appState.customers : [];
+        const nowMs = Date.now();
+        for (let i = 0; i < list.length; i++) {
+            const c = list[i]; if (!c) continue;
+            const status = calculateStatus(c, nowMs);
+            counts.all++;
+            if (c.gender === 'female') counts.female++;
+            if (c.gender === 'male' || !c.gender) counts.male++;
+            if (status === 'active' || status === 'near_expiry') counts.active++;
+            if (status === 'near_expiry') counts.near_expiry++;
+            if (status === 'expired') counts.expired++;
+            if (c.status === 'frozen') counts.frozen++;
+            if (c.paymentStatus === 'credit') counts.credit++;
+        }
+        return counts;
+    }
+    function getFilterCount(filterKey) {
         if (!appState.customers) return 0;
         return appState.customers.filter(c => {
             const status = calculateStatus(c);
@@ -10069,18 +10141,19 @@ window.addEventListener('unhandledrejection', (event) => {
         return c.subscriptionType === 'session' || (c.remainingSessions !== undefined && c.remainingSessions !== null && c.subscriptionType !== 'time');
     } function renderFilterTabs() { if (appState.filter === 'session') appState.filter = 'all';
         const filterKeys = ['all', 'male', 'female', 'active', 'near_expiry', 'expired', 'frozen', 'credit'];
+        const filterCounts = getFilterCounts();
         const html = filterKeys.map(key => {
             const isActive = appState.filter === key;
-            const count = getFilterCount(key);
+            const count = filterCounts[key] || 0;
             return `<button onclick="setFilter('${key}')" class="px-5 py-2 rounded-full text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
                 isActive ? 'bg-[#2563eb] text-white shadow-md shadow-blue-200'
                   : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/80 shadow-sm'
             }">
                 ${filterLabels[key] || key} ${count > 0 ? `<span class="mr-1 text-[11px] opacity-80">(${count})</span>` : ''}
             </button>`; }).join(''); const container1 = document.getElementById('filterTabs');
-        if (container1) container1.innerHTML = html;
+        if (container1) setHTMLIfChanged(container1, html);
         const container2 = document.getElementById('filterTabsView');
-        if (container2) container2.innerHTML = html;
+        if (container2) setHTMLIfChanged(container2, html);
     } function renderCustomers() { let filtered = (appState.customers || []).filter(c => {
             if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
             const status = calculateStatus(c);
@@ -10097,7 +10170,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const PAGE_SIZE = 24;
         const page = appState.customerPage || 1;
         const visibleCustomers = filtered.slice(0, PAGE_SIZE * page);
-        let html = visibleCustomers.map(c => {
+        const customersNeedsRender = isRenderVisible(document.getElementById('customersGrid')) || isRenderVisible(document.getElementById('customersGridView'));
+        let html = customersNeedsRender ? (visibleCustomers.map(c => {
             const age = calculateAge(c.dob);
             const ageStr = age !== null ? `${age} سنة` : 'غير محدد';
             const pkg = getPackageById(c.packageId);
@@ -10171,7 +10245,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     </button>
                 </div>
             </div>
-            `; }).join('') || `<div class="col-span-full text-center py-12 text-slate-400 font-medium">${appState.searchQuery ? 'لا توجد نتائج للبحث عن «' + escapeHTML(appState.searchQuery) + '»' : 'لا يوجد مشتركين في هذه الفئة'}</div>`;
+            `; }).join('') || `<div class="col-span-full text-center py-12 text-slate-400 font-medium">${appState.searchQuery ? 'لا توجد نتائج للبحث عن «' + escapeHTML(appState.searchQuery) + '»' : 'لا يوجد مشتركين في هذه الفئة'}</div>`) : '';
         if (filtered.length > visibleCustomers.length) {
             html += `
             <div class="col-span-full flex flex-col sm:flex-row items-center justify-center gap-3 py-6">
@@ -10196,9 +10270,9 @@ window.addEventListener('unhandledrejection', (event) => {
             `;
         }
         const dashboardGrid = document.getElementById('customersGrid');
-        if (dashboardGrid) dashboardGrid.innerHTML = html;
+        if (dashboardGrid && customersNeedsRender) setHTMLIfChanged(dashboardGrid, html);
         const viewGrid = document.getElementById('customersGridView');
-        if (viewGrid) viewGrid.innerHTML = html;
+        if (viewGrid && customersNeedsRender) setHTMLIfChanged(viewGrid, html);
         renderFilterTabs(); } window.renderCustomers = renderCustomers;
     window.loadMoreCustomersLocal = function() {
         window.appState.customerPage = (window.appState.customerPage || 1) + 1;
@@ -10552,7 +10626,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 const label = `${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
                 return `<option value="${p.id}">${label}</option>`;
             }).join(''); } const packagesContainer = document.getElementById('packagesList');
-        if (packagesContainer) { if (!appState.packages || appState.packages.length === 0) {
+        if (packagesContainer && isRenderVisible(packagesContainer)) { if (!appState.packages || appState.packages.length === 0) {
                 packagesContainer.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد باقات حالية</div>';
             } else {
                 // Count subscribers for each package
@@ -10579,7 +10653,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             </button>
                         </div>
                     `; }).join(''); } } const absencesListElem = document.getElementById('absencesList');
-        if (absencesListElem) { if (!appState.coachAbsences || appState.coachAbsences.length === 0) {
+        if (absencesListElem && isRenderVisible(absencesListElem)) { if (!appState.coachAbsences || appState.coachAbsences.length === 0) {
                 absencesListElem.innerHTML = '<div class="text-xs text-slate-400 text-center py-4 font-medium">لا يوجد سجل غيابات مسجل</div>';
             } else { const sortedAbsences = [...appState.coachAbsences].sort((a, b) => {
                     const da = a.date ? new Date(a.date.replace(/\//g, '-')) : 0;
@@ -12736,16 +12810,143 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.clearAllActivityLogs = clearAllActivityLogs;
 
-    setupGlobalInputSecurity(); render(); if (typeof window.runStartupFirebaseFetch === 'function') {
+    render();
+    // Long-task fix: the global input guards are not needed for the first
+    // paint/interaction, so they are bound during idle time instead of at boot.
+    onIdle(() => { try { setupGlobalInputSecurity(); } catch (e) { console.warn('input guards note:', e); } }, 1200); if (typeof window.runStartupFirebaseFetch === 'function') {
         window.runStartupFirebaseFetch(); } else if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
-    if (typeof fn === "function" && fn.name) {
-      window[fn.name] = fn;
-    }
+  // Every entry is resolved through a `typeof` guard: the previous plain array
+  // literal threw a ReferenceError on the first window-only name (e.g.
+  // openFemaleCoachModal), which silently exported NOTHING to window and broke
+  // every inline onclick handler relying on this fallback.
+  // Explicit string keys on purpose: `fn.name` is mangled by the minifier in
+  // production builds, so the previous `window[fn.name] = fn` loop exported
+  // meaningless names. Every entry is `typeof`-guarded as well, because the old
+  // plain array literal threw a ReferenceError on the first window-only name
+  // (openFemaleCoachModal) and therefore exported NOTHING at all - which is why
+  // handleBarcodeScan() was undefined for the inline onkeypress barcode handler.
+  const __omegaWindowExports = {
+    getCleanSyncPayload: typeof getCleanSyncPayload === "function" ? getCleanSyncPayload : null,
+    containsDangerousCode: typeof containsDangerousCode === "function" ? containsDangerousCode : null,
+    sanitizeInputText: typeof sanitizeInputText === "function" ? sanitizeInputText : null,
+    escapeHTML: typeof escapeHTML === "function" ? escapeHTML : null,
+    validateSafeName: typeof validateSafeName === "function" ? validateSafeName : null,
+    validateSafePhone: typeof validateSafePhone === "function" ? validateSafePhone : null,
+    validateSafeNumber: typeof validateSafeNumber === "function" ? validateSafeNumber : null,
+    validateCustomerDOB: typeof validateCustomerDOB === "function" ? validateCustomerDOB : null,
+    checkLoginLockout: typeof checkLoginLockout === "function" ? checkLoginLockout : null,
+    showSuccessToast: typeof showSuccessToast === "function" ? showSuccessToast : null,
+    showErrorToast: typeof showErrorToast === "function" ? showErrorToast : null,
+    showInfoToast: typeof showInfoToast === "function" ? showInfoToast : null,
+    hashString: typeof hashString === "function" ? hashString : null,
+    cleanPhone: typeof cleanPhone === "function" ? cleanPhone : null,
+    handleNavButtonClick: typeof handleNavButtonClick === "function" ? handleNavButtonClick : null,
+    toggleView: typeof toggleView === "function" ? toggleView : null,
+    closeBulkImportModal: typeof closeBulkImportModal === "function" ? closeBulkImportModal : null,
+    closeModal: typeof closeModal === "function" ? closeModal : null,
+    handleOverlayClick: typeof handleOverlayClick === "function" ? handleOverlayClick : null,
+    toggleDebtField: typeof toggleDebtField === "function" ? toggleDebtField : null,
+    checkImageMagicBytes: typeof checkImageMagicBytes === "function" ? checkImageMagicBytes : null,
+    verifyFaceImageCharacteristics: typeof verifyFaceImageCharacteristics === "function" ? verifyFaceImageCharacteristics : null,
+    setPackageTypeForm: typeof setPackageTypeForm === "function" ? setPackageTypeForm : null,
+    handleProdStockLocationChange: typeof handleProdStockLocationChange === "function" ? handleProdStockLocationChange : null,
+    updateDualStockTotal: typeof updateDualStockTotal === "function" ? updateDualStockTotal : null,
+    editProduct: typeof editProduct === "function" ? editProduct : null,
+    openStockTransferModal: typeof openStockTransferModal === "function" ? openStockTransferModal : null,
+    handleTransferFromStockChange: typeof handleTransferFromStockChange === "function" ? handleTransferFromStockChange : null,
+    handleTransferToStockChange: typeof handleTransferToStockChange === "function" ? handleTransferToStockChange : null,
+    populateTransferProducts: typeof populateTransferProducts === "function" ? populateTransferProducts : null,
+    updateTransferMaxQty: typeof updateTransferMaxQty === "function" ? updateTransferMaxQty : null,
+    updateTransferPreview: typeof updateTransferPreview === "function" ? updateTransferPreview : null,
+    setTransferMaxQty: typeof setTransferMaxQty === "function" ? setTransferMaxQty : null,
+    handleStockTransfer: typeof handleStockTransfer === "function" ? handleStockTransfer : null,
+    deleteProduct: typeof deleteProduct === "function" ? deleteProduct : null,
+    updateProductStock: typeof updateProductStock === "function" ? updateProductStock : null,
+    parseProductWeight: typeof parseProductWeight === "function" ? parseProductWeight : null,
+    updateStockInfoDisplay: typeof updateStockInfoDisplay === "function" ? updateStockInfoDisplay : null,
+    handlePosProductSearch: typeof handlePosProductSearch === "function" ? handlePosProductSearch : null,
+    calculateStatus: typeof calculateStatus === "function" ? calculateStatus : null,
+    adjustCustomerSessions: typeof adjustCustomerSessions === "function" ? adjustCustomerSessions : null,
+    switchPayoutTab: typeof switchPayoutTab === "function" ? switchPayoutTab : null,
+    openStaffPayoutsIfAllowed: typeof openStaffPayoutsIfAllowed === "function" ? openStaffPayoutsIfAllowed : null,
+    autoFillSupplierInfo: typeof autoFillSupplierInfo === "function" ? autoFillSupplierInfo : null,
+    openEditSupplierModal: typeof openEditSupplierModal === "function" ? openEditSupplierModal : null,
+    handleEditSupplierSubmit: typeof handleEditSupplierSubmit === "function" ? handleEditSupplierSubmit : null,
+    renderSuppliersList: typeof renderSuppliersList === "function" ? renderSuppliersList : null,
+    openFullReportModal: typeof openFullReportModal === "function" ? openFullReportModal : null,
+    renderFullReport: typeof renderFullReport === "function" ? renderFullReport : null,
+    updateFullReportSalesSection: typeof updateFullReportSalesSection === "function" ? updateFullReportSalesSection : null,
+    deleteAllCredits: typeof deleteAllCredits === "function" ? deleteAllCredits : null,
+    renderCreditsList: typeof renderCreditsList === "function" ? renderCreditsList : null,
+    settleCredit: typeof settleCredit === "function" ? settleCredit : null,
+    parseItemDate: typeof parseItemDate === "function" ? parseItemDate : null,
+    setMsgTemplate: typeof setMsgTemplate === "function" ? setMsgTemplate : null,
+    openMessageModal: typeof openMessageModal === "function" ? openMessageModal : null,
+    openRenewModal: typeof openRenewModal === "function" ? openRenewModal : null,
+    handleRenewCustomerSelect: typeof handleRenewCustomerSelect === "function" ? handleRenewCustomerSelect : null,
+    formatMoney: typeof formatMoney === "function" ? formatMoney : null,
+    promptWithPassword: typeof promptWithPassword === "function" ? promptWithPassword : null,
+    togglePrivacy: typeof togglePrivacy === "function" ? togglePrivacy : null,
+    setFilter: typeof setFilter === "function" ? setFilter : null,
+    setQuickSellQty: typeof setQuickSellQty === "function" ? setQuickSellQty : null,
+    changeQuickSellQty: typeof changeQuickSellQty === "function" ? changeQuickSellQty : null,
+    executeProductSale: typeof executeProductSale === "function" ? executeProductSale : null,
+    deleteCustomer: typeof deleteCustomer === "function" ? deleteCustomer : null,
+    handleBarcodeScan: typeof handleBarcodeScan === "function" ? handleBarcodeScan : null,
+    openBarcodeStockChoiceModal: typeof openBarcodeStockChoiceModal === "function" ? openBarcodeStockChoiceModal : null,
+    closeBarcodeStockChoiceModal: typeof closeBarcodeStockChoiceModal === "function" ? closeBarcodeStockChoiceModal : null,
+    handleInventoryBarcodeSearch: typeof handleInventoryBarcodeSearch === "function" ? handleInventoryBarcodeSearch : null,
+    playBeep: typeof playBeep === "function" ? playBeep : null,
+    openBarcodeCamera: typeof openBarcodeCamera === "function" ? openBarcodeCamera : null,
+    getProductExpiryInfo: typeof getProductExpiryInfo === "function" ? getProductExpiryInfo : null,
+    setStockFilter: typeof setStockFilter === "function" ? setStockFilter : null,
+    renderProductsList: typeof renderProductsList === "function" ? renderProductsList : null,
+    getUniqueCoaches: typeof getUniqueCoaches === "function" ? getUniqueCoaches : null,
+    deleteSale: typeof deleteSale === "function" ? deleteSale : null,
+    calculateAge: typeof calculateAge === "function" ? calculateAge : null,
+    formatCustomerExpiry: typeof formatCustomerExpiry === "function" ? formatCustomerExpiry : null,
+    performFullRender: typeof performFullRender === "function" ? performFullRender : null,
+    render: typeof render === "function" ? render : null,
+    calculateStockValuation: typeof calculateStockValuation === "function" ? calculateStockValuation : null,
+    calculateCaisseDetails: typeof calculateCaisseDetails === "function" ? calculateCaisseDetails : null,
+    calculateAllCaisseShortages: typeof calculateAllCaisseShortages === "function" ? calculateAllCaisseShortages : null,
+    initCaisseView: typeof initCaisseView === "function" ? initCaisseView : null,
+    handleCaisseDateChange: typeof handleCaisseDateChange === "function" ? handleCaisseDateChange : null,
+    setCaisseDateToToday: typeof setCaisseDateToToday === "function" ? setCaisseDateToToday : null,
+    handleClotureFormDateChange: typeof handleClotureFormDateChange === "function" ? handleClotureFormDateChange : null,
+    handleClotureAmountInput: typeof handleClotureAmountInput === "function" ? handleClotureAmountInput : null,
+    toggleDenominationCounter: typeof toggleDenominationCounter === "function" ? toggleDenominationCounter : null,
+    calcDenominations: typeof calcDenominations === "function" ? calcDenominations : null,
+    applyDenominationsToInput: typeof applyDenominationsToInput === "function" ? applyDenominationsToInput : null,
+    handleCaisseClotureSubmit: typeof handleCaisseClotureSubmit === "function" ? handleCaisseClotureSubmit : null,
+    deleteCaisseLog: typeof deleteCaisseLog === "function" ? deleteCaisseLog : null,
+    scrollToCaisseClotureForm: typeof scrollToCaisseClotureForm === "function" ? scrollToCaisseClotureForm : null,
+    renderCaisseView: typeof renderCaisseView === "function" ? renderCaisseView : null,
+    setupGlobalInputSecurity: typeof setupGlobalInputSecurity === "function" ? setupGlobalInputSecurity : null,
+    getValidGDriveToken: typeof getValidGDriveToken === "function" ? getValidGDriveToken : null,
+    updateGoogleDriveUI: typeof updateGoogleDriveUI === "function" ? updateGoogleDriveUI : null,
+    generateMockTestData: typeof generateMockTestData === "function" ? generateMockTestData : null,
+    clearMockTestData: typeof clearMockTestData === "function" ? clearMockTestData : null,
+    updateMockDataUIState: typeof updateMockDataUIState === "function" ? updateMockDataUIState : null,
+    logActivity: typeof logActivity === "function" ? logActivity : null,
+    ensureSeedActivityLogs: typeof ensureSeedActivityLogs === "function" ? ensureSeedActivityLogs : null,
+    openActivityLogModal: typeof openActivityLogModal === "function" ? openActivityLogModal : null,
+    renderActivityLogModal: typeof renderActivityLogModal === "function" ? renderActivityLogModal : null,
+    deleteActivityLog: typeof deleteActivityLog === "function" ? deleteActivityLog : null,
+    clearAllActivityLogs: typeof clearAllActivityLogs === "function" ? clearAllActivityLogs : null,
+    openFemaleCoachModal: typeof openFemaleCoachModal === "function" ? openFemaleCoachModal : null,
+    renderFemaleCoachModal: typeof renderFemaleCoachModal === "function" ? renderFemaleCoachModal : null,
+    submitFemaleCoachPayout: typeof submitFemaleCoachPayout === "function" ? submitFemaleCoachPayout : null,
+    payFemaleCoachShare: typeof payFemaleCoachShare === "function" ? payFemaleCoachShare : null,
+    printFemaleCoachReport: typeof printFemaleCoachReport === "function" ? printFemaleCoachReport : null
+  };
+  Object.keys(__omegaWindowExports).forEach(name => {
+    const fn = __omegaWindowExports[name];
+    if (typeof fn === "function") window[name] = fn;
   });
 } catch(e) { console.warn("Window export note:", e); }
 
