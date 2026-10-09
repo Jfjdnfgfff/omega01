@@ -68,6 +68,8 @@ window.addEventListener('unhandledrejection', (event) => {
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
+  import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
+  import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -3840,6 +3842,15 @@ window.addEventListener('unhandledrejection', (event) => {
         if (document.getElementById('renewPaymentStatus')) setElemValue('renewPaymentStatus', 'paid');
         if (document.getElementById('renewDebtAmount')) setElemValue('renewDebtAmount', '');
         toggleRenewDebtField();
+
+        // Payment date defaults to today and cannot be later than today. The cash received is booked in that day's caisse.
+        const paymentDateInput = document.getElementById('renewPaymentDate');
+        if (paymentDateInput) {
+            const todayKey = getLocalDateString(new Date());
+            paymentDateInput.max = todayKey;
+            paymentDateInput.value = todayKey;
+        }
+        if (typeof window.updateRenewPaymentDateHint === 'function') window.updateRenewPaymentDateHint();
     }
 
     function openRenewModal(customerId) {
@@ -4010,6 +4021,31 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     };
 
+    // Explains what the chosen payment date does: where the cash lands, and whether that day is already closed.
+    window.updateRenewPaymentDateHint = function() {
+        const hint = document.getElementById('renewPaymentDateHint');
+        if (!hint) return;
+        const check = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        let tone = '';
+        let text = '';
+        if (!check.ok) {
+            tone = 'text-red-700 bg-red-50 border-red-200';
+            text = check.error === 'future' ? 'لا يمكن اختيار تاريخ دفع في المستقبل.' : 'يرجى اختيار تاريخ دفع صحيح.';
+        } else {
+            const displayDate = check.dateKey.split('-').reverse().join('/');
+            const details = typeof window.calculateCaisseDetails === 'function' ? window.calculateCaisseDetails(check.dateKey) : null;
+            if (details && details.isClosed) {
+                tone = 'text-amber-800 bg-amber-50 border-amber-200';
+                text = `صندوق يوم ${displayDate} مُغلق. إضافة هذا المبلغ ستغيّر فرق الإغلاق لذلك اليوم.`;
+            } else if (check.dateKey !== getLocalDateString(new Date())) {
+                tone = 'text-blue-800 bg-blue-50 border-blue-200';
+                text = `سيُسجَّل المبلغ المدفوع نقداً في صندوق يوم ${displayDate}.`;
+            }
+        }
+        hint.textContent = text;
+        hint.className = text ? `mt-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 border ${tone}` : 'hidden';
+    };
+
     window.handleRenewCustomerSubmit = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         if (e && e.stopPropagation) e.stopPropagation();
@@ -4028,6 +4064,14 @@ window.addEventListener('unhandledrejection', (event) => {
         const subType = getElemVal('renewSubscriptionType') || 'time';
         const paymentStatus = getElemVal('renewPaymentStatus') || 'paid';
         const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('renewDebtAmount') || renewPrice || 0) : 0;
+
+        // The payment date is required and cannot be in the future. Check it before the customer record is changed.
+        const paymentDateCheck = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        if (!paymentDateCheck.ok) {
+            showErrorToast(paymentDateCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دفع صحيح');
+            document.getElementById('renewPaymentDate')?.focus();
+            return false;
+        }
 
         customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
         customer.price = renewPrice;
@@ -4055,7 +4099,7 @@ window.addEventListener('unhandledrejection', (event) => {
             : (paymentStatus === 'credit' ? Math.max(0, Number(renewPrice || 0) - Number(debtAmount || 0)) : 0);
         recordCaisseMovement({
             source: 'subscription', sourceId: customer.subscriptionCycleId,
-            direction: 'in', amount: renewalCashPaid, date: new Date().toISOString(),
+            direction: 'in', amount: renewalCashPaid, date: renewalPaymentTimestamp(paymentDateCheck.dateKey, new Date()),
             title: `تجديد اشتراك: ${customer.name || 'مشترك'}`,
             detail: pkg ? pkg.name : 'تجديد اشتراك', sourceLabel: 'الاشتراكات'
         });
@@ -4081,7 +4125,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         // Log renewal activity
         if (typeof logActivity === 'function') {
-            logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج`, renewPrice);
+            logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, renewPrice);
         }
 
         if (window.saveFirebaseSectionItem) {
@@ -4095,7 +4139,8 @@ window.addEventListener('unhandledrejection', (event) => {
         render();
         return false;
     };
-    document.getElementById('renewCustomerForm')?.addEventListener('submit', window.handleRenewCustomerSubmit);
+    // The form's onsubmit attribute (index.html) already calls handleRenewCustomerSubmit. Binding it here as well ran every
+    // renewal twice and wrote two subscription cash entries, so it is intentionally not bound a second time.
     // ==========================================
     // EXPENSES CATEGORIES & MANAGEMENT HELPERS
     // ==========================================
@@ -8413,7 +8458,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let yearTotal = 0, yearCount = 0; let allTotal = 0, allCount = 0;
         (appState.staffPayouts || []).forEach(item => {
             if (!item) return; const iName = (item.name || item.staffName || '').trim();
-            if (iName.toLowerCase() !== workerName.toLowerCase()) return;
+            if (normalizeStaffName(iName) !== normalizeStaffName(workerName)) return;
             const amt = parseFloat(String(item.amount || item.price || 0).replace(/,/g, '')) || 0;
             const dInfo = parseItemDate(item);
             allTotal += amt; allCount++; if (dInfo.year === curYear) {
@@ -8485,7 +8530,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const activeDay = window.workerLedgerSelectedDate || `${activeMonth}-${String(now.getDate()).padStart(2, '0')}`;
         (appState.staffPayouts || []).forEach(item => {
             if (!item) return; const iName = (item.name || item.staffName || '').trim();
-            if (iName.toLowerCase() !== workerName.toLowerCase()) return;
+            if (normalizeStaffName(iName) !== normalizeStaffName(workerName)) return;
             const amt = parseFloat(String(item.amount || item.price || 0).replace(/,/g, '')) || 0;
             const dInfo = parseItemDate(item);
             // Filter by period
@@ -12171,7 +12216,6 @@ window.addEventListener('unhandledrejection', (event) => {
         let totalAll = 0;
         let totalMonth = 0;
         const allKnownNames = new Set();
-        const staffMap = {};
 
         payouts.forEach(p => {
             if (!p) return;
@@ -12186,7 +12230,6 @@ window.addEventListener('unhandledrejection', (event) => {
             const name = (p.name || p.staffName || 'عامل').trim();
             if (name) {
                 allKnownNames.add(name);
-                staffMap[name] = (staffMap[name] || 0) + 1;
             }
         });
 
@@ -12210,11 +12253,11 @@ window.addEventListener('unhandledrejection', (event) => {
         const staffCountElem = document.getElementById('totalStaffCount');
         const staffBadgeElem = document.getElementById('staffCountBadge');
 
-        const uniqueStaffNames = Object.keys(staffMap);
+        const staffGroups = groupStaffPayouts(payouts);
 
         if (totalAllElem) totalAllElem.innerHTML = `${totalAll.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (totalMonthElem) totalMonthElem.innerHTML = `${totalMonth.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (staffCountElem) staffCountElem.textContent = `${uniqueStaffNames.length} عامل`;
+        if (staffCountElem) staffCountElem.textContent = `${staffGroups.length} عامل`;
         if (staffBadgeElem) staffBadgeElem.textContent = `${payouts.length} خلاص`;
 
         // Update datalist for suggestions
@@ -12244,41 +12287,35 @@ window.addEventListener('unhandledrejection', (event) => {
             'أجر يومي': 'bg-sky-50 text-sky-700 border-sky-200'
         };
 
-        // Render all payouts directly in clean cards
-        container.innerHTML = payouts.map(p => {
+        // One card per worker: all transactions with the same name share one card.
+        // Individual transactions (the details) are drawn only when the card is expanded.
+        const expandedGroups = window.staffPayoutExpandedGroups || (window.staffPayoutExpandedGroups = new Set());
+        const formatPayoutDate = (p) => {
+            const d = new Date(p.date || p.createdAt || Date.now());
+            return escapeHTML(isNaN(d.getTime()) ? (p.date || '') : d.toLocaleDateString('ar-DZ'));
+        };
+        const fundBadge = (p) => (p.fundSource === 'general')
+            ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>'
+            : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>';
+        const renderPayoutRow = (p) => {
             const safeId = escapeHTML(String(p.id || ''));
-            const pName = escapeHTML(p.name || p.staffName || 'عامل');
             const pType = escapeHTML(p.type || 'خلاص');
             const pNotes = p.notes ? escapeHTML(p.notes) : '';
             const pAmount = (Number(p.amount) || 0).toLocaleString();
             const badgeClass = typeBadgeStyles[p.type] || 'bg-slate-100 text-slate-700 border-slate-200';
-
-            const d = new Date(p.date || p.createdAt || Date.now());
-            const dateStr = isNaN(d.getTime()) ? (p.date || '') : d.toLocaleDateString('ar-DZ');
-
             return `
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-blue-300 transition-all gap-2.5">
-                <div class="flex items-center gap-3 min-w-0">
-                    <div class="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center font-black text-sm shrink-0">
-                        ${escapeHTML(pName.charAt(0).toUpperCase())}
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-white border border-slate-200/80">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${pType}</span>
+                        ${fundBadge(p)}
+                        <span class="text-[11px] text-slate-400 font-medium">${formatPayoutDate(p)}</span>
                     </div>
-                    <div class="min-w-0">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class="font-extrabold text-slate-900 text-sm truncate">${pName}</span>
-                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${pType}</span>
-                            ${(p.fundSource === 'general') ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-violet-50 text-violet-800 border-violet-200">الصندوق العام</span>' : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-800 border-emerald-200">صندوق اليوم</span>'}
-                            <span class="text-[11px] text-slate-400 font-medium">${dateStr}</span>
-                        </div>
-                        ${pNotes ? `<div class="text-xs text-slate-500 font-medium truncate mt-0.5">${pNotes}</div>` : ''}
-                    </div>
+                    ${pNotes ? `<div class="text-xs text-slate-500 font-medium truncate mt-0.5">${pNotes}</div>` : ''}
                 </div>
-
-                <div class="flex items-center justify-between sm:justify-end gap-2 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
-                    <span class="font-black text-blue-900 text-sm sm:text-base bg-blue-50/70 border border-blue-100/80 px-2.5 py-1 rounded-xl">${pAmount} دج</span>
+                <div class="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                    <span class="font-black text-blue-900 text-xs sm:text-sm">${pAmount} دج</span>
                     <div class="flex items-center gap-1">
-                        <button type="button" onclick="openWorkerTransactionsModal('${pName}')" class="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="عرض كشف هذا العامل">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                        </button>
                         <button type="button" onclick="editStaffPayout('${safeId}')" class="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="تعديل الخلاص">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                         </button>
@@ -12289,7 +12326,57 @@ window.addEventListener('unhandledrejection', (event) => {
                 </div>
             </div>
             `;
-        }).join('');
+        };
+        const renderGroupCard = (group) => {
+            const isOpen = expandedGroups.has(group.key);
+            const encodedKey = encodeGroupKey(group.key);
+            const encodedName = encodeGroupKey(group.name);
+            const count = group.payouts.length;
+            const details = isOpen
+                ? `<div class="border-t border-slate-100 bg-slate-50/70 p-2.5 space-y-2">${group.payouts.map(renderPayoutRow).join('')}</div>`
+                : '';
+            return `
+            <div class="rounded-2xl bg-white border ${isOpen ? 'border-blue-300' : 'border-slate-200/90'} shadow-2xs hover:border-blue-300 transition-all overflow-hidden">
+                <div class="p-3 space-y-2">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center font-black text-sm shrink-0">
+                                ${escapeHTML(group.name.charAt(0).toUpperCase())}
+                            </div>
+                            <div class="flex items-center gap-2 flex-wrap min-w-0">
+                                <span class="font-extrabold text-slate-900 text-sm truncate">${escapeHTML(group.name)}</span>
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border bg-slate-50 text-slate-700 border-slate-200 whitespace-nowrap">${count} ${count === 1 ? 'معاملة' : 'معاملات'}</span>
+                            </div>
+                        </div>
+                        <span class="font-black text-blue-900 text-sm sm:text-base bg-blue-50/70 border border-blue-100/80 px-2.5 py-1 rounded-xl shrink-0">${group.total.toLocaleString()} دج</span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 sm:ps-12">
+                        <span class="text-[11px] text-slate-400 font-medium whitespace-nowrap">آخر خلاص: ${formatPayoutDate(group.lastPayout)}</span>
+                        <div class="flex items-center gap-1 shrink-0">
+                            <button type="button" onclick="toggleStaffPayoutGroup('${encodedKey}')" aria-expanded="${isOpen}" class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold text-blue-700 hover:bg-blue-50 transition-colors whitespace-nowrap">
+                                <span>${isOpen ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}</span>
+                                <svg class="w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+                            </button>
+                            <button type="button" onclick="openWorkerTransactionsModal(decodeURIComponent('${encodedName}'))" class="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors" title="عرض كشف هذا العامل">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                ${details}
+            </div>
+            `;
+        };
+
+        container.innerHTML = staffGroups.map(renderGroupCard).join('');
+    };
+
+    window.toggleStaffPayoutGroup = function(encodedKey) {
+        const key = decodeGroupKey(encodedKey);
+        if (!window.staffPayoutExpandedGroups) window.staffPayoutExpandedGroups = new Set();
+        const expanded = window.staffPayoutExpandedGroups;
+        if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+        renderStaffPayouts();
     };
 
     window.handleAddStaffPayout = function(e) {
