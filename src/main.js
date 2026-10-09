@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
-  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
+  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -5866,14 +5866,14 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.handlePosProductSearch = handlePosProductSearch;
 
-    // ----- Sell unit mode: per piece/box (default) or per kilo (weight products only) -----
+    // ----- Sell unit mode: per piece/dose (default) or per kilo (weighed + dose products) -----
     let sellUnitMode = 'unit';
     let sellUnitModeProductId = '';
     const SELL_MODE_ACTIVE_CLASS = 'px-3 py-2.5 rounded-xl text-xs font-black border-2 transition-all active:scale-95 cursor-pointer bg-emerald-600 text-emerald-50 border-emerald-600 shadow-xs';
     const SELL_MODE_IDLE_CLASS = 'px-3 py-2.5 rounded-xl text-xs font-black border-2 transition-all active:scale-95 cursor-pointer bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50 shadow-2xs';
 
     function getSellUnitMode() { return sellUnitMode === 'kilo' ? 'kilo' : 'unit'; }
-    function isKiloModeActive(product) { return getSellUnitMode() === 'kilo' && isWeightSaleProduct(product); }
+    function isKiloModeActive(product) { return getSellUnitMode() === 'kilo' && isKiloSaleProduct(product); }
     function getSelectedSellProduct() {
         const prodId = getElemVal('sellProdId');
         if (!prodId || !Array.isArray(appState.products)) return null;
@@ -5925,16 +5925,31 @@ window.addEventListener('unhandledrejection', (event) => {
     // Reflects the active mode on the form: buttons, quantity wording, price field.
     let sellModeUiSignature = null;
     function syncSellUnitModeUI(product) {
-        const isWeightProduct = isWeightSaleProduct(product);
+        // Weighed products and dose products both get the per-kilo option.
+        const canSellKilo = isKiloSaleProduct(product);
+        const isDose = isDoseProduct(product);
         const modeFields = document.getElementById('sellUnitModeFields');
-        if (!isWeightProduct && sellUnitMode === 'kilo') sellUnitMode = 'unit';
-        if (modeFields) modeFields.classList.toggle('hidden', !isWeightProduct);
+        if (!canSellKilo && sellUnitMode === 'kilo') sellUnitMode = 'unit';
+        if (modeFields) modeFields.classList.toggle('hidden', !canSellKilo);
 
-        const kilo = isWeightProduct && sellUnitMode === 'kilo';
+        const kilo = canSellKilo && sellUnitMode === 'kilo';
         const unitBtn = document.getElementById('sellModeUnitBtn');
         const kiloBtn = document.getElementById('sellModeKiloBtn');
-        if (unitBtn) unitBtn.className = kilo ? SELL_MODE_IDLE_CLASS : SELL_MODE_ACTIVE_CLASS;
+        if (unitBtn) {
+            unitBtn.className = kilo ? SELL_MODE_IDLE_CLASS : SELL_MODE_ACTIVE_CLASS;
+            if (isDose) unitBtn.textContent = 'بيع بالدوزة (عادي)';
+            else unitBtn.textContent = 'بيع بالقطعة / العلبة';
+        }
         if (kiloBtn) kiloBtn.className = kilo ? SELL_MODE_ACTIVE_CLASS : SELL_MODE_IDLE_CLASS;
+
+        const modeHint = document.getElementById('sellUnitModeHint');
+        if (modeHint) modeHint.textContent = isDose ? 'منتج بالدوزة' : 'منتج موزون';
+        const modeNote = document.getElementById('sellUnitModeNote');
+        if (modeNote) {
+            modeNote.textContent = isDose
+                ? 'عادي تُبيع بالدوزة، أو «البيع بالكيلو» وتكتب سعر الكيلو بنفسك لهذه البيعة فقط — كل 1 كغ يخصم 1000 من المخزون.'
+                : 'اختر «البيع بالكيلو» لتضع سعر الكيلو بنفسك لهذه البيعة فقط (عادة أقل من سعر العلبة).';
+        }
 
         const qtyLabel = document.getElementById('sellQtyLabel');
         if (qtyLabel) qtyLabel.textContent = kilo ? 'الوزن بالكيلو (kg) — مثال: 0.5 = نصف كيلو' : 'الكمية للبيع (حدد الكمية أولاً):';
@@ -5961,7 +5976,10 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         const stockUnitBadge = document.getElementById('sellKiloStockUnit');
         if (stockUnitBadge && product) {
-            stockUnitBadge.textContent = `الخصم من المخزون: ${parseWeightSpec(product.weight).unitLabel}`;
+            const spec = parseWeightSpec(product.weight);
+            stockUnitBadge.textContent = isDose
+                ? `الخصم: 1 كغ = 1000 ${spec.unitLabel}`
+                : `الخصم من المخزون: ${spec.unitLabel}`;
         }
 
         // Rebuild the quick buttons only when the mode or the product actually changes,
@@ -5980,8 +5998,8 @@ window.addEventListener('unhandledrejection', (event) => {
     function setSellUnitMode(mode) {
         const product = getSelectedSellProduct();
         const nextMode = (mode === 'kilo') ? 'kilo' : 'unit';
-        if (nextMode === 'kilo' && !isWeightSaleProduct(product)) {
-            showInfoToast('خيار البيع بالكيلو متاح فقط للمنتجات الموزونة (نوع القياس: الوزن kg/g)');
+        if (nextMode === 'kilo' && !isKiloSaleProduct(product)) {
+            showInfoToast('خيار البيع بالكيلو متاح فقط للمنتجات الموزونة (الوزن kg/g) أو منتجات الدوزة');
             sellUnitMode = 'unit';
         } else {
             sellUnitMode = nextMode;
