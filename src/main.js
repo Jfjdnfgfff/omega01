@@ -69,6 +69,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
+  import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -3841,6 +3842,15 @@ window.addEventListener('unhandledrejection', (event) => {
         if (document.getElementById('renewPaymentStatus')) setElemValue('renewPaymentStatus', 'paid');
         if (document.getElementById('renewDebtAmount')) setElemValue('renewDebtAmount', '');
         toggleRenewDebtField();
+
+        // Payment date defaults to today and cannot be later than today. The cash received is booked in that day's caisse.
+        const paymentDateInput = document.getElementById('renewPaymentDate');
+        if (paymentDateInput) {
+            const todayKey = getLocalDateString(new Date());
+            paymentDateInput.max = todayKey;
+            paymentDateInput.value = todayKey;
+        }
+        if (typeof window.updateRenewPaymentDateHint === 'function') window.updateRenewPaymentDateHint();
     }
 
     function openRenewModal(customerId) {
@@ -4011,6 +4021,31 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     };
 
+    // Explains what the chosen payment date does: where the cash lands, and whether that day is already closed.
+    window.updateRenewPaymentDateHint = function() {
+        const hint = document.getElementById('renewPaymentDateHint');
+        if (!hint) return;
+        const check = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        let tone = '';
+        let text = '';
+        if (!check.ok) {
+            tone = 'text-red-700 bg-red-50 border-red-200';
+            text = check.error === 'future' ? 'لا يمكن اختيار تاريخ دفع في المستقبل.' : 'يرجى اختيار تاريخ دفع صحيح.';
+        } else {
+            const displayDate = check.dateKey.split('-').reverse().join('/');
+            const details = typeof window.calculateCaisseDetails === 'function' ? window.calculateCaisseDetails(check.dateKey) : null;
+            if (details && details.isClosed) {
+                tone = 'text-amber-800 bg-amber-50 border-amber-200';
+                text = `صندوق يوم ${displayDate} مُغلق. إضافة هذا المبلغ ستغيّر فرق الإغلاق لذلك اليوم.`;
+            } else if (check.dateKey !== getLocalDateString(new Date())) {
+                tone = 'text-blue-800 bg-blue-50 border-blue-200';
+                text = `سيُسجَّل المبلغ المدفوع نقداً في صندوق يوم ${displayDate}.`;
+            }
+        }
+        hint.textContent = text;
+        hint.className = text ? `mt-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 border ${tone}` : 'hidden';
+    };
+
     window.handleRenewCustomerSubmit = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         if (e && e.stopPropagation) e.stopPropagation();
@@ -4029,6 +4064,14 @@ window.addEventListener('unhandledrejection', (event) => {
         const subType = getElemVal('renewSubscriptionType') || 'time';
         const paymentStatus = getElemVal('renewPaymentStatus') || 'paid';
         const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('renewDebtAmount') || renewPrice || 0) : 0;
+
+        // The payment date is required and cannot be in the future. Check it before the customer record is changed.
+        const paymentDateCheck = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        if (!paymentDateCheck.ok) {
+            showErrorToast(paymentDateCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دفع صحيح');
+            document.getElementById('renewPaymentDate')?.focus();
+            return false;
+        }
 
         customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
         customer.price = renewPrice;
@@ -4056,7 +4099,7 @@ window.addEventListener('unhandledrejection', (event) => {
             : (paymentStatus === 'credit' ? Math.max(0, Number(renewPrice || 0) - Number(debtAmount || 0)) : 0);
         recordCaisseMovement({
             source: 'subscription', sourceId: customer.subscriptionCycleId,
-            direction: 'in', amount: renewalCashPaid, date: new Date().toISOString(),
+            direction: 'in', amount: renewalCashPaid, date: renewalPaymentTimestamp(paymentDateCheck.dateKey, new Date()),
             title: `تجديد اشتراك: ${customer.name || 'مشترك'}`,
             detail: pkg ? pkg.name : 'تجديد اشتراك', sourceLabel: 'الاشتراكات'
         });
@@ -4082,7 +4125,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         // Log renewal activity
         if (typeof logActivity === 'function') {
-            logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج`, renewPrice);
+            logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, renewPrice);
         }
 
         if (window.saveFirebaseSectionItem) {
@@ -4096,7 +4139,8 @@ window.addEventListener('unhandledrejection', (event) => {
         render();
         return false;
     };
-    document.getElementById('renewCustomerForm')?.addEventListener('submit', window.handleRenewCustomerSubmit);
+    // The form's onsubmit attribute (index.html) already calls handleRenewCustomerSubmit. Binding it here as well ran every
+    // renewal twice and wrote two subscription cash entries, so it is intentionally not bound a second time.
     // ==========================================
     // EXPENSES CATEGORIES & MANAGEMENT HELPERS
     // ==========================================
