@@ -3058,12 +3058,16 @@
                   <input type="number" id="partialCreditAmount" min="1" step="1" inputmode="numeric" required oninput="updatePartialCreditPreview()" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-base font-black text-slate-800 bg-white outline-none focus:border-blue-500 text-center">
               </div>
               <div>
+                  <label for="partialCreditDate" class="block text-[11px] text-slate-700 font-bold mb-1">تاريخ التسديد *</label>
+                  <input type="date" id="partialCreditDate" required dir="ltr" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-800">
+              </div>
+              <div>
                   <label for="partialCreditFundSource" class="block text-[11px] text-slate-700 font-bold mb-1">إضافة المبلغ إلى</label>
                   <select id="partialCreditFundSource" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-slate-50 font-bold text-slate-800">
                       <option value="daily">صندوق اليوم (يزيد رصيد اليوم)</option>
                       <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
                   </select>
-                  <p class="text-[10px] text-slate-500 mt-1">اختر أين تريد تسجيل هذا التسديد. صندوق اليوم يزيد رصيد الكاش اليومي، الصندوق العام للتسديدات الكبيرة أو الخارجية.</p>
+                  <p class="text-[10px] text-slate-500 mt-1">اختر تاريخ ومصدر هذا التسديد. صندوق اليوم يزيد رصيد الكاش للتاريخ المحدد، والصندوق العام لا يؤثر على رصيد اليوم.</p>
               </div>
               <div class="flex items-center gap-3 pt-1">
                   <button type="submit" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-all">تأكيد التسديد</button>
@@ -3087,12 +3091,16 @@
                   <span id="settleCreditAmount" class="block text-xl font-black text-blue-700 mt-1" dir="ltr">0 دج</span>
               </div>
               <div>
+                  <label for="settleCreditDate" class="block text-[11px] text-slate-700 font-bold mb-1">تاريخ التسديد *</label>
+                  <input type="date" id="settleCreditDate" required dir="ltr" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white font-bold text-slate-800">
+              </div>
+              <div>
                   <label for="settleCreditFundSource" class="block text-[11px] text-slate-700 font-bold mb-1">إضافة المبلغ إلى</label>
                   <select id="settleCreditFundSource" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-slate-50 font-bold text-slate-800">
                       <option value="daily">صندوق اليوم (يزيد رصيد اليوم)</option>
                       <option value="general">الصندوق العام (لا يؤثر على رصيد اليوم)</option>
                   </select>
-                  <p class="text-[10px] text-slate-500 mt-1">المبلغ سيدخل الصندوق المختار فوراً ويُغلق الكريدي نهائياً.</p>
+                  <p class="text-[10px] text-slate-500 mt-1">اختر تاريخ ومصدر التسديد. المبلغ سيدخل الصندوق المختار وفق التاريخ المحدد ويُغلق الكريدي نهائياً.</p>
               </div>
               <div class="flex items-center gap-3 pt-1">
                   <button type="submit" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-md shadow-emerald-200 transition-all">تأكيد التسديد الكامل</button>

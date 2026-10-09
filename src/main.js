@@ -7692,17 +7692,26 @@ window.addEventListener('unhandledrejection', (event) => {
         const targetId = String(id || '').trim();
         return (Array.isArray(appState.credits) ? appState.credits : []).find(c => c && (String(c.id).trim() === targetId || String(c._rtdbKey || '').trim() === targetId)) || null;
     }
-    window.creditCaisseToast = function(amount, fundSource, creditName) {
+    function normalizeCreditPaymentDate(value) {
+        const date = String(value || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '';
+        const parsed = new Date(`${date}T00:00:00`);
+        return !Number.isNaN(parsed.getTime()) && getLocalDateString(parsed) === date ? date : '';
+    }
+    window.creditCaisseToast = function(amount, fundSource, creditName, dateValue) {
         try {
             const isGeneral = fundSource === 'general';
+            const paymentDate = normalizeCreditPaymentDate(dateValue) || getLocalDateString(new Date());
             const todayKey = getLocalDateString(new Date());
-            const details = (typeof window.calculateCaisseDetails === 'function') ? window.calculateCaisseDetails(todayKey) : null;
+            const displayDate = paymentDate.split('-').reverse().join('/');
+            const dailyFundLabel = paymentDate === todayKey ? 'صندوق اليوم' : `صندوق يوم ${displayDate}`;
+            const details = (typeof window.calculateCaisseDetails === 'function') ? window.calculateCaisseDetails(paymentDate) : null;
             if (isGeneral) {
-                showSuccessToast(`تم تسديد ${Number(amount).toLocaleString()} دج من كريدي ${creditName || ''} وإضافته إلى الصندوق العام — لا يؤثر على رصيد اليوم`);
+                showSuccessToast(`تم تسديد ${Number(amount).toLocaleString()} دج من كريدي ${creditName || ''} وإضافته إلى الصندوق العام بتاريخ ${displayDate} — لا يؤثر على رصيد اليوم`);
                 return;
             }
             const net = details ? formatMoney(details.netCash) : '';
-            showSuccessToast(`تم تسديد ${Number(amount).toLocaleString()} دج من كريدي ${creditName || ''} وإضافته إلى صندوق اليوم${net ? ` — الرصيد المتوقع الآن: ${net}` : ''}`);
+            showSuccessToast(`تم تسديد ${Number(amount).toLocaleString()} دج من كريدي ${creditName || ''} وإضافته إلى ${dailyFundLabel}${net ? ` — الرصيد المتوقع: ${net}` : ''}`);
         } catch (e) {
             showSuccessToast(`تم تسديد ${Number(amount).toLocaleString()} دج بنجاح`);
         }
@@ -7711,6 +7720,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const cr = findCreditById(id);
         if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return; }
         setElemValue('partialCreditId', cr.id || id);
+        setElemValue('partialCreditDate', getLocalDateString(new Date()));
         const nameEl = document.getElementById('partialCreditName');
         if (nameEl) nameEl.textContent = `${cr.name || 'بدون اسم'} — ${cr.desc || ''}`;
         const amountInput = document.getElementById('partialCreditAmount');
@@ -7742,12 +7752,14 @@ window.addEventListener('unhandledrejection', (event) => {
         const current = Number(cr.amount) || 0;
         const paid = Math.round((parseFloat(getElemVal('partialCreditAmount')) || 0) * 100) / 100;
         const fundSource = getElemVal('partialCreditFundSource') === 'general' ? 'general' : 'daily';
+        const paymentDate = normalizeCreditPaymentDate(getElemVal('partialCreditDate'));
+        if (!paymentDate) { showErrorToast('يرجى اختيار تاريخ صحيح للتسديد'); return false; }
         if (!Number.isFinite(paid) || paid <= 0) { showErrorToast('يرجى إدخال مبلغ صحيح أكبر من 0'); return false; }
         if (paid > current) { showErrorToast(`المبلغ المسدد (${paid.toLocaleString()}) أكبر من الباقي (${current.toLocaleString()})`); return false; }
         closeModal('partialCreditModal');
         if (paid >= current) {
             // Paying the full remainder = full settlement with chosen fund.
-            window.openSettleCreditModal(cr.id || creditId, fundSource, paid);
+            window.openSettleCreditModal(cr.id || creditId, fundSource, paid, paymentDate);
             return false;
         }
         const remaining = Math.round((current - paid) * 100) / 100;
@@ -7771,7 +7783,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const payment = {
             id: 'credit_payment_' + cleanKey(cr.id || creditId) + '_' + Date.now(), type: 'credit_payment',
             creditId: cr.id || creditId, creditName: cr.name || '', partial: true,
-            amount: paid, remainingAfter: remaining, date: new Date().toISOString(),
+            amount: paid, remainingAfter: remaining, date: paymentDate,
             fundSource,
             notes: `تسديد جزئي — الباقي ${remaining.toLocaleString()} دج (${fundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'})`,
             ...subscriptionExtra
@@ -7782,20 +7794,20 @@ window.addEventListener('unhandledrejection', (event) => {
         if (!cr.originalAmount) cr.originalAmount = current + (Number(cr.paidTotal) || 0);
         cr.paidTotal = Math.round(((Number(cr.paidTotal) || 0) + paid) * 100) / 100;
         cr.amount = remaining;
-        cr.lastPaymentDate = payment.date;
+        cr.lastPaymentDate = paymentDate;
         cr.payments = Array.isArray(cr.payments) ? cr.payments : [];
-        cr.payments.push({ amount: paid, date: payment.date, fundSource });
+        cr.payments.push({ amount: paid, date: paymentDate, fundSource });
         cr.updatedAt = Date.now();
         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('credits', cr);
-        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج إلى ${fundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'} — الباقي ${remaining.toLocaleString()} دج`, paid);
+        if (typeof logActivity === 'function') logActivity('credit', 'تسديد جزء من الكريدي', `${cr.name || creditId}: سدد ${paid.toLocaleString()} دج إلى ${fundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'} بتاريخ ${paymentDate} — الباقي ${remaining.toLocaleString()} دج`, paid);
         saveState();
-        if (typeof window.creditCaisseToast === 'function') window.creditCaisseToast(paid, fundSource, cr.name || '');
+        if (typeof window.creditCaisseToast === 'function') window.creditCaisseToast(paid, fundSource, cr.name || '', paymentDate);
         else showSuccessToast(`تم تسديد ${paid.toLocaleString()} دج إلى ${fundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'} — الباقي: ${remaining.toLocaleString()} دج`);
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         renderCreditsList(); render();
         return false;
     };
-    window.openSettleCreditModal = function(id, presetFundSource, presetAmount) {
+    window.openSettleCreditModal = function(id, presetFundSource, presetAmount, presetDate) {
         const cr = findCreditById(id);
         if (!cr) { showErrorToast('لم يتم العثور على الكريدي'); return; }
         setElemValue('settleCreditId', cr.id || id);
@@ -7806,17 +7818,20 @@ window.addEventListener('unhandledrejection', (event) => {
         if (amountEl) amountEl.textContent = `${amount.toLocaleString()} دج`;
         const fundInput = document.getElementById('settleCreditFundSource');
         if (fundInput) fundInput.value = presetFundSource === 'general' ? 'general' : 'daily';
+        setElemValue('settleCreditDate', normalizeCreditPaymentDate(presetDate) || getLocalDateString(new Date()));
         openModal('settleCreditModal');
     };
     window.submitSettleCreditPayment = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         const creditId = getElemVal('settleCreditId');
         const fundSource = getElemVal('settleCreditFundSource') === 'general' ? 'general' : 'daily';
+        const paymentDate = normalizeCreditPaymentDate(getElemVal('settleCreditDate'));
+        if (!paymentDate) { showErrorToast('يرجى اختيار تاريخ صحيح للتسديد'); return false; }
         closeModal('settleCreditModal');
-        settleCredit(creditId, true, fundSource);
+        settleCredit(creditId, true, fundSource, paymentDate);
         return false;
     };
-    function settleCredit(id, skipConfirm, presetFundSource) { if (!id || !Array.isArray(appState.credits)) return;
+    function settleCredit(id, skipConfirm, presetFundSource, paymentDateInput) { if (!id || !Array.isArray(appState.credits)) return;
         const targetId = String(id).trim();
         // If called without confirmation modal, open the new modal that allows choosing the caisse.
         if (skipConfirm !== true) {
@@ -7824,6 +7839,7 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         }
         const chosenFundSource = presetFundSource === 'general' ? 'general' : 'daily';
+        const paymentDate = normalizeCreditPaymentDate(paymentDateInput) || getLocalDateString(new Date());
         const doSettle = function() {
             const targetCredit = appState.credits.find(c => String(c && c.id).trim() === targetId || String(c && c._rtdbKey).trim() === targetId);
             if (!targetCredit) return; // Already settled (e.g. a second confirmation click).
@@ -7832,15 +7848,17 @@ window.addEventListener('unhandledrejection', (event) => {
                 showErrorToast('مبلغ الكريدي غير صالح للتسديد');
                 return;
             }
-            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId} إلى ${chosenFundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'}`, amount);
+            if (typeof logActivity === 'function') logActivity('credit', 'تسديد كريدي بالكامل', `تم تسديد الدين لصاحبه: ${targetCredit.name || targetId} إلى ${chosenFundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'} بتاريخ ${paymentDate}`, amount);
 
             // Preserve membership debt semantics without matching product-sale credits
             // to a subscriber merely because their phone numbers happen to be equal.
             const customers = Array.isArray(appState.customers) ? appState.customers : [];
             const linkedCust = linkedCustomerForCredit(targetCredit, customers, targetId, cleanPhone);
             if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
-            // Stable receipt ID makes a repeated settlement idempotent across syncs.
-            const existingLogIdx = appState.caisseLogs.findIndex(l => l && l.type === 'credit_payment' && String(l.creditId) === String(targetCredit.id || targetId));
+            // Stable full-settlement receipt ID makes retries idempotent without
+            // replacing any earlier partial-repayment receipts for this credit.
+            const settlementLogId = 'credit_payment_' + cleanKey(targetCredit.id || targetId);
+            const existingLogIdx = appState.caisseLogs.findIndex(l => l && l.type === 'credit_payment' && String(l.id || '') === settlementLogId);
             if (existingLogIdx === -1) {
                 const subscriptionDate = linkedCust && linkedCust.paymentStatus === 'credit'
                     ? getLocalDateString(linkedCust.startDate) : '';
@@ -7848,9 +7866,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 const price = linkedCust ? ((linkedCust.price !== undefined && linkedCust.price !== null && linkedCust.price !== '')
                     ? Number(linkedCust.price) : Number(pkg?.price || 0)) : 0;
                 const payment = {
-                    id: 'credit_payment_' + cleanKey(targetCredit.id || targetId), type: 'credit_payment',
+                    id: settlementLogId, type: 'credit_payment',
                     creditId: targetCredit.id || targetId, creditName: targetCredit.name || '',
-                    amount, date: new Date().toISOString(),
+                    amount, date: paymentDate,
                     fundSource: chosenFundSource,
                     notes: chosenFundSource === 'general' ? 'تسديد كامل — الصندوق العام' : 'تسديد كامل — صندوق اليوم',
                     ...(subscriptionDate ? {
@@ -7862,9 +7880,11 @@ window.addEventListener('unhandledrejection', (event) => {
                 appState.caisseLogs.unshift(payment);
                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', payment);
             } else {
-                // Update fund source if user changed it on a retry
+                // Update the full-settlement receipt if user retries with new details.
                 appState.caisseLogs[existingLogIdx].fundSource = chosenFundSource;
                 appState.caisseLogs[existingLogIdx].amount = amount;
+                appState.caisseLogs[existingLogIdx].date = paymentDate;
+                appState.caisseLogs[existingLogIdx].notes = chosenFundSource === 'general' ? 'تسديد كامل — الصندوق العام' : 'تسديد كامل — صندوق اليوم';
                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('caisseLogs', appState.caisseLogs[existingLogIdx]);
             }
             if (linkedCust) {
@@ -7887,7 +7907,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 }
             }
             saveState();
-            if (typeof window.creditCaisseToast === 'function') window.creditCaisseToast(amount, chosenFundSource, targetCredit.name || '');
+            if (typeof window.creditCaisseToast === 'function') window.creditCaisseToast(amount, chosenFundSource, targetCredit.name || '', paymentDate);
             else showSuccessToast(`تم تسديد الكريدي (${amount.toLocaleString()} دج) إلى ${chosenFundSource === 'general' ? 'الصندوق العام' : 'صندوق اليوم'} بنجاح`);
             if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
             renderCreditsList(); render(); // Update dashboard totals

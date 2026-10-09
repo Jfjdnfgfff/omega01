@@ -115,6 +115,24 @@ test('product sales on credit reduce no cash until repayment is recorded', () =>
     assert.equal(afterRepayment.transactions.some(transaction => transaction.source === 'creditPayment' && transaction.amount === 2500), true);
 });
 
+test('a credit repayment recorded with a selected calendar date appears on that caisse day', () => {
+    const selectedDate = '2026-09-18';
+    const dateKey = value => String(value || '').slice(0, 10);
+    const state = {
+        caisseLogs: [
+            { id: 'repayment-selected-date', type: 'credit_payment', creditId: 'credit-1', amount: 175, date: selectedDate, fundSource: 'daily' },
+            { id: 'repayment-other-date', type: 'credit_payment', creditId: 'credit-2', amount: 90, date: '2026-09-17', fundSource: 'daily' }
+        ]
+    };
+
+    const selectedDay = buildCaisseMovements(state, selectedDate, dateKey);
+    const previousDay = buildCaisseMovements(state, '2026-09-17', dateKey);
+    assert.equal(selectedDay.creditIncome, 175);
+    assert.equal(selectedDay.netCash, 175);
+    assert.equal(previousDay.creditIncome, 90);
+    assert.equal(previousDay.netCash, 90);
+});
+
 test('expenses and payouts paid from the general fund do not touch the daily till', () => {
     const dateKey = value => String(value || '').slice(0, 10);
     const today = '2026-09-29';
