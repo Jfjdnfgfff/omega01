@@ -147,6 +147,39 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg } = {}) {
     };
 }
 
+// Optional per-gram pricing for a dose (e.g. 50 g) or a weighed kilo sale.
+// The entered gram price is never saved as the product's catalog price.
+export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose } = {}) {
+    const quantity = Number(qty);
+    const gramPrice = Number(pricePerGram);
+    if (mode !== 'kilo' && (mode !== 'dose' || !isDoseProduct(product))) {
+        return { valid: false, error: 'invalid_mode' };
+    }
+    if (mode === 'kilo' && !isKiloSaleProduct(product)) {
+        return { valid: false, error: 'invalid_mode' };
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) return { valid: false, error: 'invalid_quantity' };
+    if (pricePerGram === '' || pricePerGram === null || pricePerGram === undefined ||
+        !Number.isFinite(gramPrice) || gramPrice <= 0) return { valid: false, error: 'invalid_price' };
+    if (mode === 'kilo') {
+        const kiloSale = resolveKiloSale({ product, qtyKg: quantity, pricePerKg: gramPrice * GRAMS_PER_KG });
+        if (!kiloSale.valid) return kiloSale;
+        return { ...kiloSale, pricePerGram: gramPrice, priceBasis: 'gram', gramsSold: roundTo(quantity * GRAMS_PER_KG, 3) };
+    }
+    const grams = Number(gramsPerDose);
+    if (gramsPerDose === '' || gramsPerDose === null || gramsPerDose === undefined ||
+        !Number.isFinite(grams) || grams <= 0) return { valid: false, error: 'invalid_grams' };
+    return {
+        valid: true, error: '', priceBasis: 'gram', pricePerGram: gramPrice,
+        gramsPerDose: grams, gramsSold: roundTo(grams * quantity, 3),
+        stockDeduction: roundTo(grams * quantity, 3), stockUnitLabel: 'غرام',
+        pricePerUnit: roundTo(grams * gramPrice, 2),
+        total: roundTo(grams * quantity * gramPrice, 2),
+        cost: roundTo(Number(product.cost || 0) * quantity, 2),
+        qtyUnit: 'dose'
+    };
+}
+
 export function resolveSaleUnitPrice(product, { allowCustom = false, customPrice } = {}) {
     const defaultPrice = Number(product?.price ?? 0);
     if (!allowCustom || customPrice === '' || customPrice === null || customPrice === undefined) {
@@ -163,6 +196,23 @@ export function resolveSaleUnitPrice(product, { allowCustom = false, customPrice
         isCustom: true,
         valid: Number.isFinite(unitPrice) && unitPrice > 0
     };
+}
+
+// Preserve fractional dinars for low gram prices (e.g. 0.025 دج/g).
+export function normalizeGramPrice(value) {
+    if (value === '' || value === null || value === undefined) return 0;
+    const price = Number(value);
+    return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+export function defaultGramSalePrice(product) {
+    const price = normalizeGramPrice(product?.gramPrice);
+    return price > 0 ? String(price) : '';
+}
+
+export function defaultDoseGrams(product) {
+    const grams = Number(product?.doseGrams);
+    return Number.isFinite(grams) && grams > 0 ? String(grams) : '50';
 }
 
 // The per-kilo price saved on a product when it is added (سعر الكيلو). Returns 0 when
