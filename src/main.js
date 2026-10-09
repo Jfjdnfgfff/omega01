@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
-  import { resolveSaleUnitPrice } from './product-pricing.js';
+  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
 
   // High-Speed PWA Caching Engine Registration
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
@@ -5865,8 +5865,134 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     }
     window.handlePosProductSearch = handlePosProductSearch;
+
+    // ----- Sell unit mode: per piece/box (default) or per kilo (weight products only) -----
+    let sellUnitMode = 'unit';
+    let sellUnitModeProductId = '';
+    const SELL_MODE_ACTIVE_CLASS = 'px-3 py-2.5 rounded-xl text-xs font-black border-2 transition-all active:scale-95 cursor-pointer bg-emerald-600 text-emerald-50 border-emerald-600 shadow-xs';
+    const SELL_MODE_IDLE_CLASS = 'px-3 py-2.5 rounded-xl text-xs font-black border-2 transition-all active:scale-95 cursor-pointer bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50 shadow-2xs';
+
+    function getSellUnitMode() { return sellUnitMode === 'kilo' ? 'kilo' : 'unit'; }
+    function isKiloModeActive(product) { return getSellUnitMode() === 'kilo' && isWeightSaleProduct(product); }
+    function getSelectedSellProduct() {
+        const prodId = getElemVal('sellProdId');
+        if (!prodId || !Array.isArray(appState.products)) return null;
+        return appState.products.find(p => String(p.id) === String(prodId)) || null;
+    }
+    function getSellKiloPrice() {
+        const input = document.getElementById('sellKiloPrice');
+        return input ? input.value : '';
+    }
+
+    // Quick weight buttons (kg) or quick piece counts, depending on the active mode.
+    function renderSellQtyPresets(kilo) {
+        const wrap = document.getElementById('sellQtyPresets');
+        const label = document.getElementById('sellQtyPresetsLabel');
+        if (!wrap) return;
+        if (label) label.textContent = kilo ? 'أوزان سريعة:' : 'كميات سريعة:';
+        const presets = kilo ? [0.25, 0.5, 0.75, 1, 1.5, 2, 3] : [1, 2, 3, 5, 10];
+        wrap.innerHTML = presets.map(value => (
+            `<button type="button" onclick="window.setQuickSellQty(${value})" class="px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 transition-all border border-slate-200 shrink-0 cursor-pointer">${kilo ? `${value} kg` : value}</button>`
+        )).join('');
+    }
+
+    // Recently used kilo prices for this product, so a lower per-kilo price is one tap away.
+    function renderSellKiloQuickPrices(product) {
+        const wrap = document.getElementById('sellKiloQuickPrices');
+        if (!wrap) return;
+        const recent = (Array.isArray(appState.sales) ? appState.sales : [])
+            .filter(s => s && s.unitMode === 'kilo' && (!product || String(s.prodId) === String(product.id)))
+            .map(s => Number(s.price))
+            .filter(price => Number.isFinite(price) && price > 0);
+        const unique = [...new Set(recent)].slice(0, 4);
+        if (unique.length === 0) { wrap.innerHTML = ''; return; }
+        wrap.innerHTML = `<span class="text-[10px] text-emerald-700 font-bold shrink-0">أسعار مستعملة:</span>` +
+            unique.map(price => (
+                `<button type="button" onclick="window.setSellKiloPrice(${price})" class="px-2 py-0.5 rounded-lg text-[11px] font-black bg-white hover:bg-emerald-600 hover:text-white text-emerald-800 transition-all border border-emerald-200 shrink-0 cursor-pointer">${price} دج</button>`
+            )).join('');
+    }
+
+    function setSellKiloPrice(price) {
+        const input = document.getElementById('sellKiloPrice');
+        if (!input) return;
+        input.value = (Number(price) > 0) ? String(Number(price)) : '';
+        input.dataset.userEdited = 'true';
+        updateStockInfoDisplay();
+        if (typeof window.updateProductCreditSplit === 'function') window.updateProductCreditSplit();
+    }
+    window.setSellKiloPrice = setSellKiloPrice;
+
+    // Reflects the active mode on the form: buttons, quantity wording, price field.
+    let sellModeUiSignature = null;
+    function syncSellUnitModeUI(product) {
+        const isWeightProduct = isWeightSaleProduct(product);
+        const modeFields = document.getElementById('sellUnitModeFields');
+        if (!isWeightProduct && sellUnitMode === 'kilo') sellUnitMode = 'unit';
+        if (modeFields) modeFields.classList.toggle('hidden', !isWeightProduct);
+
+        const kilo = isWeightProduct && sellUnitMode === 'kilo';
+        const unitBtn = document.getElementById('sellModeUnitBtn');
+        const kiloBtn = document.getElementById('sellModeKiloBtn');
+        if (unitBtn) unitBtn.className = kilo ? SELL_MODE_IDLE_CLASS : SELL_MODE_ACTIVE_CLASS;
+        if (kiloBtn) kiloBtn.className = kilo ? SELL_MODE_ACTIVE_CLASS : SELL_MODE_IDLE_CLASS;
+
+        const qtyLabel = document.getElementById('sellQtyLabel');
+        if (qtyLabel) qtyLabel.textContent = kilo ? 'الوزن بالكيلو (kg) — مثال: 0.5 = نصف كيلو' : 'الكمية للبيع (حدد الكمية أولاً):';
+        const qtyBadge = document.getElementById('sellQtyUnitBadge');
+        if (qtyBadge) qtyBadge.textContent = kilo ? '⚖️ بيع بالكيلو' : 'المسح يبيع بهذه الكمية';
+        const qtyInput = document.getElementById('sellProdQty');
+        if (qtyInput) qtyInput.placeholder = kilo ? '0.5' : '1';
+
+        const kiloFields = document.getElementById('sellKiloPriceFields');
+        if (kiloFields) kiloFields.classList.toggle('hidden', !kilo);
+        const kiloInput = document.getElementById('sellKiloPrice');
+        const productId = String(product?.id ?? '');
+        if (kiloInput) {
+            if (!kilo) {
+                kiloInput.value = '';
+                kiloInput.dataset.productId = '';
+                kiloInput.dataset.userEdited = 'false';
+            } else if (kiloInput.dataset.productId !== productId) {
+                // The per-kilo price is chosen by the user for every sale, never prefilled.
+                kiloInput.value = '';
+                kiloInput.dataset.productId = productId;
+                kiloInput.dataset.userEdited = 'false';
+            }
+        }
+        const stockUnitBadge = document.getElementById('sellKiloStockUnit');
+        if (stockUnitBadge && product) {
+            stockUnitBadge.textContent = `الخصم من المخزون: ${parseWeightSpec(product.weight).unitLabel}`;
+        }
+
+        // Rebuild the quick buttons only when the mode or the product actually changes,
+        // so typing a weight/price does not churn the DOM on every keystroke.
+        const signature = `${kilo ? 'kilo' : 'unit'}|${productId}`;
+        if (signature !== sellModeUiSignature) {
+            sellModeUiSignature = signature;
+            renderSellQtyPresets(kilo);
+            const kiloQuickWrap = document.getElementById('sellKiloQuickPrices');
+            if (kiloQuickWrap) kiloQuickWrap.innerHTML = '';
+            if (kilo) renderSellKiloQuickPrices(product);
+        }
+        return kilo;
+    }
+
     function setSellUnitMode(mode) {
+        const product = getSelectedSellProduct();
+        const nextMode = (mode === 'kilo') ? 'kilo' : 'unit';
+        if (nextMode === 'kilo' && !isWeightSaleProduct(product)) {
+            showInfoToast('خيار البيع بالكيلو متاح فقط للمنتجات الموزونة (نوع القياس: الوزن kg/g)');
+            sellUnitMode = 'unit';
+        } else {
+            sellUnitMode = nextMode;
+        }
+        const kilo = syncSellUnitModeUI(product);
         if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
+        if (typeof window.updateProductCreditSplit === 'function') window.updateProductCreditSplit();
+        if (kilo) {
+            const kiloInput = document.getElementById('sellKiloPrice');
+            kiloInput?.focus();
+        }
     }
     window.setSellUnitMode = setSellUnitMode;
 
@@ -5879,14 +6005,27 @@ window.addEventListener('unhandledrejection', (event) => {
     }
 
     function getProductSalePriceDetails(product) {
+        if (isKiloModeActive(product)) {
+            const rawPrice = getSellKiloPrice();
+            const pricePerKg = Number(rawPrice);
+            return {
+                unitPrice: Number.isFinite(pricePerKg) ? pricePerKg : 0,
+                isCustom: true,
+                isKilo: true,
+                valid: String(rawPrice).trim() !== '' && Number.isFinite(pricePerKg) && pricePerKg > 0
+            };
+        }
         const priceInput = document.getElementById('sellCustomPrice');
         const productId = String(product?.id ?? '');
         const selectedProductId = String(getElemVal('sellProdId') || '');
-        return resolveSaleUnitPrice(product, {
-            allowCustom: isSealedBoxProduct(product) &&
-                selectedProductId === productId && priceInput?.dataset.productId === productId,
-            customPrice: priceInput?.value ?? ''
-        });
+        return {
+            isKilo: false,
+            ...resolveSaleUnitPrice(product, {
+                allowCustom: isSealedBoxProduct(product) &&
+                    selectedProductId === productId && priceInput?.dataset.productId === productId,
+                customPrice: priceInput?.value ?? ''
+            })
+        };
     }
 
     function updateStockInfoDisplay() { const prodId = getElemVal('sellProdId');
@@ -5903,17 +6042,30 @@ window.addEventListener('unhandledrejection', (event) => {
                 customPriceInput.dataset.productId = '';
                 customPriceInput.dataset.userEdited = 'false';
             }
+            sellUnitMode = 'unit';
+            sellUnitModeProductId = '';
+            syncSellUnitModeUI(null);
             return;
         }
+        if (sellUnitModeProductId !== String(product.id)) {
+            sellUnitModeProductId = String(product.id);
+            const kiloPriceInput = document.getElementById('sellKiloPrice');
+            if (kiloPriceInput) {
+                kiloPriceInput.value = '';
+                kiloPriceInput.dataset.productId = String(product.id);
+                kiloPriceInput.dataset.userEdited = 'false';
+            }
+        }
+        const kiloMode = syncSellUnitModeUI(product);
         const isBoxProduct = isSealedBoxProduct(product);
-        if (customPriceFields) customPriceFields.classList.toggle('hidden', !isBoxProduct);
+        if (customPriceFields) customPriceFields.classList.toggle('hidden', !isBoxProduct || kiloMode);
         if (customPriceInput) {
-            if (isBoxProduct && customPriceInput.dataset.productId !== String(product.id)) {
+            if (isBoxProduct && !kiloMode && customPriceInput.dataset.productId !== String(product.id)) {
                 const defaultPrice = Number(product.price || 0);
                 customPriceInput.value = defaultPrice > 0 ? String(defaultPrice) : '';
                 customPriceInput.dataset.productId = String(product.id);
                 customPriceInput.dataset.userEdited = 'false';
-            } else if (!isBoxProduct) {
+            } else if (!isBoxProduct || kiloMode) {
                 customPriceInput.value = '';
                 customPriceInput.dataset.productId = '';
                 customPriceInput.dataset.userEdited = 'false';
@@ -5922,14 +6074,21 @@ window.addEventListener('unhandledrejection', (event) => {
         const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
+        const weightSpec = parseWeightSpec(product.weight);
 
-        // Automatic calculation based on measurement/weight
-        const deduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
+        // Automatic calculation based on measurement/weight — in kilo mode the sold
+        // weight is deducted directly (converted to the unit the stock is kept in).
+        const deduction = kiloMode
+            ? resolveKiloStockDeduction(product, qty, weightSpec)
+            : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
         const priceDetails = getProductSalePriceDetails(product);
         const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
-        const totalPrice = (unitPrice * qty).toFixed(2);
+        const hasKiloPrice = !kiloMode || priceDetails.valid;
+        const totalPrice = hasKiloPrice ? (unitPrice * qty).toFixed(2) : null;
+        const unitWord = kiloMode ? 'سعر الكيلو' : 'سعر الوحدة';
+        const deductionUnit = kiloMode ? weightSpec.unitLabel : '';
 
-        const rem = currentStock - deduction; const isStock2 = product.stockLocation === 'stock2';
+        const rem = Math.round((currentStock - deduction) * 1000) / 1000; const isStock2 = product.stockLocation === 'stock2';
         stockInfo.classList.remove('hidden'); if (isStock2) {
             stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border text-slate-800 bg-slate-100 border-slate-200`;
             stockInfo.innerHTML = `
@@ -5940,17 +6099,20 @@ window.addEventListener('unhandledrejection', (event) => {
                     هذا المنتج يتواجد في المستودع (Stock 2) ولا يمكن البيع منه مباشرة! يرجى تحويله إلى Stock 1 أولاً.
                 </div>
             `; return; } const locName = 'Stock 1 (صالة البيع)';
-        const locColor = 'text-blue-700 bg-blue-50 border-blue-200';
+        const locColor = kiloMode ? 'text-emerald-800 bg-emerald-50 border-emerald-200' : 'text-blue-700 bg-blue-50 border-blue-200';
         stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
         const weightBadge = product.weight ? ` <span class="text-[10px] text-indigo-700 font-bold">(${product.weight})</span>` : '';
+        const totalLine = (totalPrice === null)
+            ? `<span>إجمالي المبلغ: <strong class="text-emerald-700 font-extrabold">أدخل سعر الكيلو</strong></span>`
+            : `<span>إجمالي المبلغ: <strong class="${kiloMode ? 'text-emerald-700' : 'text-blue-700'} font-extrabold">${totalPrice} دج</strong> (${unitWord}: ${unitPrice} دج${kiloMode ? ' / كغ' : ''})</span>`;
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong>${weightBadge}</span>
                 <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
             </div>
-            <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t border-blue-200/60 pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction})</span></span>
-                <span>إجمالي المبلغ: <strong class="text-blue-700 font-extrabold">${totalPrice} دج</strong> (سعر الوحدة: ${unitPrice} دج)</span>
+            <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t ${kiloMode ? 'border-emerald-200/60' : 'border-blue-200/60'} pt-1">
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction}${deductionUnit ? ' ' + deductionUnit : ''})</span></span>
+                ${totalLine}
             </div>
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
 
@@ -5961,6 +6123,10 @@ window.addEventListener('unhandledrejection', (event) => {
         if (!product) return 0;
         const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const priceDetails = getProductSalePriceDetails(product);
+        if (priceDetails.isKilo) {
+            // Without a per-kilo price there is nothing to charge for this sale yet.
+            return priceDetails.valid ? Math.round(priceDetails.unitPrice * qty * 100) / 100 : 0;
+        }
         const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
         return Math.round(unitPrice * qty * 100) / 100;
     }
@@ -5994,9 +6160,14 @@ window.addEventListener('unhandledrejection', (event) => {
         if (isCredit) window.updateProductCreditSplit();
     };
     window.toggleProductSaleCreditFields();
-    ['sellProdId', 'sellProdQty', 'sellCustomPrice'].forEach(id => {
+    ['sellProdId', 'sellProdQty', 'sellCustomPrice', 'sellKiloPrice'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.addEventListener('input', () => window.updateProductCreditSplit()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
+    });
+    // Keep the live stock/total panel in sync while the per-kilo price is typed.
+    document.getElementById('sellKiloPrice')?.addEventListener('input', function() {
+        this.dataset.userEdited = 'true';
+        if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
     });
 
     function getProductSalePaymentInfo(total) {
@@ -6099,25 +6270,39 @@ window.addEventListener('unhandledrejection', (event) => {
             return; }
 
         const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-        let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
-        const salePriceDetails = getProductSalePriceDetails(product);
-        if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
-            showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
-            document.getElementById('sellCustomPrice')?.focus();
-            return;
+        const kiloSale = isKiloModeActive(product)
+            ? resolveKiloSale({ product, qtyKg: qty, pricePerKg: getSellKiloPrice() })
+            : null;
+        if (kiloSale && !kiloSale.valid) {
+            showErrorToast(kiloSale.error === 'invalid_price'
+                ? 'يرجى إدخال سعر الكيلو لهذه البيعة (أكبر من صفر)'
+                : 'يرجى إدخال وزن صحيح بالكيلو (مثال: 0.5 = نصف كيلو)');
+            document.getElementById(kiloSale.error === 'invalid_price' ? 'sellKiloPrice' : 'sellProdQty')?.focus();
+            return; }
+        let stockDeduction = kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+        let salePrice;
+        if (kiloSale) {
+            salePrice = kiloSale.pricePerKg;
+        } else {
+            const salePriceDetails = getProductSalePriceDetails(product);
+            if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
+                showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
+                document.getElementById('sellCustomPrice')?.focus();
+                return;
+            }
+            salePrice = salePriceDetails.unitPrice;
         }
-        let salePrice = salePriceDetails.unitPrice;
-        let saleCost = Number(product.cost || 0) * qty;
-        let saleLabel = product.name;
+        let saleCost = kiloSale ? kiloSale.cost : Number(product.cost || 0) * qty;
+        let saleLabel = kiloSale ? `${product.name} (بالكيلو)` : product.name;
 
         const isStock2 = product.stockLocation === 'stock2';
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
 
         if (Number(product.stock || 0) < stockDeduction) {
-            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
+            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
             return; }
 
-        let saleTotal = Number((salePrice * qty).toFixed(2));
+        let saleTotal = kiloSale ? kiloSale.total : Number((salePrice * qty).toFixed(2));
         let saleProfit = saleTotal - saleCost;
         const paymentInfo = getProductSalePaymentInfo(saleTotal);
         if (!paymentInfo) return;
@@ -6144,6 +6329,8 @@ window.addEventListener('unhandledrejection', (event) => {
             stockName: isStock2 ? 'مخزون 2' : 'مخزون 1',
             qty: qty,
             stockDeduction: stockDeduction,
+            unitMode: kiloSale ? 'kilo' : 'unit',
+            ...(kiloSale ? { qtyUnit: 'kg', pricePerKg: kiloSale.pricePerKg } : {}),
             price: salePrice,
             cost: saleCost, total: saleTotal,
             profit: saleProfit, coachName: coachVal,
@@ -6158,8 +6345,10 @@ window.addEventListener('unhandledrejection', (event) => {
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
+        sellUnitMode = 'unit'; sellUnitModeProductId = '';
+        syncSellUnitModeUI(null);
         if (typeof window.toggleProductSaleCreditFields === 'function') window.toggleProductSaleCreditFields();
-        if (typeof logActivity === 'function') logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج بالكريدي' : 'عملية بيع منتج', `المنتج: ${product.name} - الكمية: ${qty} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}) - المكان: ${stockLocName}`, saleTotal);
+        if (typeof logActivity === 'function') logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج بالكريدي' : (kiloSale ? 'بيع منتج بالكيلو' : 'عملية بيع منتج'), `المنتج: ${product.name} - ${kiloSale ? `الوزن: ${qty} كغ بسعر ${salePrice} دج/كغ` : `الكمية: ${qty}`} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) - المكان: ${stockLocName}`, saleTotal);
         const sellDateElem = document.getElementById('sellDate');
         if (sellDateElem) { sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
         } updateSellProductDropdown();
@@ -6172,7 +6361,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 : `تم البيع بالكريدي بقيمة ${saleTotal.toLocaleString()} دج، سُجل في قسم الكريدي وخُصمت الكمية من ${stockLocName}`);
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
         } else {
-            showSuccessToast(`تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
+            showSuccessToast(kiloSale
+                ? `⚖️ تم بيع ${qty} كغ من [${product.name}] بسعر ${salePrice} دج/كغ — الإجمالي ${saleTotal.toLocaleString()} دج (خصم ${stockDeduction} ${kiloSale.stockUnitLabel} من ${stockLocName})`
+                : `تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
         }
         render(); }); function deleteCustomer(id) {
         if (!id) return;
@@ -7299,7 +7490,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700">
                     <span class="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">${coach}</span>
                 </td>
-                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${s.qty || 1}</td>
+                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${(s.unitMode === 'kilo' || s.qtyUnit === 'kg') ? `${s.qty || 1} كغ` : (s.qty || 1)}</td>
                 <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${total.toLocaleString()} دج</td>
                 <td class="p-2.5 border-l border-slate-200 font-bold text-blue-600" dir="ltr" style="text-align: right;">${profit.toLocaleString()} دج</td>
                 <td class="p-2.5 border-l border-slate-200 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
@@ -9119,8 +9310,12 @@ window.addEventListener('unhandledrejection', (event) => {
     function changeQuickSellQty(delta) {
         const input = document.getElementById('sellProdQty');
         if (input) {
+            const kilo = isKiloModeActive(getSelectedSellProduct());
             let current = parseFloat(input.value) || 1;
-            let next = Math.max(1, Math.round(current + delta));
+            // In kilo mode +/- steps by 250 g so fractional weights stay usable.
+            let next = kilo
+                ? Math.max(0.05, Math.round((current + (Number(delta) * 0.25)) * 1000) / 1000)
+                : Math.max(1, Math.round(current + delta));
             input.value = next;
             if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
         }
@@ -9153,19 +9348,34 @@ window.addEventListener('unhandledrejection', (event) => {
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
             const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
-            let stockDeduction = (weightVal && weightVal > 0) ? (qty * weightVal) : qty;
-            const salePriceDetails = getProductSalePriceDetails(product);
-            if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
-                showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
-                document.getElementById('sellCustomPrice')?.focus();
+            const kiloSale = isKiloModeActive(product)
+                ? resolveKiloSale({ product, qtyKg: qty, pricePerKg: getSellKiloPrice() })
+                : null;
+            if (kiloSale && !kiloSale.valid) {
+                showErrorToast(kiloSale.error === 'invalid_price'
+                    ? 'يرجى إدخال سعر الكيلو لهذه البيعة (أكبر من صفر)'
+                    : 'يرجى إدخال وزن صحيح بالكيلو (مثال: 0.5 = نصف كيلو)');
+                document.getElementById(kiloSale.error === 'invalid_price' ? 'sellKiloPrice' : 'sellProdQty')?.focus();
                 return false;
             }
-            let salePrice = salePriceDetails.unitPrice;
-            let saleCost = Number(product.cost || 0) * qty;
-            let unitLabel = '';
+            let stockDeduction = kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+            let salePrice;
+            if (kiloSale) {
+                salePrice = kiloSale.pricePerKg;
+            } else {
+                const salePriceDetails = getProductSalePriceDetails(product);
+                if (!salePriceDetails.valid || (isSealedBoxProduct(product) && salePriceDetails.unitPrice <= 0)) {
+                    showErrorToast('يرجى اختيار سعر بيع صحيح وموجب للعلبة المغلفة');
+                    document.getElementById('sellCustomPrice')?.focus();
+                    return false;
+                }
+                salePrice = salePriceDetails.unitPrice;
+            }
+            let saleCost = kiloSale ? kiloSale.cost : Number(product.cost || 0) * qty;
+            let unitLabel = kiloSale ? ' (بالكيلو)' : '';
 
             if (currentStock < stockDeduction) {
-                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
+                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
                 return false;
             }
 
@@ -9187,7 +9397,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 }
             }
 
-            let saleTotal = Number((salePrice * qty).toFixed(2));
+            let saleTotal = kiloSale ? kiloSale.total : Number((salePrice * qty).toFixed(2));
             let saleProfit = saleTotal - saleCost;
             const paymentInfo = getProductSalePaymentInfo(saleTotal);
             if (!paymentInfo) return false;
@@ -9209,6 +9419,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 stockName: 'مخزون 1',
                 qty: qty,
                 stockDeduction: stockDeduction,
+                unitMode: kiloSale ? 'kilo' : 'unit',
+                ...(kiloSale ? { qtyUnit: 'kg', pricePerKg: kiloSale.pricePerKg } : {}),
                 price: salePrice,
                 cost: saleCost,
                 total: saleTotal,
@@ -9229,13 +9441,15 @@ window.addEventListener('unhandledrejection', (event) => {
             saveState();
 
             if (typeof logActivity === 'function') {
-                logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج فوري بالكريدي' : 'بيع منتج فوري بالباركود', `المنتج: ${product.name} - الكمية: ${qty} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}) - الإجمالي: ${saleTotal} دج`, saleTotal);
+                logActivity('sale', paymentInfo.paymentStatus === 'credit' ? 'بيع منتج فوري بالكريدي' : (kiloSale ? 'بيع منتج بالكيلو' : 'بيع منتج فوري بالباركود'), `المنتج: ${product.name} - ${kiloSale ? `الوزن: ${qty} كغ بسعر ${salePrice} دج/كغ` : `الكمية: ${qty}`} - طريقة الدفع: ${paymentInfo.paymentStatus === 'credit' ? 'كريدي' : 'نقداً'} (خصم مخزون: ${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) - الإجمالي: ${saleTotal} دج`, saleTotal);
             }
 
             playBeep();
             if (paymentInfo.paymentStatus === 'credit') {
                 showSuccessToast(`تم البيع بالكريدي لـ (${paymentInfo.customerName}) بقيمة ${saleTotal.toLocaleString()} دج، سُجل الدين وخُصمت الكمية (${stockDeduction})`);
                 if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+            } else if (kiloSale) {
+                showSuccessToast(`⚖️ تم بيع ${qty} كغ من [${product.name}] بسعر ${salePrice} دج/كغ — الإجمالي ${saleTotal.toLocaleString()} دج (خصم ${stockDeduction} ${kiloSale.stockUnitLabel} - المتبقي: ${product.stock})`);
             } else {
                 showSuccessToast(`⚡ تم بيع (${qty}) من [${product.name}] نقداً بدون تأكيد! (خصم المخزون: ${stockDeduction} - المتبقي: ${product.stock})`);
             }
@@ -9247,6 +9461,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 customPriceInput.value = defaultPrice > 0 ? String(defaultPrice) : '';
                 customPriceInput.dataset.userEdited = 'false';
             }
+            // Every sale starts back in the safe default (per piece/box) mode.
+            sellUnitMode = 'unit';
             if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
             if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
             if (typeof render === 'function') render();
@@ -9299,6 +9515,19 @@ window.addEventListener('unhandledrejection', (event) => {
                         }
                         await closeBarcodeCamera();
                         isProcessingBarcode = false;
+                        return;
+                    }
+
+                    // Kilo mode is a deliberate, manual-only path: never sell instantly by barcode
+                    // while it is on, otherwise the scan would charge the per-piece catalog price.
+                    if (getSellUnitMode() === 'kilo') {
+                        const sellProductSelect = document.getElementById('sellProdId');
+                        if (sellProductSelect) sellProductSelect.value = String(prodStock1.id);
+                        updateStockInfoDisplay();
+                        await closeBarcodeCamera();
+                        isProcessingBarcode = false;
+                        showInfoToast(`وضع «البيع بالكيلو» مفعّل — الباركود لا يبيع فورياً في هذا الوضع. تم تحديد (${prodStock1.name}): أدخل الوزن وسعر الكيلو ثم اضغط «تأكيد البيع اليدوي».`);
+                        document.getElementById('sellKiloPrice')?.focus();
                         return;
                     }
 
@@ -9983,6 +10212,8 @@ window.addEventListener('unhandledrejection', (event) => {
            } else if (cat === 'frigo') {
                catBadge = `<span class="text-[9px] font-bold text-blue-900 bg-blue-100/90 px-1.5 py-0.5 rounded-md border border-blue-200">فريغو</span>`;
            } const sProfit = Number(s.profit) || 0;
+           const isKiloSale = s.unitMode === 'kilo' || s.qtyUnit === 'kg';
+           const kiloBadge = isKiloSale ? `<span class="text-[9px] font-bold text-emerald-800 bg-emerald-100/90 px-1.5 py-0.5 rounded-md border border-emerald-200">⚖️ بالكيلو</span>` : '';
            const saleUnitPrice = Number(s.price ?? ((Number(s.total) || 0) / Math.max(1, Number(s.qty) || 1)));
            const coachCommission = s.coachCommission !== undefined ? Number(s.coachCommission) : ((coachName !== 'عام' && sProfit > 0) ? Math.round(sProfit * 0.33) : 0);
            return `
@@ -9990,10 +10221,11 @@ window.addEventListener('unhandledrejection', (event) => {
                <div class="space-y-1.5">
                    <div class="font-bold text-sm text-slate-800 flex items-center gap-1.5 flex-wrap">
                        <span>${name}</span>
-                       <span class="text-xs text-slate-500 font-normal">(x${s.qty || 1})</span>
+                       <span class="text-xs text-slate-500 font-normal">${isKiloSale ? `(${s.qty || 1} كغ)` : `(x${s.qty || 1})`}</span>
                        ${stockBadge}
                        ${paymentBadge}
                        ${catBadge}
+                       ${kiloBadge}
                    </div>
                    <div class="flex items-center gap-1.5 text-[11px] text-slate-500 flex-wrap">
                        <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-bold border border-blue-100/60">
@@ -10016,7 +10248,8 @@ window.addEventListener('unhandledrejection', (event) => {
                <div class="flex items-center gap-2">
                    <div class="text-left">
                        <div class="font-extrabold text-blue-600 text-sm" dir="ltr">${Number(s.total || 0).toLocaleString()} دج</div>
-                       ${cat === 'boxes' ? `<div class="text-[10px] font-bold text-slate-500">سعر العلبة: ${saleUnitPrice.toLocaleString()} دج</div>` : ''}
+                       ${cat === 'boxes' && !isKiloSale ? `<div class="text-[10px] font-bold text-slate-500">سعر العلبة: ${saleUnitPrice.toLocaleString()} دج</div>` : ''}
+                       ${isKiloSale ? `<div class="text-[10px] font-bold text-emerald-700">سعر الكيلو: ${saleUnitPrice.toLocaleString()} دج</div>` : ''}
                        ${sProfit > 0 ? `<div class="text-[10px] font-bold text-blue-600">الربح الصافي: ${sProfit.toLocaleString()} دج</div>` : ''}
                    </div>
                    <button onclick="deleteSale('${safeId}')" class="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg transition-colors" title="إلغاء البيع">
