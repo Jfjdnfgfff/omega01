@@ -9,8 +9,12 @@ import {
     stockUnitsPerKg,
     resolveKiloStockDeduction,
     resolveKiloSale,
+    resolveGramSale,
     normalizeKiloPrice,
-    defaultKiloSalePrice
+    defaultKiloSalePrice,
+    normalizeGramPrice,
+    defaultGramSalePrice,
+    defaultDoseGrams
 } from '../src/product-pricing.js';
 
 test('box sales can use a per-sale price override while keeping the catalog default intact', () => {
@@ -167,4 +171,58 @@ test('the per-kilo price saved on a product prefills the sale, and invalid value
     const dose = { id: 'd2', category: 'doses', weight: 'الكمية (Doza) - 60 دوزة', price: 500, kiloPrice: 2400 };
     assert.equal(defaultKiloSalePrice(dose), '2400');
     assert.equal(defaultKiloSalePrice({ id: 'd3', category: 'doses', price: 500 }), '');
+});
+
+test('gram-priced doses multiply grams per dose, dose count and gram price, and deduct grams', () => {
+    const product = { id: 'dose', category: 'doses', weight: 'الكمية (Doza) - 30 دوزة', price: 150, cost: 70, stock: 2000 };
+    const single = resolveGramSale({ product, mode: 'dose', qty: 1, gramsPerDose: 50, pricePerGram: 4 });
+    assert.equal(single.valid, true);
+    assert.equal(single.total, 200);
+    assert.equal(single.pricePerUnit, 200);
+    assert.equal(single.stockDeduction, 50);
+    assert.equal(single.cost, 70);
+    const two = resolveGramSale({ product, mode: 'dose', qty: 2, gramsPerDose: 50, pricePerGram: 4 });
+    assert.equal(two.total, 400);
+    assert.equal(two.stockDeduction, 100);
+    assert.equal(product.price, 150);
+    assert.equal(product.stock, 2000);
+});
+
+test('gram-priced kilo multiplies 1000 grams per kg, including fractional kg', () => {
+    const product = { id: 'dose', category: 'doses', stock: 2000, cost: 90 };
+    const kilo = resolveGramSale({ product, mode: 'kilo', qty: 1, pricePerGram: 4 });
+    assert.equal(kilo.valid, true);
+    assert.equal(kilo.total, 4000);
+    assert.equal(kilo.pricePerKg, 4000);
+    assert.equal(kilo.gramsSold, 1000);
+    assert.equal(kilo.stockDeduction, 1000);
+    const half = resolveGramSale({ product, mode: 'kilo', qty: 0.5, pricePerGram: 4 });
+    assert.equal(half.total, 2000);
+    assert.equal(half.stockDeduction, 500);
+    const weighed = resolveGramSale({ product: { weight: 'الوزن - 2kg', cost: 1000 }, mode: 'kilo', qty: 1, pricePerGram: 4 });
+    assert.equal(weighed.total, 4000);
+    assert.equal(weighed.stockDeduction, 1);
+});
+
+test('gram pricing rejects invalid price, dose grams and unsupported product types', () => {
+    const product = { category: 'doses', cost: 20 };
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, pricePerGram: '', gramsPerDose: 50 }).error, 'invalid_price');
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, pricePerGram: 4, gramsPerDose: '' }).error, 'invalid_grams');
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, pricePerGram: 4, gramsPerDose: -50 }).error, 'invalid_grams');
+    assert.equal(resolveGramSale({ product, mode: 'kilo', qty: 0, pricePerGram: 4 }).error, 'invalid_quantity');
+    assert.equal(resolveGramSale({ product: { category: 'boxes' }, mode: 'dose', qty: 1, pricePerGram: 4, gramsPerDose: 50 }).error, 'invalid_mode');
+});
+
+test('a product saves fractional gram pricing and a dose weight to prefill both sale modes', () => {
+    assert.equal(normalizeGramPrice('0.025'), 0.025);
+    assert.equal(normalizeGramPrice(''), 0);
+    assert.equal(normalizeGramPrice('-5'), 0);
+    assert.equal(normalizeGramPrice('bad'), 0);
+    const product = { category: 'doses', gramPrice: normalizeGramPrice('4'), doseGrams: 50 };
+    assert.equal(defaultGramSalePrice(product), '4');
+    assert.equal(defaultDoseGrams(product), '50');
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, gramsPerDose: defaultDoseGrams(product), pricePerGram: defaultGramSalePrice(product) }).total, 200);
+    assert.equal(resolveGramSale({ product, mode: 'kilo', qty: 1, pricePerGram: defaultGramSalePrice(product) }).total, 4000);
+    assert.equal(defaultGramSalePrice({}), '');
+    assert.equal(defaultDoseGrams({}), '50');
 });
