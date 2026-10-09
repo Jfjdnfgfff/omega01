@@ -8,7 +8,9 @@ import {
     isKiloSaleProduct,
     stockUnitsPerKg,
     resolveKiloStockDeduction,
-    resolveKiloSale
+    resolveKiloSale,
+    normalizeKiloPrice,
+    defaultKiloSalePrice
 } from '../src/product-pricing.js';
 
 test('box sales can use a per-sale price override while keeping the catalog default intact', () => {
@@ -153,4 +155,16 @@ test('products that are neither weighed nor doses cannot be sold by the kilo', (
 
     assert.equal(resolveKiloSale({ product: box, qtyKg: 1, pricePerKg: '1800' }).error, 'not_a_kilo_product');
     assert.equal(resolveKiloSale({ product: { weight: 'الحجم - 1.5L' }, qtyKg: 1, pricePerKg: '1800' }).error, 'not_a_kilo_product');
+});
+
+test('the per-kilo price saved on a product prefills the sale, and invalid values save as 0', () => {
+    assert.equal(normalizeKiloPrice('1800'), 1800);
+    assert.equal(normalizeKiloPrice(''), 0);
+    assert.equal(normalizeKiloPrice('-5'), 0);
+    assert.equal(normalizeKiloPrice('abc'), 0);
+    assert.equal(normalizeKiloPrice(undefined), 0);
+
+    const dose = { id: 'd2', category: 'doses', weight: 'الكمية (Doza) - 60 دوزة', price: 500, kiloPrice: 2400 };
+    assert.equal(defaultKiloSalePrice(dose), '2400');
+    assert.equal(defaultKiloSalePrice({ id: 'd3', category: 'doses', price: 500 }), '');
 });

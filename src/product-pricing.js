@@ -164,3 +164,16 @@ export function resolveSaleUnitPrice(product, { allowCustom = false, customPrice
         valid: Number.isFinite(unitPrice) && unitPrice > 0
     };
 }
+
+// The per-kilo price saved on a product when it is added (سعر الكيلو). Returns 0 when
+// there is none, so callers can treat "not set" and "invalid" the same way.
+export function normalizeKiloPrice(value) {
+    const price = Number(value);
+    return (Number.isFinite(price) && price > 0) ? roundTo(price, 2) : 0;
+}
+
+// Value to prefill the per-kilo sale price with: the price saved on the product, or ''.
+export function defaultKiloSalePrice(product) {
+    const price = normalizeKiloPrice(product?.kiloPrice);
+    return price > 0 ? String(price) : '';
+}

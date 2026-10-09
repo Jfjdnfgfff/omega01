@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
-  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg } from './product-pricing.js';
+  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveKiloStockDeduction, stockUnitsPerKg, normalizeKiloPrice, defaultKiloSalePrice } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
   import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
 
@@ -5141,6 +5141,26 @@ window.addEventListener('unhandledrejection', (event) => {
         const total = s1 + s2; const badge = document.getElementById('bothStockTotalBadge');
         if (badge) { badge.textContent = `المجموع: ${total} قطعة (Stock 1: ${s1} + Stock 2: ${s2})`;
         } } window.updateDualStockTotal = updateDualStockTotal;
+    // The per-kilo price field (سعر الكيلو) only appears for products that can be sold by the kilo
+    // (dose products and weighed products), and the price field is labelled «سعر الدوزة» for doses.
+    function syncProdKiloPriceField() {
+        const category = getElemVal('prodCategory');
+        const wType = document.getElementById('prodWeightType') ? getElemVal('prodWeightType') : '';
+        const wVal = getElemVal('prodWeight');
+        const weight = (wType && wVal) ? (wType + ' - ' + wVal) : (wVal || wType || '');
+        const product = { category, weight };
+        const field = document.getElementById('prodKiloPriceField');
+        if (field) field.classList.toggle('hidden', !isKiloSaleProduct(product));
+        const priceLabel = document.getElementById('prodPriceLabel');
+        if (priceLabel) priceLabel.textContent = isDoseProduct(product) ? 'سعر الدوزة (سعر البيع للدوزة)' : 'السعر (سعر البيع)';
+    }
+    window.syncProdKiloPriceField = syncProdKiloPriceField;
+    ['prodCategory', 'prodWeightType', 'prodWeight'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', syncProdKiloPriceField);
+        document.getElementById(id)?.addEventListener('input', syncProdKiloPriceField);
+    });
+    syncProdKiloPriceField();
+
     document.getElementById('addProductForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const formEl = this;
         const editingId = formEl.dataset.editId;
@@ -5160,6 +5180,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const priceVal = parseFloat(getElemVal('prodPrice')) || 0;
         const expiryDateVal = document.getElementById('prodExpiryDate') ? getElemVal('prodExpiryDate') : '';
         const categoryVal = getElemVal('prodCategory') || (typeof getProductCategory === 'function' ? getProductCategory({ name: prodName, weight: finalWeight }) : 'other');
+        const kiloPriceVal = normalizeKiloPrice(getElemVal('prodKiloPrice'));
         // Verify password before adding or updating product
         promptWithPassword({ title: editingId ? 'تعديل منتج' : 'إضافة منتج جديد',
             prompt: editingId ? 'أدخل كلمة المرور لحفظ تعديلات المنتج' : 'أدخل كلمة المرور لإضافة المنتج إلى المخزون',
@@ -5173,7 +5194,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     p.cost = costVal; p.price = priceVal;
                     p.brand = brandVal; p.imageUrl = imgUrlVal;
                     p.expiryDate = expiryDateVal;
-                    p.category = categoryVal;
+                    p.category = categoryVal; p.kiloPrice = kiloPriceVal;
                     p.updatedAt = Date.now();
                     if (stockLocationVal === 'both') {
                         const q1 = parseFloat(getElemVal('prodStock1')) || 0;
@@ -5181,7 +5202,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         if (p.stockLocation === 'stock2') {
                             p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
                             if (p1) { p1.stock = q1;
-                                p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal;
+                                p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal; p1.kiloPrice = kiloPriceVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                             } else if (q1 > 0) {
                                 const newProd1 = {
@@ -5196,7 +5217,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                     imageUrl: imgUrlVal,
                                     stockLocation: 'stock1',
                                     expiryDate: expiryDateVal,
-                                    category: categoryVal
+                                    category: categoryVal, kiloPrice: kiloPriceVal
                                 };
                                 appState.products.push(newProd1);
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd1);
@@ -5204,7 +5225,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             p.stockLocation = 'stock1';
                             let p2 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && x.stockLocation === 'stock2') : null;
                             if (p2) { p2.stock = q2;
-                                p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal;
+                                p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal; p2.kiloPrice = kiloPriceVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                             } else if (q2 > 0) {
                                 const newProd2 = {
@@ -5219,7 +5240,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                     imageUrl: imgUrlVal,
                                     stockLocation: 'stock2',
                                     expiryDate: expiryDateVal,
-                                    category: categoryVal
+                                    category: categoryVal, kiloPrice: kiloPriceVal
                                 };
                                 appState.products.push(newProd2);
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
@@ -5250,7 +5271,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             : null; if (p1) { p1.stock = Number(p1.stock || 0) + q1;
                             p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal;
                             p1.expiryDate = expiryDateVal || p1.expiryDate;
-                            p1.category = categoryVal;
+                            p1.category = categoryVal; p1.kiloPrice = kiloPriceVal;
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                         } else { const newProd1 = {
                                 id: Date.now().toString(),
@@ -5263,7 +5284,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 imageUrl: imgUrlVal,
                                 stockLocation: 'stock1',
                                 expiryDate: expiryDateVal,
-                                category: categoryVal
+                                category: categoryVal, kiloPrice: kiloPriceVal
                             }; appState.products.push(newProd1);
                             if (newProd1 && window.saveFirebaseSectionItem) {
                                 window.saveFirebaseSectionItem('products', newProd1);
@@ -5272,7 +5293,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             : null; if (p2) { p2.stock = Number(p2.stock || 0) + q2;
                             p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal;
                             p2.expiryDate = expiryDateVal || p2.expiryDate;
-                            p2.category = categoryVal;
+                            p2.category = categoryVal; p2.kiloPrice = kiloPriceVal;
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                         } else { const newProd2 = {
                                 id: (Date.now() + 20).toString(),
@@ -5285,7 +5306,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 imageUrl: imgUrlVal,
                                 stockLocation: 'stock2',
                                 expiryDate: expiryDateVal,
-                                category: categoryVal
+                                category: categoryVal, kiloPrice: kiloPriceVal
                             }; appState.products.push(newProd2);
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
                         } } showSuccessToast(`تم إضافة المنتج بنجاح: (${q1}) في Stock 1 و (${q2}) في Stock 2`);
@@ -5302,7 +5323,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         existing.brand = brandVal;
                         existing.imageUrl = imgUrlVal;
                         existing.expiryDate = expiryDateVal || existing.expiryDate;
-                        existing.category = categoryVal;
+                        existing.category = categoryVal; existing.kiloPrice = kiloPriceVal;
                         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', existing);
                     } else { const newProduct = {
                             id: Date.now().toString(),
@@ -5315,7 +5336,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             imageUrl: imgUrlVal,
                             stockLocation: stockLocationVal,
                             expiryDate: expiryDateVal,
-                            category: categoryVal
+                            category: categoryVal, kiloPrice: kiloPriceVal
                         }; appState.products.push(newProduct);
                         if (window.saveFirebaseSectionItem) {
                             window.saveFirebaseSectionItem('products', newProduct);
@@ -5325,6 +5346,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 saveState();
                 const savedExpInfo = getProductExpiryInfo({ expiryDate: expiryDateVal });
                 formEl.reset();
+                syncProdKiloPriceField();
                 if (document.getElementById('prodStock1')) setElemValue('prodStock1', '');
                 if (document.getElementById('prodStock2')) setElemValue('prodStock2', '');
                 if (document.getElementById('prodStock')) setElemValue('prodStock', '');
@@ -5362,6 +5384,7 @@ window.addEventListener('unhandledrejection', (event) => {
         setElemValue('prodWeight', wVal);
         setElemValue('prodCost', p.cost || 0);
         setElemValue('prodPrice', p.price || 0);
+        setElemValue('prodKiloPrice', p.kiloPrice || '');
         // Check if counterpart product exists in the other stock
         const counterpart = p.barcode ? (appState.products || []).find(x => x && String(x.id) !== String(p.id) && String(x.barcode) === String(p.barcode)) : null;
         if (counterpart) { if (document.getElementById('prodStockLocation')) setElemValue('prodStockLocation', 'both');
@@ -5401,6 +5424,7 @@ window.addEventListener('unhandledrejection', (event) => {
         submitBtn.textContent = 'حفظ التعديلات';
         submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
         submitBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+        syncProdKiloPriceField();
         document.getElementById('prodName')?.focus();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     } window.editProduct = editProduct;
@@ -5761,6 +5785,8 @@ window.addEventListener('unhandledrejection', (event) => {
             if (document.getElementById('prodWeight')) setElemValue('prodWeight', wVal);
             if (document.getElementById('prodCost')) setElemValue('prodCost', product.cost || '');
             if (document.getElementById('prodPrice')) setElemValue('prodPrice', product.price || '');
+            if (document.getElementById('prodKiloPrice')) setElemValue('prodKiloPrice', product.kiloPrice || '');
+            syncProdKiloPriceField();
             if (document.getElementById('prodBrand')) {
                 setElemValue('prodBrand', product.brand || '');
             } if (document.getElementById('prodExpiryDate') && product.expiryDate) {
@@ -6013,8 +6039,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 kiloInput.dataset.productId = '';
                 kiloInput.dataset.userEdited = 'false';
             } else if (kiloInput.dataset.productId !== productId) {
-                // The per-kilo price is chosen by the user for every sale, never prefilled.
-                kiloInput.value = '';
+                // Prefilled with the kilo price saved on the product; it can still be changed for this sale.
+                kiloInput.value = defaultKiloSalePrice(product);
                 kiloInput.dataset.productId = productId;
                 kiloInput.dataset.userEdited = 'false';
             }
@@ -6114,7 +6140,7 @@ window.addEventListener('unhandledrejection', (event) => {
             sellUnitModeProductId = String(product.id);
             const kiloPriceInput = document.getElementById('sellKiloPrice');
             if (kiloPriceInput) {
-                kiloPriceInput.value = '';
+                kiloPriceInput.value = defaultKiloSalePrice(product);
                 kiloPriceInput.dataset.productId = String(product.id);
                 kiloPriceInput.dataset.userEdited = 'false';
             }
