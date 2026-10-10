@@ -10379,9 +10379,9 @@ window.addEventListener('unhandledrejection', (event) => {
                        <span>المخزون: ${stockQtyDisplay}</span>
                        <span class="text-slate-300">|</span>
                        <span class="inline-flex items-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-md" title="إجمالي قيمة مخزون هذا المنتج">
-                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * (parseFloat(p.cost) || 0)).toLocaleString()} دج</strong></span>
+                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * unitCostForStock(p)).toLocaleString()} دج</strong></span>
                            <span class="text-blue-300">•</span>
-                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * (parseFloat(p.price) || 0)).toLocaleString()} دج</strong></span>
+                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * unitPriceForStock(p)).toLocaleString()} دج</strong></span>
                        </span>
                        ${p.barcode ? `<span class="text-slate-300">|</span><span class="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200" title="باركود"><svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>${p.barcode}</span>` : ''}
                        ${p.expiryDate ? `<span class="text-slate-300">|</span><span>الصلاحية: <strong class="${expInfo.isNearExpiry ? 'text-blue-700 font-bold' : 'text-slate-700'}">${p.expiryDate}</strong></span>` : ''}
@@ -11238,6 +11238,21 @@ window.addEventListener('unhandledrejection', (event) => {
     // ==========================================
     // CAISSE & STOCK VALUATION CORE ENGINE
     // ==========================================
+    // سعر شراء/بيع وحدة المخزون الواحدة.
+    // مخزون المنتج المُسعَّر بالغرام (الدوزة والموزون بالكيلو) يُعدّ بالغرامات، بينما
+    // `cost`/`price` المحفوظان على المنتج هما سعر الدوزة/العلبة. ضرب الاثنين معاً يرفع
+    // رأس المال بعدد غرامات الوحدة، فتُستخدم أسعار الغرام لهذين الصنفين.
+    function unitCostForStock(p) {
+        const gramCost = gramCostPriceOf(p);
+        return gramCost > 0 ? gramCost : (parseFloat(p?.cost) || 0);
+    }
+    function unitPriceForStock(p) {
+        const gramSale = gramSalePriceOf(p);
+        return gramSale > 0 ? gramSale : (parseFloat(p?.price) || 0);
+    }
+    window.unitCostForStock = unitCostForStock;
+    window.unitPriceForStock = unitPriceForStock;
+
     function calculateStockValuation() {
         const prods = Array.isArray(appState.products) ? appState.products : [];
         let stock1Cost = 0; let stock2Cost = 0;
@@ -11247,8 +11262,8 @@ window.addEventListener('unhandledrejection', (event) => {
         prods.forEach(p => {
             if (!p) return;
             const qty = parseFloat(p.stock) || 0;
-            const cost = parseFloat(p.cost) || 0;
-            const price = parseFloat(p.price) || 0;
+            const cost = unitCostForStock(p);
+            const price = unitPriceForStock(p);
             const isStock2 = p.stockLocation === 'stock2';
             if (isStock2) {
                 stock2Cost += (qty * cost);
@@ -11268,11 +11283,13 @@ window.addEventListener('unhandledrejection', (event) => {
         const totalItemsCount = stock1ItemsCount + stock2ItemsCount;
         const totalTypesCount = prods.length;
         const profitMargin = totalCost > 0 ? Math.round((totalPotentialProfit / totalCost) * 100) : 0;
+        // Fractional gram prices (e.g. 0.025 دج/غ) accumulate float dust; keep money at 2 decimals.
+        const money = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
         return {
-            stock1Cost, stock2Cost,
-            totalCost, stock1Selling,
-            stock2Selling, totalSelling,
-            totalPotentialProfit,
+            stock1Cost: money(stock1Cost), stock2Cost: money(stock2Cost),
+            totalCost: money(totalCost), stock1Selling: money(stock1Selling),
+            stock2Selling: money(stock2Selling), totalSelling: money(totalSelling),
+            totalPotentialProfit: money(totalPotentialProfit),
             profitMargin,
             stock1ItemsCount, stock2ItemsCount,
             totalItemsCount, stock1TypesCount,
@@ -12232,7 +12249,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 <span class="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></span>
                 <span>جاري قراءة النسخ من Google Drive...</span>
             </div>
-        `; try { const query = encodeURIComponent("name contains 'OmegaGym_Backup' and trashed = false");
+        `; try { const query = encodeURIComponent("(name contains 'OmegaGym_Backup' or name contains 'OmegaGym_AutoBackup') and trashed = false");
             const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&orderBy=createdTime desc&pageSize=5&fields=files(id,name,createdTime,size)`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             }); if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -12301,43 +12318,75 @@ window.addEventListener('unhandledrejection', (event) => {
                 } } catch (err) { showErrorToast('فشل قراءة الملف: ' + err.message);
             } }; reader.readAsText(file); };
     // Auto-sync debounce trigger: upload automatically to Drive if user enabled auto-sync and has connected account
-    let gdriveAutoSyncTimer = null; window.triggerGoogleDriveAutoSync = function() {
+    // Auto-sync: debounce, then upload a COMPLETE backup through the same resumable,
+    // retrying uploader the manual button uses.
+    //
+    // Two invariants that must not be broken here:
+    //  1. Never call saveState() — saveState() itself calls triggerGoogleDriveAutoSync()
+    //     (see the saveState body), so persisting from inside the callback would
+    //     reschedule another sync forever.
+    //  2. Never upload the raw in-memory appState: it only holds the realtime window
+    //     that has been loaded, so buildFullBackupState() reads every v2/ section.
+    const GDRIVE_AUTOSYNC_DEBOUNCE_MS = 30000; // 30s debounce to save quotas
+    let gdriveAutoSyncTimer = null;
+    let gdriveAutoSyncRunning = false;
+
+    function buildAutoBackupFileName(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        const timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '-');
+        return `OmegaGym_AutoBackup_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${timeStr}.json`;
+    }
+
+    // Writes the sync outcome where the modal reads it. Deliberately does NOT persist.
+    function setAutoSyncStatus(status) {
+        if (!appState.gdriveSettings) appState.gdriveSettings = {};
+        appState.gdriveSettings.lastSyncStatus = status;
+    }
+
+    window.triggerGoogleDriveAutoSync = function() {
         if (!appState.gdriveSettings?.autoSync) return;
-        const token = getValidGDriveToken(); if (!token) return; // Silent if not authenticated
+        if (!getValidGDriveToken()) return; // Silent if not authenticated
         if (gdriveAutoSyncTimer) clearTimeout(gdriveAutoSyncTimer);
         gdriveAutoSyncTimer = setTimeout(async () => {
-            try { const now = new Date(); const dateStr = now.toISOString().slice(0, 10);
-                const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '-');
-                const fileName = `OmegaGym_AutoBackup_${dateStr}_${timeStr}.json`;
-                const backupData = { version: '3.0',
-                    appName: 'Omega Gym Management',
-                    lastModified: now.toISOString(),
-                    state: appState }; const fileContent = JSON.stringify(backupData, null, 2);
-                const boundary = '-------314159265358979323846';
-                const delimiter = "\r\n--" + boundary + "\r\n";
-                const close_delim = "\r\n--" + boundary + "--";
-                const metadata = { name: fileName,
-                    mimeType: 'application/json',
-                    description: 'نسخة احتياطية تلقائية لنظام OMEGA GYM'
-                }; const body = delimiter +
-                    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-                    JSON.stringify(metadata) +
-                    delimiter +
-                    'Content-Type: application/json\r\n\r\n' +
-                    fileContent + close_delim;
-                const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-                    method: 'POST', headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': `multipart/related; boundary=${boundary}`
-                    }, body: body }); if (res.ok) {
-                    const data = await res.json();
-                    if (appState.gdriveSettings) {
-                        appState.gdriveSettings.lastSyncTime = now.toISOString();
-                        appState.gdriveSettings.lastSyncStatus = 'متزامن تلقائياً في Google Drive';
-                        appState.gdriveSettings.lastFileId = data.id;
-                    } console.log('Background Google Drive auto-sync completed:', data.id);
-                } } catch (e) { console.warn('Auto Google Drive sync notice:', e);
-            } }, 30000); // 30s debounce to save quotas
+            if (gdriveAutoSyncRunning) return; // never run two uploads at once
+            gdriveAutoSyncRunning = true;
+            try {
+                // Re-validate before uploading: a token that expired while the app was
+                // idle would otherwise fail with a bare 401.
+                const token = await ensureGDriveToken();
+                if (!token) {
+                    setAutoSyncStatus('انتهى الاتصال بـ Google Drive — اضغط لتسجيل الدخول');
+                    updateGoogleDriveUI();
+                    return;
+                }
+                const now = new Date();
+                const { state, failedSections } = await window.buildFullBackupState();
+                const content = JSON.stringify({
+                    version: '3.0', appName: 'Omega Gym Management',
+                    lastModified: now.toISOString(), autoBackup: true, state
+                }, null, 2);
+                const fileName = buildAutoBackupFileName(now);
+                const file = await uploadBackupToDrive(token, fileName, content);
+                if (!appState.gdriveSettings) appState.gdriveSettings = {};
+                appState.gdriveSettings.lastSyncTime = now.toISOString();
+                appState.gdriveSettings.lastFileId = file.id;
+                appState.gdriveSettings.lastFileName = file.name || fileName;
+                setAutoSyncStatus(failedSections.length
+                    ? `متزامن تلقائياً، لكن تعذر قراءة: ${failedSections.join('، ')}`
+                    : 'متزامن تلقائياً في Google Drive');
+                updateGoogleDriveUI();
+                console.log('Background Google Drive auto-sync completed:', file.id);
+            } catch (e) {
+                // A silent failure here means the user believes they are backed up
+                // while no copy exists, so the reason is surfaced in the modal.
+                console.warn('Auto Google Drive sync notice:', e);
+                if (e && e.status === 401) gdriveClearToken();
+                setAutoSyncStatus('فشل الحفظ التلقائي: ' + gdriveErrorMessage(e));
+                updateGoogleDriveUI();
+            } finally {
+                gdriveAutoSyncRunning = false;
+            }
+        }, GDRIVE_AUTOSYNC_DEBOUNCE_MS);
     };
     // ==========================================
     // 2. CATEGORY PROFITS & INCOME ANALYTICS
