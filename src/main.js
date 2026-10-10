@@ -11924,67 +11924,300 @@ window.addEventListener('unhandledrejection', (event) => {
         appState.gdriveSettings.autoSync = autoSyncCheckbox ? autoSyncCheckbox.checked : true;
         saveState(); showSuccessToast('تم تحديث إعدادات المزامنة مع Google Drive');
     };
-    // Upload backup file directly to Google Drive
+    // ===== Google Drive backup engine =====
+    // - Validates the OAuth token against Google tokeninfo before every backup
+    // - Reads every v2/ section from Firebase in full (not only the realtime window)
+    // - Multipart upload for small files, resumable chunked upload for large ones
+    // - Retries transient errors (429 / 5xx / network) and shows Arabic messages
+    const GDRIVE_MULTIPART_LIMIT = 5 * 1024 * 1024; // above this size use resumable upload
+    const GDRIVE_CHUNK_SIZE = 5 * 1024 * 1024;      // multiple of 256 KB (Drive requirement)
+    const GDRIVE_SECTION_LABELS = {
+        products: 'المنتجات', customers: 'المشتركون', sales: 'المبيعات',
+        quickSessions: 'الجلسات السريعة', expenses: 'المصاريف', credits: 'الديون والكروت',
+        suppliers: 'الموردون', supplierTransactions: 'حركات الموردين', packages: 'الباقات',
+        staffPayouts: 'صرف الموظفين', coachAbsences: 'غيابات المدربين', caisseLogs: 'الصندوق',
+        v2Stats: 'الإحصائيات'
+    };
+    const GDRIVE_SECTIONS = [
+        { v2: 'products', key: 'products' }, { v2: 'customers', key: 'customers' },
+        { v2: 'sales', key: 'sales' }, { v2: 'quickSessions', key: 'quickSessions' },
+        { v2: 'expenses', key: 'expenses' }, { v2: 'credits', key: 'credits' },
+        { v2: 'suppliers', key: 'suppliers' }, { v2: 'supplierTransactions', key: 'supplierTransactions' },
+        { v2: 'packages', key: 'packages' }, { v2: 'staffPayouts', key: 'staffPayouts' },
+        { v2: 'coachAbsences', key: 'coachAbsences' }, { v2: 'caisse', key: 'caisseLogs' }
+    ];
+
+    function gdriveClearToken() {
+        gdriveAccessToken = null; gdriveTokenExpiresAt = 0;
+        try { sessionStorage.removeItem('sm_gdrive_token');
+            sessionStorage.removeItem('sm_gdrive_expires_at');
+        } catch (e) {}
+    }
+
+    // Validate the token with Google: must be unexpired (> 60s) and include drive.file scope.
+    // Returns false for invalid tokens; throws only on network failure.
+    async function validateGDriveToken(token) {
+        const res = await fetch('https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=' + encodeURIComponent(token));
+        if (!res.ok) return false;
+        const info = await res.json();
+        const expiresIn = parseInt(info.expires_in, 10) || 0;
+        return expiresIn > 60 && String(info.scope || '').includes('drive.file');
+    }
+
+    // Returns a valid token, or null if the user must sign in again (must be triggered by a click).
+    async function ensureGDriveToken() {
+        const token = getValidGDriveToken();
+        if (!token) return null;
+        if (await validateGDriveToken(token)) return token;
+        gdriveClearToken();
+        return null;
+    }
+
+    function gdriveErrorMessage(err) {
+        if (!err) return 'حدث خطأ غير متوقع أثناء الحفظ. حاول مرة أخرى.';
+        if (err.isNetwork || err.name === 'TypeError' || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+            return 'تعذر الاتصال بالإنترنت. تحقق من الشبكة وحاول مرة أخرى.';
+        }
+        if (err.status === 401) return 'انتهت صلاحية الاتصال بـ Google. يرجى الضغط مرة أخرى لتسجيل الدخول.';
+        if (err.status === 403) return 'لا توجد مساحة كافية في Google Drive أو لا تملك الصلاحية.';
+        if (err.status === 429) return 'خدمة Google Drive مشغولة الآن. يرجى المحاولة بعد دقيقة.';
+        return 'حدث خطأ غير متوقع أثناء الحفظ. حاول مرة أخرى.';
+    }
+
+    // Wraps XMLHttpRequest so we get upload progress (fetch cannot report it)
+    function gdriveXhr(method, url, headers, body, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            Object.entries(headers || {}).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+            if (onProgress && xhr.upload) {
+                xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+            }
+            xhr.onload = () => resolve({
+                status: xhr.status,
+                text: xhr.responseText,
+                getHeader: (name) => xhr.getResponseHeader(name)
+            });
+            xhr.onerror = () => { const e = new Error('network'); e.isNetwork = true; e.retryable = true; reject(e); };
+            xhr.send(body);
+        });
+    }
+
+    function gdriveAssertOk(r) {
+        if (r.status >= 200 && r.status < 300) return;
+        const err = new Error('HTTP ' + r.status);
+        err.status = r.status;
+        err.retryable = r.status === 429 || r.status >= 500;
+        try { err.details = JSON.parse(r.text)?.error?.message; } catch (e) {}
+        throw err;
+    }
+
+    // Retries transient failures (429, 5xx, network) with exponential backoff
+    async function withGDriveRetry(fn, attempts = 3) {
+        let lastErr;
+        for (let i = 0; i < attempts; i++) {
+            try { return await fn(); } catch (e) {
+                lastErr = e;
+                if (!e || !e.retryable || i === attempts - 1) break;
+                await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+            }
+        }
+        throw lastErr;
+    }
+
+    // Uploads the JSON text to Drive. onProgress(loadedBytes, totalBytes)
+    async function uploadBackupToDrive(token, fileName, content, onProgress) {
+        const bytes = new TextEncoder().encode(content);
+        const total = bytes.length;
+        const metadata = { name: fileName, mimeType: 'application/json',
+            description: 'نسخة احتياطية لقاعدة بيانات نظام OMEGA GYM' };
+        const auth = 'Bearer ' + token;
+
+        if (total < GDRIVE_MULTIPART_LIMIT) {
+            const boundary = '-------omega' + Date.now();
+            const body = new Blob([
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+                JSON.stringify(metadata),
+                `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
+                content,
+                `\r\n--${boundary}--`
+            ]);
+            return withGDriveRetry(async () => {
+                const r = await gdriveXhr('POST',
+                    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+                    { 'Authorization': auth, 'Content-Type': 'multipart/related; boundary=' + boundary },
+                    body, (loaded) => onProgress && onProgress(loaded, total));
+                gdriveAssertOk(r);
+                return JSON.parse(r.text);
+            });
+        }
+
+        // Resumable upload: open a session, then send 5 MB chunks
+        const sessionUrl = await withGDriveRetry(async () => {
+            const r = await gdriveXhr('POST',
+                'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name',
+                { 'Authorization': auth, 'Content-Type': 'application/json; charset=UTF-8',
+                  'X-Upload-Content-Type': 'application/json', 'X-Upload-Content-Length': String(total) },
+                JSON.stringify(metadata));
+            gdriveAssertOk(r);
+            const location = r.getHeader('Location');
+            if (!location) { throw new Error('missing upload session location'); }
+            return location;
+        });
+
+        let offset = 0; let stalls = 0;
+        while (offset < total) {
+            const end = Math.min(offset + GDRIVE_CHUNK_SIZE, total);
+            const chunk = bytes.slice(offset, end);
+            const chunkStart = offset;
+            const r = await withGDriveRetry(() => gdriveXhr('PUT', sessionUrl,
+                { 'Content-Range': `bytes ${chunkStart}-${end - 1}/${total}` }, chunk,
+                (loaded) => onProgress && onProgress(chunkStart + loaded, total)));
+            if (r.status === 308) {
+                // Partial upload accepted: resume after the last byte the server stored
+                const range = r.getHeader('Range');
+                const next = range ? parseInt(range.split('-')[1], 10) + 1 : chunkStart;
+                stalls = next === chunkStart ? stalls + 1 : 0;
+                if (stalls > 5) { const e = new Error('upload stalled'); e.retryable = true; throw e; }
+                offset = next;
+                continue;
+            }
+            gdriveAssertOk(r);
+            offset = end;
+            if (offset >= total) return JSON.parse(r.text);
+        }
+        // Should not reach here: the last chunk returns 200/201 with the file resource
+        throw new Error('resumable upload finished without a file resource');
+    }
+
+    function buildBackupFileName(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `OmegaGym_Backup_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.json`;
+    }
+
+    // Builds the COMPLETE state from Firebase v2/ (not the realtime window).
+    // Sections that cannot be read fall back to local data and are reported in failedSections.
+    window.buildFullBackupState = async function() {
+        const state = { ...(window.appState || appState) };
+        const failedSections = [];
+        const canRead = !!(window.firebaseDB && window.firebaseRef && window.firebaseGet);
+        if (!canRead) {
+            return { state, failedSections: GDRIVE_SECTIONS.map(s => GDRIVE_SECTION_LABELS[s.key]) };
+        }
+        const toItems = (val) => Object.entries(val || {}).map(([k, v]) => ({
+            ...v, id: (v && v.id !== undefined && v.id !== null) ? v.id : k, _rtdbKey: k }));
+
+        await Promise.all(GDRIVE_SECTIONS.map(async (sec) => {
+            try {
+                const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${sec.v2}`));
+                state[sec.key] = snap && snap.exists() ? toItems(snap.val()) : [];
+            } catch (e) {
+                console.warn(`Full backup: local fallback for ${sec.v2}`, e);
+                failedSections.push(GDRIVE_SECTION_LABELS[sec.key]);
+            }
+        }));
+
+        try {
+            const statsSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, 'v2/stats'));
+            const stats = statsSnap && statsSnap.exists() ? statsSnap.val() : null;
+            state.v2Stats = stats
+                ? { daily: stats.daily || {}, monthly: stats.monthly || {}, yearly: stats.yearly || {} }
+                : (state.v2Stats || { daily: {}, monthly: {}, yearly: {} });
+        } catch (e) {
+            console.warn('Full backup: stats fallback', e);
+            failedSections.push(GDRIVE_SECTION_LABELS.v2Stats);
+        }
+        return { state, failedSections };
+    };
+
+    // Top-bar button: upload directly if connected, otherwise open the sign-in modal
+    window.quickGoogleDriveBackup = function() {
+        if (getValidGDriveToken()) { window.backupToGoogleDriveNow(); }
+        else { window.openGoogleDriveModal(); }
+    };
+
+    // Main action: collect data, upload to Drive, report progress and errors in Arabic
     window.backupToGoogleDriveNow = async function() {
-        const token = getValidGDriveToken(); if (!token) {
-            // Require login first
-            window.initGoogleDriveOAuth(); if (gdriveTokenClient) {
-                gdriveTokenClient.requestAccessToken({ prompt: 'consent' });
-                showInfoToast('يرجى اختيار حسابك في Google لمنح صلاحية حفظ النسخ في درايف مباشرة.');
-            } else { showErrorToast('جاري تحميل خدمات Google، يرجى المحاولة بعد لحظات.');
-            } return; } const statusBadge = document.getElementById('gdriveStatusBadge');
+        const statusBadge = document.getElementById('gdriveStatusBadge');
         const lastSyncLabel = document.getElementById('gdriveLastSyncLabel');
-        const directBackupBtn = document.getElementById('gdriveDirectBackupBtn');
-        if (statusBadge) { statusBadge.textContent = 'جاري الرفع إلى Google Drive...';
-            statusBadge.className = 'text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-100 text-blue-900 animate-pulse';
-        } if (directBackupBtn) { directBackupBtn.disabled = true;
-            directBackupBtn.classList.add('opacity-70');
-        } try { const now = new Date(); const dateStr = now.toISOString().slice(0, 10);
-            const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '-');
-            const fileName = `OmegaGym_Backup_${dateStr}_${timeStr}.json`;
-            const backupData = { version: '3.0',
-                appName: 'Omega Gym Management',
-                exportedAt: now.toISOString(),
-                state: appState }; const fileContent = JSON.stringify(backupData, null, 2);
-            // Use multipart upload to Google Drive v3 REST API
-            const boundary = '-------314159265358979323846';
-            const delimiter = "\r\n--" + boundary + "\r\n";
-            const close_delim = "\r\n--" + boundary + "--";
-            const metadata = { name: fileName,
-                mimeType: 'application/json',
-                description: 'نسخة احتياطية لقاعدة بيانات نظام OMEGA GYM'
-            }; const multipartRequestBody =
-                delimiter +
-                'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-                JSON.stringify(metadata) +
-                delimiter +
-                'Content-Type: application/json\r\n\r\n' +
-                fileContent + close_delim; const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-                method: 'POST', headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': `multipart/related; boundary=${boundary}`
-                }, body: multipartRequestBody });
-            if (!response.ok) { const errorBody = await response.json().catch(() => ({}));
-                throw new Error(errorBody?.error?.message || `HTTP ${response.status}`);
-            } const uploadedFile = await response.json();
-            const nowIso = now.toISOString(); if (!appState.gdriveSettings) appState.gdriveSettings = {};
-            appState.gdriveSettings.lastSyncTime = nowIso;
-            appState.gdriveSettings.lastSyncStatus = 'متزامن في Google Drive';
-            appState.gdriveSettings.lastFileId = uploadedFile.id;
-            saveState(); if (statusBadge) {
-                statusBadge.textContent = 'محفوظ في درايف بنجاح';
-                statusBadge.className = 'text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800';
-            } if (lastSyncLabel) { lastSyncLabel.textContent = `آخر حفظ: ${now.toLocaleString('ar-DZ')}`;
-            } showSuccessToast(`تم رفع النسخة الاحتياطية (${fileName}) مباشرة إلى تطبيق Google Drive!`);
-            listGoogleDriveBackups(); } catch (err) {
-            console.error('Google Drive direct upload error:', err);
-            if (statusBadge) { statusBadge.textContent = 'فشل الرفع';
-                statusBadge.className = 'text-xs font-bold px-2.5 py-1 rounded-lg bg-red-100 text-red-800';
-            } showErrorToast('حدث خطأ أثناء الرفع إلى Google Drive: ' + (err.message || ''));
-        } finally { if (directBackupBtn) {
-                directBackupBtn.disabled = false;
-                directBackupBtn.classList.remove('opacity-70');
-            } } };
+        const btn = document.getElementById('gdriveDirectBackupBtn');
+        const originalBtnHtml = btn ? btn.innerHTML : '';
+
+        let token = null;
+        try { token = await ensureGDriveToken(); } catch (e) {
+            showErrorToast(gdriveErrorMessage(e)); return;
+        }
+        if (!token) {
+            // Sign-in needed: request the token from this click
+            window.initGoogleDriveOAuth();
+            if (gdriveTokenClient) {
+                gdriveTokenClient.requestAccessToken({ prompt: gdriveCurrentUser ? '' : 'consent' });
+                showInfoToast('يرجى اختيار حسابك في Google ومنح الصلاحية، ثم اضغط الزر مرة أخرى للحفظ.');
+            } else {
+                showErrorToast('جاري تحميل خدمات Google، يرجى المحاولة بعد لحظات.');
+            }
+            return;
+        }
+
+        const setBusy = (text) => {
+            if (!btn) return;
+            btn.disabled = true; btn.classList.add('opacity-70');
+            btn.innerHTML = `<span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block"></span><span>${text}</span>`;
+        };
+        const setBadge = (text, cls) => {
+            if (!statusBadge) return;
+            statusBadge.textContent = text; statusBadge.className = cls;
+        };
+        const busyBadgeCls = 'text-xs font-bold px-2.5 py-1 rounded-lg bg-blue-100 text-blue-900 animate-pulse';
+
+        try {
+            setBusy('جاري تجميع البيانات...');
+            setBadge('جاري تجميع البيانات...', busyBadgeCls);
+
+            const now = new Date();
+            const { state, failedSections } = await window.buildFullBackupState();
+            const content = JSON.stringify({
+                version: '3.0', appName: 'Omega Gym Management',
+                exportedAt: now.toISOString(), state
+            }, null, 2);
+            if (!content || content.length < 2) throw new Error('empty backup');
+
+            const fileName = buildBackupFileName(now);
+            const onProgress = (loaded, total) => {
+                const pct = total ? Math.min(100, Math.round(loaded / total * 100)) : 0;
+                setBusy(`جاري الرفع إلى Google Drive... ${pct}%`);
+                setBadge(`جاري الرفع... ${pct}%`, busyBadgeCls);
+            };
+            const file = await uploadBackupToDrive(token, fileName, content, onProgress);
+
+            const nowIso = now.toISOString();
+            if (!appState.gdriveSettings) appState.gdriveSettings = {};
+            Object.assign(appState.gdriveSettings, {
+                lastSyncTime: nowIso, lastSyncStatus: 'متزامن في Google Drive',
+                lastFileId: file.id, lastFileName: file.name || fileName
+            });
+            saveState();
+            setBadge('محفوظ في درايف بنجاح', 'text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800');
+            if (lastSyncLabel) lastSyncLabel.textContent = `آخر حفظ: ${now.toLocaleString('ar-DZ')}`;
+
+            if (failedSections.length) {
+                showInfoToast(`تم الحفظ، لكن تعذر قراءة قسم: ${failedSections.join('، ')}. يرجى المحاولة مرة أخرى.`);
+            } else {
+                showSuccessToast(`تم حفظ النسخة الاحتياطية في Google Drive بنجاح ✅ (${fileName})`);
+            }
+            listGoogleDriveBackups();
+        } catch (err) {
+            console.error('Google Drive backup error:', err);
+            if (err && err.status === 401) gdriveClearToken();
+            setBadge('فشل الرفع', 'text-xs font-bold px-2.5 py-1 rounded-lg bg-red-100 text-red-800');
+            showErrorToast(gdriveErrorMessage(err));
+        } finally {
+            if (btn) {
+                btn.disabled = false; btn.classList.remove('opacity-70');
+                btn.innerHTML = originalBtnHtml;
+            }
+        }
+    };
     // List recent backups from Google Drive account
     window.listGoogleDriveBackups = async function() {
         const token = getValidGDriveToken();
