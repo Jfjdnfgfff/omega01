@@ -80,22 +80,41 @@ export function isKiloSaleProduct(product, spec) {
     return isWeightSaleProduct(product, weightSpec) || isDoseProduct(product, weightSpec);
 }
 
-// How many stock units one kilogram represents for this product.
+// Every product that is priced by the gram keeps its stock in grams — a dose product
+// and a weighed one alike — so one kilogram is always 1000 stock units.
 export function stockUnitsPerKg(product, spec) {
     const weightSpec = spec || parseWeightSpec(product?.weight);
-    // Dose stock is grams even when the measurement reads «30 دوزة»: 1 kg = 1000.
-    return (weightSpec.isGrams || isDoseProduct(product, weightSpec)) ? GRAMS_PER_KG : 1;
+    return isKiloSaleProduct(product, weightSpec) ? GRAMS_PER_KG : 1;
 }
 
-// The unit the kilo deduction is shown in (غرام for gram/dose stock, كغ otherwise).
+// The unit a stock quantity is counted in: grams for gram-priced products, pieces
+// for everything else.
+export function stockUnitWord(product, spec) {
+    return isKiloSaleProduct(product, spec) ? 'غ' : 'قطعة';
+}
+
+// The unit the kilo deduction is shown in — grams, since that is what the stock holds.
 export function kiloStockUnitLabel(product, spec) {
-    return (spec || parseWeightSpec(product?.weight)).unitLabel;
+    return isKiloSaleProduct(product, spec) ? 'غرام' : (spec || parseWeightSpec(product?.weight)).unitLabel;
 }
 
 export function resolveKiloStockDeduction(product, qtyKg, spec) {
     const qty = Number(qtyKg);
     if (!Number.isFinite(qty) || qty <= 0) return 0;
     return roundTo(qty * stockUnitsPerKg(product, spec), 3);
+}
+
+// What a whole-unit sale (dose / package) removes from stock: for gram-priced products
+// it is the grams of that unit, so it matches the kilo and the per-gram modes.
+export function resolveUnitStockDeduction(product, qty, spec) {
+    const q = Number(qty);
+    if (!Number.isFinite(q) || q <= 0) return 0;
+    const weightSpec = spec || parseWeightSpec(product?.weight);
+    if (isGramPricedProduct(product, weightSpec)) {
+        return roundTo(q * gramsPerUnit(product, weightSpec), 3);
+    }
+    const value = Number(weightSpec.value);
+    return roundTo(q * ((Number.isFinite(value) && value > 0) ? value : 1), 3);
 }
 
 // A kilo sale is priced per kilogram with a price chosen at sale time, and it
@@ -121,24 +140,21 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg, costPerGram } = {}
 
     const stockDeduction = resolveKiloStockDeduction(product, qty, spec);
     const gramsSold = roundTo(qty * GRAMS_PER_KG, 3);
-    // Cost follows the same denominator as the stock deduction, so selling a part of
-    // a package costs the matching part of the package purchase price.
     const unitCost = Number(product?.cost || 0);
     const isDose = isDoseProduct(product, spec);
-    const packSize = Number(spec.value);
-    // For a dose product the measurement number counts doses, not stock units, and the
-    // recorded cost is the cost of one stock unit — exactly what a normal (per-dose)
-    // sale of that product multiplies by. So the kilo cost stays `cost × qty in kg`,
-    // which keeps the kilo and normal modes in agreement.
-    const costPerStockUnit = (!isDose && Number.isFinite(packSize) && packSize > 0)
-        ? unitCost / packSize
-        : unitCost;
     const gramCost = normalizeGramPrice(costPerGram);
+    // With a purchase price per gram the cost is the exact weight sold × that price.
+    // Otherwise fall back to the package purchase price: the sold fraction of the
+    // package (stock is grams, so `stockDeduction / gramsPerUnit`). For a dose product
+    // whose dose weight was never recorded, `cost × kg sold` is the previous rule.
+    const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
         : (isDose
             ? roundTo(unitCost * qty, 2)
-            : roundTo(costPerStockUnit * stockDeduction, 2));
+            : (packGrams > 0
+                ? roundTo(unitCost * (stockDeduction / packGrams), 2)
+                : roundTo(unitCost * stockDeduction, 2)));
     const total = roundTo(price * qty, 2);
 
     return {
@@ -155,7 +171,7 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg, costPerGram } = {}
         total,
         profit: roundTo(total - cost, 2),
         qtyUnit: 'kg',
-        stockUnitLabel: spec.unitLabel
+        stockUnitLabel: kiloStockUnitLabel(product, spec)
     };
 }
 

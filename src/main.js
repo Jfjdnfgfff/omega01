@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
-  import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf } from './product-pricing.js';
+  import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
   import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
@@ -5193,15 +5193,45 @@ window.addEventListener('unhandledrejection', (event) => {
             } updateDualStockTotal(); } else {
             if (bothCont) bothCont.classList.add('hidden');
             if (singleCont) singleCont.classList.remove('hidden');
-            if (singleLabel) { singleLabel.textContent = (loc === 'stock2') ? 'الكمية في Stock 2 (المستودع)*' : 'الكمية في Stock 1 (صالة البيع)*';
+            if (singleLabel) { singleLabel.textContent = singleStockQuantityLabel(loc);
             } if (submitBtn && !isEditing) {
                 submitBtn.textContent = (loc === 'stock2') ? 'إضافة المنتج إلى Stock 2 (المستودع)' : 'إضافة المنتج إلى Stock 1 (صالة البيع)';
             } } } window.handleProdStockLocationChange = handleProdStockLocationChange;
     function updateDualStockTotal() { const s1 = parseFloat(getElemVal('prodStock1')) || 0;
         const s2 = parseFloat(getElemVal('prodStock2')) || 0;
         const total = s1 + s2; const badge = document.getElementById('bothStockTotalBadge');
-        if (badge) { badge.textContent = `المجموع: ${total} قطعة (Stock 1: ${s1} + Stock 2: ${s2})`;
+        if (badge) { badge.textContent = `المجموع: ${total} ${prodStockUnitWord()} (Stock 1: ${s1} + Stock 2: ${s2})`;
         } } window.updateDualStockTotal = updateDualStockTotal;
+    // Stock of a gram-priced product (dose or weighed) is counted in grams, so the
+    // quantity fields and their totals are worded in grams instead of pieces.
+    function isProdFormGramPriced() { return isGramPricedProduct(getProdFormProduct()); }
+    function prodStockUnitWord() { return isProdFormGramPriced() ? 'غ' : 'قطعة'; }
+    function singleStockQuantityLabel(loc) {
+        const place = (loc === 'stock2') ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+        return isProdFormGramPriced() ? `الكمية بالغرام في ${place}*` : `الكمية في ${place}*`;
+    }
+    function syncProdStockUnitLabels() {
+        const gramPriced = isProdFormGramPriced();
+        setElemText('bothStockTitle', gramPriced ? 'تحديد الكمية بالغرام في كل مخزن:' : 'تحديد العدد في كل مخزن:');
+        setElemText('prodStock1Label', gramPriced ? 'الغرامات في Stock 1 (صالة البيع)' : 'العدد في Stock 1 (صالة البيع)');
+        setElemText('prodStock2Label', gramPriced ? 'الغرامات في Stock 2 (المستودع)' : 'العدد في Stock 2 (المستودع)');
+        ['prodStock', 'prodStock1', 'prodStock2'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.placeholder = gramPriced ? 'مثال: 3000' : '0';
+        });
+        const hint = document.getElementById('prodStockUnitHint');
+        if (hint) {
+            hint.classList.toggle('hidden', !gramPriced);
+            if (gramPriced) {
+                const perUnit = gramsPerUnit(getProdFormProduct());
+                setElemText('prodStockUnitHint',
+                    `المخزون يُحسب بالغرام: ${isDoseProduct(getProdFormProduct()) ? 'الدوزة' : 'العلبة'} = ${perUnit} غ — بيع دوزة يخصم ${perUnit} غ، و1 كغ يخصم 1000 غ.`);
+            }
+        }
+        setElemText('singleStockLabel', singleStockQuantityLabel(getElemVal('prodStockLocation') || 'both'));
+        updateDualStockTotal();
+    }
+    window.syncProdStockUnitLabels = syncProdStockUnitLabels;
     // Dose and weighed products are priced by the gram only: the purchase gram price
     // and the selling gram price give the cost and the selling price of a dose/package,
     // and their difference is the net profit. Grams per dose applies to dose products.
@@ -5260,6 +5290,7 @@ window.addEventListener('unhandledrejection', (event) => {
         setElemRequired('prodCost', !gramPriced);
         setElemRequired('prodPrice', !gramPriced);
         updateProdGramSummary();
+        syncProdStockUnitLabels();
     }
     window.syncProdKiloPriceField = syncProdKiloPriceField;
     ['prodCategory', 'prodWeightType', 'prodWeight', 'prodGramPrice', 'prodGramSalePrice', 'prodDoseGrams'].forEach(id => {
@@ -5615,7 +5646,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let html = '<option value="">-- اختر المنتج لتحويله --</option>';
         html += prods.map(p => {
             const sel = (String(p.id) === String(defaultProdId)) ? 'selected' : '';
-            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} قطعة)${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
+            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} ${stockUnitWord(p)})${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
         }).join('');
         select.innerHTML = html;
         if (defaultProdId && prods.some(p => String(p.id) === String(defaultProdId))) {
@@ -5642,7 +5673,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (sourceProd) {
             if (infoDiv) infoDiv.classList.remove('hidden');
             const sourceStock = Number(sourceProd.stock || 0);
-            if (availBadge) availBadge.textContent = `${sourceStock} قطعة (${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+            if (availBadge) availBadge.textContent = `${sourceStock} ${stockUnitWord(sourceProd)} (${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
 
             let destProd = null;
             if (sourceProd.barcode) {
@@ -5651,7 +5682,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 destProd = (appState.products || []).find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
             }
             const destStock = destProd ? Number(destProd.stock || 0) : 0;
-            if (destBadge) destBadge.textContent = `${destStock} قطعة (${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+            if (destBadge) destBadge.textContent = `${destStock} ${stockUnitWord(sourceProd)} (${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
 
             if (input) {
                 input.max = sourceStock;
@@ -5727,7 +5758,7 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         }
         if (Number(sourceProd.stock || 0) < qty) {
-            showErrorToast(`الكمية المتوفرة بالمصدر (${sourceProd.stock}) أقل من الكمية المطلوبة (${qty})`);
+            showErrorToast(`الكمية المتوفرة بالمصدر (${sourceProd.stock} ${stockUnitWord(sourceProd)}) أقل من الكمية المطلوبة (${qty})`);
             return;
         }
 
@@ -5776,13 +5807,13 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof logActivity === 'function') {
             const fromName = fromLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
             const toName = toLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
-            logActivity('sale', 'تحويل مخزون بين المخازن', `نقل (${qty}) قطعة من [${sourceProd.name}] من ${fromName} إلى ${toName}`);
+            logActivity('sale', 'تحويل مخزون بين المخازن', `نقل (${qty}) ${stockUnitWord(sourceProd)} من [${sourceProd.name}] من ${fromName} إلى ${toName}`);
         }
 
         saveState();
         closeModal('stockTransferModal');
         playBeep();
-        showSuccessToast(`تم تحويل (${qty}) قطعة من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
+        showSuccessToast(`تم تحويل (${qty}) ${stockUnitWord(sourceProd)} من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
         if (typeof renderProductsList === 'function') renderProductsList();
         if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
     }
@@ -5981,7 +6012,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let html = '<option value="">اختر المنتج من Stock 1...</option>';
         html += prods.map(p => { const exp = (typeof getProductExpiryInfo === 'function') ? getProductExpiryInfo(p) : null;
             const expTag = (exp && exp.isNearExpiry) ? (exp.isExpired ? ' [منتهي الصلاحية]' : ` [قارب على الانتهاء: باقي ${exp.daysLeft} يوم]`) : '';
-            return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - المتوفر بـ Stock 1: ${p.stock}${expTag}</option>`;
+            return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - المتوفر بـ Stock 1: ${p.stock} ${stockUnitWord(p)}${expTag}</option>`;
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
@@ -6020,10 +6051,10 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         } else if (exactStock2Match) {
             if (statusElem) {
-                statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ المنتج [${exactStock2Match.name}] متوفر فقط في المستودع Stock 2 (${exactStock2Match.stock} قطعة) — يرجى تحويله إلى Stock 1 أولاً</span>`;
+                statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ المنتج [${exactStock2Match.name}] متوفر فقط في المستودع Stock 2 (${exactStock2Match.stock} ${stockUnitWord(exactStock2Match)}) — يرجى تحويله إلى Stock 1 أولاً</span>`;
             }
             if (isEnter) {
-                showErrorToast(`المنتج [${exactStock2Match.name}] متوفر بالمستودع (Stock 2) فقط (${exactStock2Match.stock} قطعة). لا يمكن البيع المباشر منه، يرجى تحويله إلى Stock 1 أولاً.`);
+                showErrorToast(`المنتج [${exactStock2Match.name}] متوفر بالمستودع (Stock 2) فقط (${exactStock2Match.stock} ${stockUnitWord(exactStock2Match)}). لا يمكن البيع المباشر منه، يرجى تحويله إلى Stock 1 أولاً.`);
             }
             return;
         }
@@ -6054,7 +6085,7 @@ window.addEventListener('unhandledrejection', (event) => {
             html += matchingStock1.map(p => {
                 const exp = (typeof getProductExpiryInfo === 'function') ? getProductExpiryInfo(p) : null;
                 const expTag = (exp && exp.isNearExpiry) ? (exp.isExpired ? ' [منتهي]' : ` [باقي ${exp.daysLeft} يوم]`) : '';
-                return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - متوفر بـ Stock 1: ${p.stock}${expTag}</option>`;
+                return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - متوفر بـ Stock 1: ${p.stock} ${stockUnitWord(p)}${expTag}</option>`;
             }).join('');
             select.innerHTML = html;
             if (statusElem) {
@@ -6067,7 +6098,7 @@ window.addEventListener('unhandledrejection', (event) => {
             ));
             if (matchingStock2Only.length > 0) {
                 if (statusElem) {
-                    statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ موجود بالمستودع Stock 2 فقط (${matchingStock2Only[0].stock} قطعة)</span>`;
+                    statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ موجود بالمستودع Stock 2 فقط (${matchingStock2Only[0].stock} ${stockUnitWord(matchingStock2Only[0])})</span>`;
                 }
             } else {
                 if (statusElem) {
@@ -6308,7 +6339,6 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         const weightSpec = parseWeightSpec(product.weight);
 
         // Automatic calculation based on measurement/weight — in kilo mode the sold
@@ -6316,7 +6346,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const gramSale = getGramSale(product, qty);
         const deduction = gramSale ? (gramSale.valid ? gramSale.stockDeduction : 0)
             : kiloMode ? resolveKiloStockDeduction(product, qty, weightSpec)
-            : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+            : resolveUnitStockDeduction(product, qty);
         const priceDetails = getProductSalePriceDetails(product);
         const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
         const hasPrice = (!kiloMode && !gramSale) || priceDetails.valid;
@@ -6354,10 +6384,10 @@ window.addEventListener('unhandledrejection', (event) => {
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong>${weightBadge}</span>
-                <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
+                <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock} ${stockUnitWord(product)}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t ${kiloMode ? 'border-emerald-200/60' : 'border-blue-200/60'} pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction}${deductionUnit ? ' ' + deductionUnit : ''})</span></span>
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem} ${stockUnitWord(product)}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction}${deductionUnit ? ' ' + deductionUnit : ''})</span></span>
                 ${totalLine}
             </div>
             ${profitLine}
@@ -6520,7 +6550,6 @@ window.addEventListener('unhandledrejection', (event) => {
             showErrorToast('يرجى تحديد كمية صحيحة يدوياً');
             return; }
 
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         const gramSale = getGramSale(product, qty);
         if (gramSale && !gramSale.valid) {
             showErrorToast(gramSaleError(gramSale));
@@ -6535,7 +6564,7 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         }
         const doseGramSale = gramSale && !kiloSale ? gramSale : null;
-        let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+        let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : resolveUnitStockDeduction(product, qty);
         let salePrice;
         if (kiloSale) {
             salePrice = kiloSale.pricePerKg;
@@ -6557,7 +6586,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
 
         if (Number(product.stock || 0) < stockDeduction) {
-            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
+            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction} ${stockUnitWord(product)}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
             return; }
 
         let saleTotal = gramSale ? gramSale.total : kiloSale ? kiloSale.total : Number((salePrice * qty).toFixed(2));
@@ -9634,7 +9663,6 @@ window.addEventListener('unhandledrejection', (event) => {
             const coachInput = document.getElementById('sellCoachName');
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
-            const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
             const gramSale = getGramSale(product, qty);
             if (gramSale && !gramSale.valid) {
                 showErrorToast(gramSaleError(gramSale));
@@ -9649,7 +9677,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 return false;
             }
             const doseGramSale = gramSale && !kiloSale ? gramSale : null;
-            let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+            let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : resolveUnitStockDeduction(product, qty);
             let salePrice;
             if (kiloSale) {
                 salePrice = kiloSale.pricePerKg;
@@ -9668,7 +9696,7 @@ window.addEventListener('unhandledrejection', (event) => {
             let unitLabel = kiloSale ? ' (بالكيلو)' : doseGramSale ? ' (دوزة بالغرام)' : '';
 
             if (currentStock < stockDeduction) {
-                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
+                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction} ${stockUnitWord(product)}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
                 return false;
             }
 
@@ -9841,7 +9869,6 @@ window.addEventListener('unhandledrejection', (event) => {
                     const qtyInput = document.getElementById('sellProdQty');
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
-                    const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
                     const gramBarcodeSale = getGramSale(prodStock1, chosenQty);
                     if (gramBarcodeSale && !gramBarcodeSale.valid) {
                         showErrorToast(gramSaleError(gramBarcodeSale));
@@ -9850,10 +9877,10 @@ window.addEventListener('unhandledrejection', (event) => {
                         return;
                     }
                     const requiredStockBarcode = gramBarcodeSale ? gramBarcodeSale.stockDeduction :
-                        (weightValBarcode && weightValBarcode > 0) ? (chosenQty * weightValBarcode) : chosenQty;
+                        resolveUnitStockDeduction(prodStock1, chosenQty);
 
                     if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
-                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
+                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock} ${stockUnitWord(prodStock1)}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
                         await closeBarcodeCamera();
                         isProcessingBarcode = false;
                         return;
@@ -9890,7 +9917,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     isProcessingBarcode = false;
                     return;
                 } else if (prodStock2) {
-                    showErrorToast(`عفواً! المنتج (${prodStock2.name}) متوفر في المستودع (Stock 2) فقط (${prodStock2.stock} قطعة). لا يمكن البيع المباشر من المستودع، يرجى تحويل الكمية إلى Stock 1 أولاً.`);
+                    showErrorToast(`عفواً! المنتج (${prodStock2.name}) متوفر في المستودع (Stock 2) فقط (${prodStock2.stock} ${stockUnitWord(prodStock2)}). لا يمكن البيع المباشر من المستودع، يرجى تحويل الكمية إلى Stock 1 أولاً.`);
                     await closeBarcodeCamera();
                     isProcessingBarcode = false;
                     return;
@@ -10309,11 +10336,14 @@ window.addEventListener('unhandledrejection', (event) => {
            }
            const currentStock = Number(p.stock || 0);
            const isOutOfStock = currentStock <= 0;
-           const isLowStock = currentStock < 5;
+           // Gram-priced products hold grams, so "low" is less than one dose/package.
+           const stockWord = stockUnitWord(p);
+           const lowStockLimit = isGramPricedProduct(p) ? gramsPerUnit(p) : 5;
+           const isLowStock = currentStock < lowStockLimit;
 
            let stockStatusBadge = '';
            if (isOutOfStock) {
-               stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-red-100 text-red-800 border border-red-300 px-2 py-0.5 rounded-md font-bold shadow-2xs"><svg class="w-3 h-3 text-red-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg><span>نفذ المخزون (0 قطعة)</span></span>`;
+               stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-red-100 text-red-800 border border-red-300 px-2 py-0.5 rounded-md font-bold shadow-2xs"><svg class="w-3 h-3 text-red-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg><span>نفذ المخزون (0 ${stockUnitWord(p)})</span></span>`;
            } else if (isLowStock) {
                stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-md font-extrabold animate-pulse shadow-xs"><svg class="w-3.5 h-3.5 text-amber-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>تنبيه: مخزون منخفض (&lt; 5 قطع)</span></span>`;
            }
@@ -10326,8 +10356,8 @@ window.addEventListener('unhandledrejection', (event) => {
                : (isLowStock ? '<div class="absolute left-0 top-0 bottom-0 w-2.5 bg-amber-500 animate-pulse"></div>' : '');
 
            const stockQtyDisplay = isOutOfStock
-               ? '<strong class="text-red-600 font-black">0 قطعة (منتهي)</strong>'
-               : (isLowStock ? `<strong class="text-amber-800 font-black bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 inline-flex items-center gap-1"><span>⚠️</span><span>${currentStock} قطع فقط</span></strong>` : `<strong class="text-slate-800">${currentStock}</strong>`);
+               ? `<strong class="text-red-600 font-black">0 ${stockWord} (منتهي)</strong>`
+               : (isLowStock ? `<strong class="text-amber-800 font-black bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 inline-flex items-center gap-1"><span>⚠️</span><span>${currentStock} ${stockWord} فقط</span></strong>` : `<strong class="text-slate-800">${currentStock} ${stockWord}</strong>`);
 
            return `
            <div id="product-card-${p.id}" data-product-id="${p.id}" data-barcode="${p.barcode || ''}" class="transition-all duration-300 flex justify-between items-center p-3.5 border ${cardClass} rounded-xl mb-2.5 shadow-sm relative overflow-hidden">
@@ -10399,8 +10429,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (sale.prodId && appState.products) {
                 const prod = appState.products.find(p => p.id === sale.prodId);
                 if (prod) {
-                    const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(prod.weight) : null;
-                    const stockToRestore = Number(sale.stockDeduction) || ((weightVal && weightVal > 0) ? (Number(sale.qty || 1) * weightVal) : Number(sale.qty || 1));
+                    const stockToRestore = Number(sale.stockDeduction) || resolveUnitStockDeduction(prod, Number(sale.qty || 1));
                     prod.stock = Number(prod.stock || 0) + stockToRestore;
                     if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                 }

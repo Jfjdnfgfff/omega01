@@ -120,8 +120,9 @@ check('saving a gram-priced product stores the derived cost, price and both gram
     $('prodName').value = 'واي بروتين';
     $('prodBarcode').value = '111222333';
     $('prodStockLocation').value = 'stock1';
-    if ($('prodStock')) $('prodStock').value = '100';
-    $('prodStock1').value = '100';
+    // 3000 غ = علبتان (30 دوزة × 50 غ) — المخزون يُدخل بالغرام.
+    if ($('prodStock')) $('prodStock').value = '3000';
+    $('prodStock1').value = '3000';
     $('prodDoseGrams').value = '50';
     $('prodGramPrice').value = '4';
     $('prodGramSalePrice').value = '6';
@@ -169,7 +170,6 @@ check('a dose sale charges the selling gram price and records the net profit', (
 
 check('a kilo sale is priced by the gram too, and a missing purchase price is reported', () => {
     const saved = window.appState.products.find(p => p.barcode === '111222333');
-    saved.stock = 2000;
     $('sellProdId').value = String(saved.id);
     window.setSellUnitMode('kilo');
     $('sellProdQty').value = '0.5';
@@ -177,6 +177,8 @@ check('a kilo sale is priced by the gram too, and a missing purchase price is re
 
     assert.match($('sellGramProfitHint').textContent, /× 500 غ = 1,000 دج/);
     assert.ok($('stockInfo').innerHTML.includes('3000.00 دج'), 'the kilo total is missing');
+    // 0.5 كغ = 500 غرام تُخصم من المخزون.
+    assert.ok($('stockInfo').textContent.includes('(الخصم: 500 غرام)'), 'the kilo deduction is not in grams');
 
     // After the form reset the price is taken from the product again.
     window.setSellUnitMode('unit');
@@ -187,6 +189,49 @@ check('a kilo sale is priced by the gram too, and a missing purchase price is re
     window.updateStockInfoDisplay();
     assert.match($('sellGramProfitHint').textContent + $('stockInfo').textContent,
         /سجّل «سعر الغرام الواحد للشراء»/);
+});
+
+check('stock is denominated in grams: 1 dose deducts its grams, 1 kilo deducts 1000', () => {
+    // The quantity fields are worded in grams for a gram-priced product.
+    $('prodCategory').value = 'doses';
+    $('prodWeightType').value = 'الكمية (Doza)';
+    $('prodWeight').value = '30 دوزة';
+    $('prodDoseGrams').value = '50';
+    window.syncProdKiloPriceField();
+    assert.equal($('prodStock1Label').textContent.trim(), 'الغرامات في Stock 1 (صالة البيع)');
+    assert.equal($('bothStockTitle').textContent.trim(), 'تحديد الكمية بالغرام في كل مخزن:');
+    assert.equal($('prodStock1').placeholder, 'مثال: 3000');
+    assert.ok(!$('prodStockUnitHint').classList.contains('hidden'), 'the grams hint is hidden');
+    assert.match($('prodStockUnitHint').textContent, /الدوزة = 50 غ/);
+    assert.match($('bothStockTotalBadge').textContent, /غ \(Stock 1/);
+    // A sealed box goes back to pieces.
+    $('prodCategory').value = 'boxes';
+    window.syncProdKiloPriceField();
+    assert.equal($('prodStock1Label').textContent.trim(), 'العدد في Stock 1 (صالة البيع)');
+    assert.ok($('prodStockUnitHint').classList.contains('hidden'));
+
+    // 3000 غ in stock: one dose removes 50, one kilo removes 1000.
+    const saved = window.appState.products.find(p => p.barcode === '111222333');
+    saved.gramPrice = 4;
+    saved.stock = 3000;
+    $('sellProdId').value = String(saved.id);
+    window.setSellUnitMode('unit');
+    $('sellProdQty').value = '1';
+    $('sellPaymentMethod').value = 'paid';
+    window.updateStockInfoDisplay();
+    assert.ok($('stockInfo').textContent.includes('المتوفر بـ Stock 1: 3000 غ'), 'stock is not shown in grams');
+    assert.ok($('stockInfo').textContent.includes('(الخصم: 50 غرام)'), 'a dose does not deduct its grams');
+    submit('sellProductForm');
+    assert.equal(saved.stock, 2950);
+
+    // The form is cleared after a sale: pick the product again for the kilo sale.
+    $('sellProdId').value = String(saved.id);
+    window.setSellUnitMode('kilo');
+    $('sellProdQty').value = '1';
+    window.updateStockInfoDisplay();
+    assert.ok($('stockInfo').textContent.includes('(الخصم: 1000 غرام)'), 'a kilo does not deduct 1000 grams');
+    submit('sellProductForm');
+    assert.equal(saved.stock, 1950);
 });
 
 for (const r of results) {

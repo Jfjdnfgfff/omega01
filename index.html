@@ -946,25 +946,26 @@
                           <div class="flex items-center justify-between text-xs font-bold text-slate-800">
                               <span class="flex items-center gap-1.5">
                                   <span></span>
-                                  <span>تحديد العدد في كل مخزن:</span>
+                                  <span id="bothStockTitle">تحديد العدد في كل مخزن:</span>
                               </span>
                               <span id="bothStockTotalBadge" class="text-[10px] bg-blue-600 text-white px-2.5 py-0.5 rounded-lg shadow-2xs font-extrabold">المجموع: 0 قطعة</span>
                           </div>
                           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
                                   <label class="block text-[11px] text-slate-800 mb-1 font-bold flex items-center justify-between">
-                                      <span>العدد في Stock 1 (صالة البيع)</span>
+                                      <span id="prodStock1Label">العدد في Stock 1 (صالة البيع)</span>
                                       <span class="text-[9px] text-blue-700 font-semibold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">متاح للبيع</span>
                                   </label>
                                   <input type="number" id="prodStock1" min="0" step="any" placeholder="0" oninput="updateDualStockTotal()" class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50/50">
                               </div>
                               <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
                                   <label class="block text-[11px] text-slate-800 mb-1 font-bold flex items-center justify-between">
-                                      <span>العدد في Stock 2 (المستودع)</span>
+                                      <span id="prodStock2Label">العدد في Stock 2 (المستودع)</span>
                                       <span class="text-[9px] text-slate-600 font-semibold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">مستودع تخزين</span>
                                   </label>
                                   <input type="number" id="prodStock2" min="0" step="any" placeholder="0" oninput="updateDualStockTotal()" class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-600 bg-slate-50/50">
                               </div> </div>
+                          <p id="prodStockUnitHint" class="hidden text-[10px] text-emerald-800 font-bold bg-emerald-50/80 border border-emerald-200 rounded-xl px-2.5 py-1.5"></p>
                       </div>
                       <!-- Single Stock Quantity Section (when single stock chosen) -->
                       <div id="singleStockContainer" class="hidden">

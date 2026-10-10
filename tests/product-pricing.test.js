@@ -8,7 +8,10 @@ import {
     isKiloSaleProduct,
     isGramPricedProduct,
     stockUnitsPerKg,
+    stockUnitWord,
+    kiloStockUnitLabel,
     resolveKiloStockDeduction,
+    resolveUnitStockDeduction,
     resolveKiloSale,
     resolveGramSale,
     normalizeKiloPrice,
@@ -80,14 +83,36 @@ test('the sell-by-kilo switch covers weighed products and dose products', () => 
     assert.equal(isDoseProduct(null), false);
 });
 
-test('dose stock is kept in grams, so one kilo deducts 1000 units', () => {
+test('dose and weighed stock is kept in grams, so one kilo deducts 1000 units', () => {
     const dose = { id: 'd1', category: 'doses', weight: 'الكمية (Doza) - 60 دوزة', stock: 2400 };
+    const kgPack = { id: 'p1', weight: 'الوزن - 2.5kg', stock: 2500 };
 
     assert.equal(parseWeightSpec('الكمية (Doza) - 60 دوزة').unitLabel, 'غرام');
     assert.equal(stockUnitsPerKg(dose), 1000);
     assert.equal(resolveKiloStockDeduction(dose, 1), 1000);
     assert.equal(resolveKiloStockDeduction(dose, 0.5), 500);
     assert.equal(resolveKiloStockDeduction(dose, 2.4), 2400);
+    // A product measured in kilograms keeps grams too: selling 1 kg removes 1000.
+    assert.equal(stockUnitsPerKg(kgPack), 1000);
+    assert.equal(resolveKiloStockDeduction(kgPack, 1), 1000);
+    assert.equal(kiloStockUnitLabel(kgPack), 'غرام');
+    assert.equal(stockUnitWord(kgPack), 'غ');
+    assert.equal(stockUnitWord(dose), 'غ');
+    assert.equal(stockUnitWord({ category: 'boxes', weight: '' }), 'قطعة');
+});
+
+test('a whole-unit sale of a gram-priced product removes its grams from stock', () => {
+    const dose = { category: 'doses', weight: 'الكمية (Doza) - 30 دوزة', doseGrams: 50, stock: 3000 };
+    const kgPack = { weight: 'الوزن - 2.5kg', stock: 5000 };
+    const box = { category: 'boxes', weight: '', stock: 12 };
+
+    assert.equal(resolveUnitStockDeduction(dose, 1), 50);
+    assert.equal(resolveUnitStockDeduction(dose, 3), 150);
+    assert.equal(resolveUnitStockDeduction(kgPack, 1), 2500);
+    assert.equal(resolveUnitStockDeduction(kgPack, 2), 5000);
+    // Everything else still sells by the piece.
+    assert.equal(resolveUnitStockDeduction(box, 1), 1);
+    assert.equal(resolveUnitStockDeduction(box, 4), 4);
 });
 
 test('a dose kilo sale charges the typed per-kilo price and deducts the sold weight in grams', () => {
@@ -128,10 +153,10 @@ test('a kilo sale charges the chosen per-kilo price and deducts the sold weight'
 
     assert.equal(sale.valid, true);
     assert.equal(sale.total, 900);
-    assert.equal(sale.stockDeduction, 0.5);
+    assert.equal(sale.stockDeduction, 500);
     assert.equal(sale.cost, 1000);
     assert.equal(sale.qtyUnit, 'kg');
-    assert.equal(sale.stockUnitLabel, 'كغ');
+    assert.equal(sale.stockUnitLabel, 'غرام');
     // The catalog price stays untouched: the lower kilo price applies to this sale only.
     assert.equal(product.price, 4200);
 });
@@ -205,7 +230,7 @@ test('gram-priced kilo multiplies 1000 grams per kg, including fractional kg', (
     assert.equal(half.stockDeduction, 500);
     const weighed = resolveGramSale({ product: { weight: 'الوزن - 2kg', cost: 1000 }, mode: 'kilo', qty: 1, pricePerGram: 4 });
     assert.equal(weighed.total, 4000);
-    assert.equal(weighed.stockDeduction, 1);
+    assert.equal(weighed.stockDeduction, 1000);
 });
 
 test('gram pricing rejects invalid price, dose grams and unsupported product types', () => {
