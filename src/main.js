@@ -10379,9 +10379,9 @@ window.addEventListener('unhandledrejection', (event) => {
                        <span>المخزون: ${stockQtyDisplay}</span>
                        <span class="text-slate-300">|</span>
                        <span class="inline-flex items-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-md" title="إجمالي قيمة مخزون هذا المنتج">
-                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * (parseFloat(p.cost) || 0)).toLocaleString()} دج</strong></span>
+                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * unitCostForStock(p)).toLocaleString()} دج</strong></span>
                            <span class="text-blue-300">•</span>
-                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * (parseFloat(p.price) || 0)).toLocaleString()} دج</strong></span>
+                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * unitPriceForStock(p)).toLocaleString()} دج</strong></span>
                        </span>
                        ${p.barcode ? `<span class="text-slate-300">|</span><span class="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200" title="باركود"><svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>${p.barcode}</span>` : ''}
                        ${p.expiryDate ? `<span class="text-slate-300">|</span><span>الصلاحية: <strong class="${expInfo.isNearExpiry ? 'text-blue-700 font-bold' : 'text-slate-700'}">${p.expiryDate}</strong></span>` : ''}
@@ -11238,6 +11238,21 @@ window.addEventListener('unhandledrejection', (event) => {
     // ==========================================
     // CAISSE & STOCK VALUATION CORE ENGINE
     // ==========================================
+    // سعر شراء/بيع وحدة المخزون الواحدة.
+    // مخزون المنتج المُسعَّر بالغرام (الدوزة والموزون بالكيلو) يُعدّ بالغرامات، بينما
+    // `cost`/`price` المحفوظان على المنتج هما سعر الدوزة/العلبة. ضرب الاثنين معاً يرفع
+    // رأس المال بعدد غرامات الوحدة، فتُستخدم أسعار الغرام لهذين الصنفين.
+    function unitCostForStock(p) {
+        const gramCost = gramCostPriceOf(p);
+        return gramCost > 0 ? gramCost : (parseFloat(p?.cost) || 0);
+    }
+    function unitPriceForStock(p) {
+        const gramSale = gramSalePriceOf(p);
+        return gramSale > 0 ? gramSale : (parseFloat(p?.price) || 0);
+    }
+    window.unitCostForStock = unitCostForStock;
+    window.unitPriceForStock = unitPriceForStock;
+
     function calculateStockValuation() {
         const prods = Array.isArray(appState.products) ? appState.products : [];
         let stock1Cost = 0; let stock2Cost = 0;
@@ -11247,8 +11262,8 @@ window.addEventListener('unhandledrejection', (event) => {
         prods.forEach(p => {
             if (!p) return;
             const qty = parseFloat(p.stock) || 0;
-            const cost = parseFloat(p.cost) || 0;
-            const price = parseFloat(p.price) || 0;
+            const cost = unitCostForStock(p);
+            const price = unitPriceForStock(p);
             const isStock2 = p.stockLocation === 'stock2';
             if (isStock2) {
                 stock2Cost += (qty * cost);
@@ -11268,11 +11283,13 @@ window.addEventListener('unhandledrejection', (event) => {
         const totalItemsCount = stock1ItemsCount + stock2ItemsCount;
         const totalTypesCount = prods.length;
         const profitMargin = totalCost > 0 ? Math.round((totalPotentialProfit / totalCost) * 100) : 0;
+        // Fractional gram prices (e.g. 0.025 دج/غ) accumulate float dust; keep money at 2 decimals.
+        const money = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
         return {
-            stock1Cost, stock2Cost,
-            totalCost, stock1Selling,
-            stock2Selling, totalSelling,
-            totalPotentialProfit,
+            stock1Cost: money(stock1Cost), stock2Cost: money(stock2Cost),
+            totalCost: money(totalCost), stock1Selling: money(stock1Selling),
+            stock2Selling: money(stock2Selling), totalSelling: money(totalSelling),
+            totalPotentialProfit: money(totalPotentialProfit),
             profitMargin,
             stock1ItemsCount, stock2ItemsCount,
             totalItemsCount, stock1TypesCount,
@@ -12232,7 +12249,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 <span class="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></span>
                 <span>جاري قراءة النسخ من Google Drive...</span>
             </div>
-        `; try { const query = encodeURIComponent("name contains 'OmegaGym_Backup' and trashed = false");
+        `; try { const query = encodeURIComponent("(name contains 'OmegaGym_Backup' or name contains 'OmegaGym_AutoBackup') and trashed = false");
             const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&orderBy=createdTime desc&pageSize=5&fields=files(id,name,createdTime,size)`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             }); if (!res.ok) throw new Error(`HTTP ${res.status}`);
