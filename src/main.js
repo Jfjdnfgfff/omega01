@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
-  import { resolveSaleUnitPrice, parseWeightSpec, isWeightSaleProduct, isDoseProduct, isKiloSaleProduct, resolveKiloSale, resolveGramSale, resolveKiloStockDeduction, stockUnitsPerKg, normalizeKiloPrice, defaultKiloSalePrice, normalizeGramPrice, defaultGramSalePrice, defaultDoseGrams } from './product-pricing.js';
+  import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
   import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
@@ -5193,33 +5193,107 @@ window.addEventListener('unhandledrejection', (event) => {
             } updateDualStockTotal(); } else {
             if (bothCont) bothCont.classList.add('hidden');
             if (singleCont) singleCont.classList.remove('hidden');
-            if (singleLabel) { singleLabel.textContent = (loc === 'stock2') ? 'الكمية في Stock 2 (المستودع)*' : 'الكمية في Stock 1 (صالة البيع)*';
+            if (singleLabel) { singleLabel.textContent = singleStockQuantityLabel(loc);
             } if (submitBtn && !isEditing) {
                 submitBtn.textContent = (loc === 'stock2') ? 'إضافة المنتج إلى Stock 2 (المستودع)' : 'إضافة المنتج إلى Stock 1 (صالة البيع)';
             } } } window.handleProdStockLocationChange = handleProdStockLocationChange;
     function updateDualStockTotal() { const s1 = parseFloat(getElemVal('prodStock1')) || 0;
         const s2 = parseFloat(getElemVal('prodStock2')) || 0;
         const total = s1 + s2; const badge = document.getElementById('bothStockTotalBadge');
-        if (badge) { badge.textContent = `المجموع: ${total} قطعة (Stock 1: ${s1} + Stock 2: ${s2})`;
+        if (badge) { badge.textContent = `المجموع: ${total} ${prodStockUnitWord()} (Stock 1: ${s1} + Stock 2: ${s2})`;
         } } window.updateDualStockTotal = updateDualStockTotal;
-    // Kilo/gram prices apply to dose and weighed products; grams per dose
-    // is only applicable to dose products.
-    function syncProdKiloPriceField() {
+    // Stock of a gram-priced product (dose or weighed) is counted in grams, so the
+    // quantity fields and their totals are worded in grams instead of pieces.
+    function isProdFormGramPriced() { return isGramPricedProduct(getProdFormProduct()); }
+    function prodStockUnitWord() { return isProdFormGramPriced() ? 'غ' : 'قطعة'; }
+    function singleStockQuantityLabel(loc) {
+        const place = (loc === 'stock2') ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+        return isProdFormGramPriced() ? `الكمية بالغرام في ${place}*` : `الكمية في ${place}*`;
+    }
+    function syncProdStockUnitLabels() {
+        const gramPriced = isProdFormGramPriced();
+        setElemText('bothStockTitle', gramPriced ? 'تحديد الكمية بالغرام في كل مخزن:' : 'تحديد العدد في كل مخزن:');
+        setElemText('prodStock1Label', gramPriced ? 'الغرامات في Stock 1 (صالة البيع)' : 'العدد في Stock 1 (صالة البيع)');
+        setElemText('prodStock2Label', gramPriced ? 'الغرامات في Stock 2 (المستودع)' : 'العدد في Stock 2 (المستودع)');
+        ['prodStock', 'prodStock1', 'prodStock2'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.placeholder = gramPriced ? 'مثال: 3000' : '0';
+        });
+        const hint = document.getElementById('prodStockUnitHint');
+        if (hint) {
+            hint.classList.toggle('hidden', !gramPriced);
+            if (gramPriced) {
+                const perUnit = gramsPerUnit(getProdFormProduct());
+                setElemText('prodStockUnitHint',
+                    `المخزون يُحسب بالغرام: ${isDoseProduct(getProdFormProduct()) ? 'الدوزة' : 'العلبة'} = ${perUnit} غ — بيع دوزة يخصم ${perUnit} غ، و1 كغ يخصم 1000 غ.`);
+            }
+        }
+        setElemText('singleStockLabel', singleStockQuantityLabel(getElemVal('prodStockLocation') || 'both'));
+        updateDualStockTotal();
+    }
+    window.syncProdStockUnitLabels = syncProdStockUnitLabels;
+    // Dose and weighed products are priced by the gram only: the purchase gram price
+    // and the selling gram price give the cost and the selling price of a dose/package,
+    // and their difference is the net profit. Grams per dose applies to dose products.
+    function getProdFormProduct() {
         const category = getElemVal('prodCategory');
         const wType = document.getElementById('prodWeightType') ? getElemVal('prodWeightType') : '';
         const wVal = getElemVal('prodWeight');
         const weight = (wType && wVal) ? (wType + ' - ' + wVal) : (wVal || wType || '');
-        const product = { category, weight };
-        const canSellKilo = isKiloSaleProduct(product);
-        const field = document.getElementById('prodKiloPriceField');
-        if (field) field.classList.toggle('hidden', !canSellKilo);
-        document.getElementById('prodGramPriceField')?.classList.toggle('hidden', !canSellKilo);
+        return { category, weight, doseGrams: Number(getElemVal('prodDoseGrams')) || 0 };
+    }
+    // Live preview of what the two gram prices compute, so nothing has to be typed twice.
+    function updateProdGramSummary() {
+        const panel = document.getElementById('prodGramSummary');
+        if (!panel) return;
+        const product = getProdFormProduct();
+        const gramPriced = isGramPricedProduct(product);
+        panel.classList.toggle('hidden', !gramPriced);
+        if (!gramPriced) return;
+        const isDose = isDoseProduct(product);
+        const unitWord = isDose ? 'للدوزة' : 'للعلبة';
+        setElemText('prodGramSummaryUnit', isDose ? 'الدوزة' : 'العلبة (الوزن الكامل)');
+        setElemText('prodGramSummaryUnitCost', unitWord);
+        setElemText('prodGramSummaryUnitPrice', unitWord);
+        const derived = deriveUnitPricesFromGrams({
+            product,
+            costPerGram: getElemVal('prodGramPrice'),
+            salePerGram: getElemVal('prodGramSalePrice')
+        });
+        const money = value => `${Number(value || 0).toLocaleString()} دج`;
+        if (derived.valid) {
+            setElemText('prodGramSummaryCost', money(derived.cost));
+            setElemText('prodGramSummaryPrice', money(derived.price));
+            setElemText('prodGramSummaryProfit', money(derived.profit));
+            setElemText('prodGramSummaryHint',
+                `${derived.gramsPerUnit} غرام في ${isDose ? 'الدوزة' : 'العلبة'} — صافي الربح = (سعر غرام البيع − سعر غرام الشراء) × ${derived.gramsPerUnit} غ.`);
+        } else {
+            setElemText('prodGramSummaryCost', money(0));
+            setElemText('prodGramSummaryPrice', money(0));
+            setElemText('prodGramSummaryProfit', money(0));
+            setElemText('prodGramSummaryHint',
+                'أدخل سعر الغرام للشراء وسعر الغرام عند البيع — التكلفة وسعر البيع وصافي الربح تُحسب وحدها.');
+        }
+    }
+    window.updateProdGramSummary = updateProdGramSummary;
+    function syncProdKiloPriceField() {
+        const product = getProdFormProduct();
+        const gramPriced = isGramPricedProduct(product);
+        document.getElementById('prodGramPriceField')?.classList.toggle('hidden', !gramPriced);
+        document.getElementById('prodGramSalePriceField')?.classList.toggle('hidden', !gramPriced);
         document.getElementById('prodDoseGramsField')?.classList.toggle('hidden', !isDoseProduct(product));
-        const priceLabel = document.getElementById('prodPriceLabel');
-        if (priceLabel) priceLabel.textContent = isDoseProduct(product) ? 'سعر الدوزة (سعر البيع للدوزة)' : 'السعر (سعر البيع)';
+        // Both totals of a gram-priced product are computed from the gram prices, so the
+        // manual cost/price inputs are hidden and no longer required (a hidden required
+        // input would block the submit and could not be focused).
+        document.getElementById('prodCostField')?.classList.toggle('hidden', gramPriced);
+        document.getElementById('prodPriceField')?.classList.toggle('hidden', gramPriced);
+        setElemRequired('prodCost', !gramPriced);
+        setElemRequired('prodPrice', !gramPriced);
+        updateProdGramSummary();
+        syncProdStockUnitLabels();
     }
     window.syncProdKiloPriceField = syncProdKiloPriceField;
-    ['prodCategory', 'prodWeightType', 'prodWeight'].forEach(id => {
+    ['prodCategory', 'prodWeightType', 'prodWeight', 'prodGramPrice', 'prodGramSalePrice', 'prodDoseGrams'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', syncProdKiloPriceField);
         document.getElementById(id)?.addEventListener('input', syncProdKiloPriceField);
     });
@@ -5240,27 +5314,40 @@ window.addEventListener('unhandledrejection', (event) => {
         const wVal = getElemVal('prodWeight');
         const finalWeight = (wType && wVal) ? (wType + ' - ' + wVal) : (wVal || wType || '');
         const stockLocationVal = document.getElementById('prodStockLocation') ? getElemVal('prodStockLocation') : 'both';
-        const costVal = parseFloat(getElemVal('prodCost')) || 0;
-        const priceVal = parseFloat(getElemVal('prodPrice')) || 0;
         const expiryDateVal = document.getElementById('prodExpiryDate') ? getElemVal('prodExpiryDate') : '';
         const categoryVal = getElemVal('prodCategory') || (typeof getProductCategory === 'function' ? getProductCategory({ name: prodName, weight: finalWeight }) : 'other');
-        const kiloPriceVal = normalizeKiloPrice(getElemVal('prodKiloPrice'));
-        const rawGramPrice = getElemVal('prodGramPrice');
-        const gramPriceVal = isKiloSaleProduct({ category: categoryVal, weight: finalWeight })
-            ? normalizeGramPrice(rawGramPrice) : 0;
         const rawDoseGrams = getElemVal('prodDoseGrams');
-        const doseGramsVal = isDoseProduct({ category: categoryVal, weight: finalWeight })
-            ? Number(rawDoseGrams || 50) : 0;
-        if (rawGramPrice !== '' && isKiloSaleProduct({ category: categoryVal, weight: finalWeight }) && !gramPriceVal) {
-            showErrorToast('سعر الغرام يجب أن يكون رقماً موجباً');
-            document.getElementById('prodGramPrice')?.focus();
-            return;
-        }
-        if (isDoseProduct({ category: categoryVal, weight: finalWeight }) && (!Number.isFinite(doseGramsVal) || doseGramsVal <= 0)) {
+        const formProduct = { category: categoryVal, weight: finalWeight, doseGrams: Number(rawDoseGrams || 50) };
+        const doseGramsVal = isDoseProduct(formProduct) ? Number(rawDoseGrams || 50) : 0;
+        if (isDoseProduct(formProduct) && (!Number.isFinite(doseGramsVal) || doseGramsVal <= 0)) {
             showErrorToast('وزن الدوزة بالغرام يجب أن يكون موجباً');
             document.getElementById('prodDoseGrams')?.focus();
             return;
         }
+        // Dose and weighed products carry two gram prices; every other product keeps the
+        // two totals typed by hand.
+        const gramPriced = isGramPricedProduct(formProduct);
+        const gramPriceVal = gramPriced ? normalizeGramPrice(getElemVal('prodGramPrice')) : 0;
+        const gramSalePriceVal = gramPriced ? normalizeGramPrice(getElemVal('prodGramSalePrice')) : 0;
+        const derivedPrices = gramPriced
+            ? deriveUnitPricesFromGrams({ product: formProduct, costPerGram: gramPriceVal, salePerGram: gramSalePriceVal })
+            : null;
+        if (gramPriced && !gramPriceVal) {
+            showErrorToast('أدخل سعر الغرام الواحد للشراء (رقم موجب)');
+            document.getElementById('prodGramPrice')?.focus();
+            return;
+        }
+        if (gramPriced && !gramSalePriceVal) {
+            showErrorToast('أدخل سعر الغرام الواحد عند البيع (رقم موجب) — به يُحسب صافي الربح');
+            document.getElementById('prodGramSalePrice')?.focus();
+            return;
+        }
+        const costVal = (gramPriced && derivedPrices?.valid)
+            ? derivedPrices.cost
+            : (parseFloat(getElemVal('prodCost')) || 0);
+        const priceVal = (gramPriced && derivedPrices?.valid)
+            ? derivedPrices.price
+            : (parseFloat(getElemVal('prodPrice')) || 0);
         // Verify password before adding or updating product
         promptWithPassword({ title: editingId ? 'تعديل منتج' : 'إضافة منتج جديد',
             prompt: editingId ? 'أدخل كلمة المرور لحفظ تعديلات المنتج' : 'أدخل كلمة المرور لإضافة المنتج إلى المخزون',
@@ -5274,7 +5361,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     p.cost = costVal; p.price = priceVal;
                     p.brand = brandVal; p.imageUrl = imgUrlVal;
                     p.expiryDate = expiryDateVal;
-                    p.category = categoryVal; p.kiloPrice = kiloPriceVal; p.gramPrice = gramPriceVal; p.doseGrams = doseGramsVal;
+                    p.category = categoryVal; p.gramPrice = gramPriceVal; p.gramSalePrice = gramSalePriceVal; p.doseGrams = doseGramsVal;
                     p.updatedAt = Date.now();
                     if (stockLocationVal === 'both') {
                         const q1 = parseFloat(getElemVal('prodStock1')) || 0;
@@ -5282,7 +5369,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         if (p.stockLocation === 'stock2') {
                             p.stock = q2; let p1 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && (!x.stockLocation || x.stockLocation === 'stock1')) : null;
                             if (p1) { p1.stock = q1;
-                                p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal; p1.kiloPrice = kiloPriceVal; p1.gramPrice = gramPriceVal; p1.doseGrams = doseGramsVal;
+                                p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal; p1.expiryDate = expiryDateVal; p1.category = categoryVal; p1.gramPrice = gramPriceVal; p1.gramSalePrice = gramSalePriceVal; p1.doseGrams = doseGramsVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                             } else if (q1 > 0) {
                                 const newProd1 = {
@@ -5297,7 +5384,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                     imageUrl: imgUrlVal,
                                     stockLocation: 'stock1',
                                     expiryDate: expiryDateVal,
-                                    category: categoryVal, kiloPrice: kiloPriceVal, gramPrice: gramPriceVal, doseGrams: doseGramsVal
+                                    category: categoryVal, gramPrice: gramPriceVal, gramSalePrice: gramSalePriceVal, doseGrams: doseGramsVal
                                 };
                                 appState.products.push(newProd1);
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd1);
@@ -5305,7 +5392,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             p.stockLocation = 'stock1';
                             let p2 = prodBarcode ? appState.products.find(x => String(x.id) !== String(p.id) && String(x.barcode) === String(prodBarcode) && x.stockLocation === 'stock2') : null;
                             if (p2) { p2.stock = q2;
-                                p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal; p2.kiloPrice = kiloPriceVal; p2.gramPrice = gramPriceVal; p2.doseGrams = doseGramsVal;
+                                p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal; p2.expiryDate = expiryDateVal; p2.category = categoryVal; p2.gramPrice = gramPriceVal; p2.gramSalePrice = gramSalePriceVal; p2.doseGrams = doseGramsVal;
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                             } else if (q2 > 0) {
                                 const newProd2 = {
@@ -5320,7 +5407,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                     imageUrl: imgUrlVal,
                                     stockLocation: 'stock2',
                                     expiryDate: expiryDateVal,
-                                    category: categoryVal, kiloPrice: kiloPriceVal, gramPrice: gramPriceVal, doseGrams: doseGramsVal
+                                    category: categoryVal, gramPrice: gramPriceVal, gramSalePrice: gramSalePriceVal, doseGrams: doseGramsVal
                                 };
                                 appState.products.push(newProd2);
                                 if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
@@ -5351,7 +5438,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             : null; if (p1) { p1.stock = Number(p1.stock || 0) + q1;
                             p1.name = prodName; p1.cost = costVal; p1.price = priceVal; p1.weight = finalWeight; p1.brand = brandVal; p1.imageUrl = imgUrlVal;
                             p1.expiryDate = expiryDateVal || p1.expiryDate;
-                            p1.category = categoryVal; p1.kiloPrice = kiloPriceVal; p1.gramPrice = gramPriceVal; p1.doseGrams = doseGramsVal;
+                            p1.category = categoryVal; p1.gramPrice = gramPriceVal; p1.gramSalePrice = gramSalePriceVal; p1.doseGrams = doseGramsVal;
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p1);
                         } else { const newProd1 = {
                                 id: Date.now().toString(),
@@ -5364,7 +5451,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 imageUrl: imgUrlVal,
                                 stockLocation: 'stock1',
                                 expiryDate: expiryDateVal,
-                                category: categoryVal, kiloPrice: kiloPriceVal, gramPrice: gramPriceVal, doseGrams: doseGramsVal
+                                category: categoryVal, gramPrice: gramPriceVal, gramSalePrice: gramSalePriceVal, doseGrams: doseGramsVal
                             }; appState.products.push(newProd1);
                             if (newProd1 && window.saveFirebaseSectionItem) {
                                 window.saveFirebaseSectionItem('products', newProd1);
@@ -5373,7 +5460,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             : null; if (p2) { p2.stock = Number(p2.stock || 0) + q2;
                             p2.name = prodName; p2.cost = costVal; p2.price = priceVal; p2.weight = finalWeight; p2.brand = brandVal; p2.imageUrl = imgUrlVal;
                             p2.expiryDate = expiryDateVal || p2.expiryDate;
-                            p2.category = categoryVal; p2.kiloPrice = kiloPriceVal; p2.gramPrice = gramPriceVal; p2.doseGrams = doseGramsVal;
+                            p2.category = categoryVal; p2.gramPrice = gramPriceVal; p2.gramSalePrice = gramSalePriceVal; p2.doseGrams = doseGramsVal;
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', p2);
                         } else { const newProd2 = {
                                 id: (Date.now() + 20).toString(),
@@ -5386,7 +5473,7 @@ window.addEventListener('unhandledrejection', (event) => {
                                 imageUrl: imgUrlVal,
                                 stockLocation: 'stock2',
                                 expiryDate: expiryDateVal,
-                                category: categoryVal, kiloPrice: kiloPriceVal, gramPrice: gramPriceVal, doseGrams: doseGramsVal
+                                category: categoryVal, gramPrice: gramPriceVal, gramSalePrice: gramSalePriceVal, doseGrams: doseGramsVal
                             }; appState.products.push(newProd2);
                             if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', newProd2);
                         } } showSuccessToast(`تم إضافة المنتج بنجاح: (${q1}) في Stock 1 و (${q2}) في Stock 2`);
@@ -5403,7 +5490,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         existing.brand = brandVal;
                         existing.imageUrl = imgUrlVal;
                         existing.expiryDate = expiryDateVal || existing.expiryDate;
-                        existing.category = categoryVal; existing.kiloPrice = kiloPriceVal; existing.gramPrice = gramPriceVal; existing.doseGrams = doseGramsVal;
+                        existing.category = categoryVal; existing.gramPrice = gramPriceVal; existing.gramSalePrice = gramSalePriceVal; existing.doseGrams = doseGramsVal;
                         if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', existing);
                     } else { const newProduct = {
                             id: Date.now().toString(),
@@ -5416,7 +5503,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             imageUrl: imgUrlVal,
                             stockLocation: stockLocationVal,
                             expiryDate: expiryDateVal,
-                            category: categoryVal, kiloPrice: kiloPriceVal, gramPrice: gramPriceVal, doseGrams: doseGramsVal
+                            category: categoryVal, gramPrice: gramPriceVal, gramSalePrice: gramSalePriceVal, doseGrams: doseGramsVal
                         }; appState.products.push(newProduct);
                         if (window.saveFirebaseSectionItem) {
                             window.saveFirebaseSectionItem('products', newProduct);
@@ -5464,8 +5551,8 @@ window.addEventListener('unhandledrejection', (event) => {
         setElemValue('prodWeight', wVal);
         setElemValue('prodCost', p.cost || 0);
         setElemValue('prodPrice', p.price || 0);
-        setElemValue('prodKiloPrice', p.kiloPrice || '');
-        setElemValue('prodGramPrice', defaultGramSalePrice(p));
+        setElemValue('prodGramPrice', defaultGramCostPrice(p));
+        setElemValue('prodGramSalePrice', defaultGramSalePrice(p));
         setElemValue('prodDoseGrams', defaultDoseGrams(p));
         // Check if counterpart product exists in the other stock
         const counterpart = p.barcode ? (appState.products || []).find(x => x && String(x.id) !== String(p.id) && String(x.barcode) === String(p.barcode)) : null;
@@ -5559,7 +5646,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let html = '<option value="">-- اختر المنتج لتحويله --</option>';
         html += prods.map(p => {
             const sel = (String(p.id) === String(defaultProdId)) ? 'selected' : '';
-            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} قطعة)${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
+            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} ${stockUnitWord(p)})${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
         }).join('');
         select.innerHTML = html;
         if (defaultProdId && prods.some(p => String(p.id) === String(defaultProdId))) {
@@ -5586,7 +5673,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (sourceProd) {
             if (infoDiv) infoDiv.classList.remove('hidden');
             const sourceStock = Number(sourceProd.stock || 0);
-            if (availBadge) availBadge.textContent = `${sourceStock} قطعة (${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+            if (availBadge) availBadge.textContent = `${sourceStock} ${stockUnitWord(sourceProd)} (${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
 
             let destProd = null;
             if (sourceProd.barcode) {
@@ -5595,7 +5682,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 destProd = (appState.products || []).find(p => p.name === sourceProd.name && (toLoc === 'stock2' ? p.stockLocation === 'stock2' : (!p.stockLocation || p.stockLocation === 'stock1')));
             }
             const destStock = destProd ? Number(destProd.stock || 0) : 0;
-            if (destBadge) destBadge.textContent = `${destStock} قطعة (${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
+            if (destBadge) destBadge.textContent = `${destStock} ${stockUnitWord(sourceProd)} (${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'})`;
 
             if (input) {
                 input.max = sourceStock;
@@ -5671,7 +5758,7 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         }
         if (Number(sourceProd.stock || 0) < qty) {
-            showErrorToast(`الكمية المتوفرة بالمصدر (${sourceProd.stock}) أقل من الكمية المطلوبة (${qty})`);
+            showErrorToast(`الكمية المتوفرة بالمصدر (${sourceProd.stock} ${stockUnitWord(sourceProd)}) أقل من الكمية المطلوبة (${qty})`);
             return;
         }
 
@@ -5720,13 +5807,13 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof logActivity === 'function') {
             const fromName = fromLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
             const toName = toLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
-            logActivity('sale', 'تحويل مخزون بين المخازن', `نقل (${qty}) قطعة من [${sourceProd.name}] من ${fromName} إلى ${toName}`);
+            logActivity('sale', 'تحويل مخزون بين المخازن', `نقل (${qty}) ${stockUnitWord(sourceProd)} من [${sourceProd.name}] من ${fromName} إلى ${toName}`);
         }
 
         saveState();
         closeModal('stockTransferModal');
         playBeep();
-        showSuccessToast(`تم تحويل (${qty}) قطعة من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
+        showSuccessToast(`تم تحويل (${qty}) ${stockUnitWord(sourceProd)} من [${fromLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] إلى [${toLoc === 'stock2' ? 'Stock 2' : 'Stock 1'}] بنجاح!`);
         if (typeof renderProductsList === 'function') renderProductsList();
         if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
     }
@@ -5867,8 +5954,8 @@ window.addEventListener('unhandledrejection', (event) => {
             if (document.getElementById('prodWeight')) setElemValue('prodWeight', wVal);
             if (document.getElementById('prodCost')) setElemValue('prodCost', product.cost || '');
             if (document.getElementById('prodPrice')) setElemValue('prodPrice', product.price || '');
-            if (document.getElementById('prodKiloPrice')) setElemValue('prodKiloPrice', product.kiloPrice || '');
-            setElemValue('prodGramPrice', defaultGramSalePrice(product));
+            setElemValue('prodGramPrice', defaultGramCostPrice(product));
+            setElemValue('prodGramSalePrice', defaultGramSalePrice(product));
             setElemValue('prodDoseGrams', defaultDoseGrams(product));
             if (document.getElementById('prodCategory') && product.category) setElemValue('prodCategory', product.category);
             syncProdKiloPriceField();
@@ -5925,7 +6012,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let html = '<option value="">اختر المنتج من Stock 1...</option>';
         html += prods.map(p => { const exp = (typeof getProductExpiryInfo === 'function') ? getProductExpiryInfo(p) : null;
             const expTag = (exp && exp.isNearExpiry) ? (exp.isExpired ? ' [منتهي الصلاحية]' : ` [قارب على الانتهاء: باقي ${exp.daysLeft} يوم]`) : '';
-            return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - المتوفر بـ Stock 1: ${p.stock}${expTag}</option>`;
+            return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - المتوفر بـ Stock 1: ${p.stock} ${stockUnitWord(p)}${expTag}</option>`;
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
@@ -5964,10 +6051,10 @@ window.addEventListener('unhandledrejection', (event) => {
             return;
         } else if (exactStock2Match) {
             if (statusElem) {
-                statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ المنتج [${exactStock2Match.name}] متوفر فقط في المستودع Stock 2 (${exactStock2Match.stock} قطعة) — يرجى تحويله إلى Stock 1 أولاً</span>`;
+                statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ المنتج [${exactStock2Match.name}] متوفر فقط في المستودع Stock 2 (${exactStock2Match.stock} ${stockUnitWord(exactStock2Match)}) — يرجى تحويله إلى Stock 1 أولاً</span>`;
             }
             if (isEnter) {
-                showErrorToast(`المنتج [${exactStock2Match.name}] متوفر بالمستودع (Stock 2) فقط (${exactStock2Match.stock} قطعة). لا يمكن البيع المباشر منه، يرجى تحويله إلى Stock 1 أولاً.`);
+                showErrorToast(`المنتج [${exactStock2Match.name}] متوفر بالمستودع (Stock 2) فقط (${exactStock2Match.stock} ${stockUnitWord(exactStock2Match)}). لا يمكن البيع المباشر منه، يرجى تحويله إلى Stock 1 أولاً.`);
             }
             return;
         }
@@ -5998,7 +6085,7 @@ window.addEventListener('unhandledrejection', (event) => {
             html += matchingStock1.map(p => {
                 const exp = (typeof getProductExpiryInfo === 'function') ? getProductExpiryInfo(p) : null;
                 const expTag = (exp && exp.isNearExpiry) ? (exp.isExpired ? ' [منتهي]' : ` [باقي ${exp.daysLeft} يوم]`) : '';
-                return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - متوفر بـ Stock 1: ${p.stock}${expTag}</option>`;
+                return `<option value="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>${p.name} (${p.price} دج) - متوفر بـ Stock 1: ${p.stock} ${stockUnitWord(p)}${expTag}</option>`;
             }).join('');
             select.innerHTML = html;
             if (statusElem) {
@@ -6011,7 +6098,7 @@ window.addEventListener('unhandledrejection', (event) => {
             ));
             if (matchingStock2Only.length > 0) {
                 if (statusElem) {
-                    statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ موجود بالمستودع Stock 2 فقط (${matchingStock2Only[0].stock} قطعة)</span>`;
+                    statusElem.innerHTML = `<span class="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ موجود بالمستودع Stock 2 فقط (${matchingStock2Only[0].stock} ${stockUnitWord(matchingStock2Only[0])})</span>`;
                 }
             } else {
                 if (statusElem) {
@@ -6035,18 +6122,17 @@ window.addEventListener('unhandledrejection', (event) => {
         if (!prodId || !Array.isArray(appState.products)) return null;
         return appState.products.find(p => String(p.id) === String(prodId)) || null;
     }
-    function getSellKiloPrice() {
-        const input = document.getElementById('sellKiloPrice');
-        return input ? input.value : '';
-    }
     function isGramModeActive(product) {
+        // Dose products and weighed (kilo) sales are always priced by the gram now:
+        // the selling gram price gives the total and the purchase gram price the cost.
         return !!product && (isDoseProduct(product) || isKiloModeActive(product)) &&
-            String(getElemVal('sellProdId')) === String(product.id) && getElemVal('sellPriceBasis') === 'gram';
+            String(getElemVal('sellProdId')) === String(product.id);
     }
     function getGramSale(product, qty) {
         return isGramModeActive(product) ? resolveGramSale({
             product, mode: isKiloModeActive(product) ? 'kilo' : 'dose', qty,
-            pricePerGram: getElemVal('sellGramPrice'), gramsPerDose: getElemVal('sellDoseGrams')
+            pricePerGram: getElemVal('sellGramPrice'), gramsPerDose: getElemVal('sellDoseGrams'),
+            costPerGram: gramCostPriceOf(product)
         }) : null;
     }
     function gramSaleError(sale) {
@@ -6067,34 +6153,28 @@ window.addEventListener('unhandledrejection', (event) => {
         )).join('');
     }
 
-    // Recently used kilo prices for this product, so a lower per-kilo price is one tap away.
-    function renderSellKiloQuickPrices(product) {
-        const wrap = document.getElementById('sellKiloQuickPrices');
-        if (!wrap) return;
-        const recent = (Array.isArray(appState.sales) ? appState.sales : [])
-            .filter(s => s && s.unitMode === 'kilo' && s.priceBasis !== 'gram' && (!product || String(s.prodId) === String(product.id)))
-            .map(s => Number(s.price))
-            .filter(price => Number.isFinite(price) && price > 0);
-        const unique = [...new Set(recent)].slice(0, 4);
-        if (unique.length === 0) { wrap.innerHTML = ''; return; }
-        wrap.innerHTML = `<span class="text-[10px] text-emerald-700 font-bold shrink-0">أسعار مستعملة:</span>` +
-            unique.map(price => (
-                `<button type="button" onclick="window.setSellKiloPrice(${price})" class="px-2 py-0.5 rounded-lg text-[11px] font-black bg-white hover:bg-emerald-600 hover:text-white text-emerald-800 transition-all border border-emerald-200 shrink-0 cursor-pointer">${price} دج</button>`
-            )).join('');
-    }
-
-    function setSellKiloPrice(price) {
-        const input = document.getElementById('sellKiloPrice');
-        if (!input) return;
-        input.value = (Number(price) > 0) ? String(Number(price)) : '';
-        input.dataset.userEdited = 'true';
-        updateStockInfoDisplay();
-        if (typeof window.updateProductCreditSplit === 'function') window.updateProductCreditSplit();
-    }
-    window.setSellKiloPrice = setSellKiloPrice;
-
     // Reflects the active mode on the form: buttons, quantity wording, price field.
     let sellModeUiSignature = null;
+
+    // Net profit of the sale on screen, from the two gram prices:
+    // (سعر غرام البيع − سعر غرام الشراء) × عدد الغرامات المباعة.
+    function updateSellGramProfitHint(product) {
+        const hint = document.getElementById('sellGramProfitHint');
+        if (!hint) return;
+        const sale = getGramSale(product, parseFloat(getElemVal('sellProdQty')) || 1);
+        if (!product || !sale || !sale.valid) { setElemText('sellGramProfitHint', ''); return; }
+        const costPerGram = gramCostPriceOf(product);
+        if (costPerGram <= 0) {
+            setElemText('sellGramProfitHint',
+                `الغرامات المباعة: ${sale.gramsSold} غ — سجّل «سعر الغرام الواحد للشراء» لهذا المنتج ليُحسب صافي الربح.`);
+            return;
+        }
+        const margin = Number((sale.pricePerGram - costPerGram).toFixed(4));
+        setElemText('sellGramProfitHint',
+            `صافي الربح = (${sale.pricePerGram} − ${costPerGram}) دج/غ × ${sale.gramsSold} غ = ${Number(sale.profit).toLocaleString()} دج` +
+            (margin < 0 ? ' ⚠️ البيع بخسارة!' : ''));
+    }
+
     function syncSellUnitModeUI(product) {
         // Weighed products and dose products both get the per-kilo option.
         const canSellKilo = isKiloSaleProduct(product);
@@ -6118,8 +6198,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const modeNote = document.getElementById('sellUnitModeNote');
         if (modeNote) {
             modeNote.textContent = isDose
-                ? 'اختر البيع بالدوزة أو بالكيلو، ثم اختر السعر العادي أو سعر الغرام لهذه البيعة. 1 كغ = 1000 غرام.'
-                : 'اختر «البيع بالكيلو» ثم السعر العادي أو سعر الغرام لهذه البيعة.';
+                ? 'اختر البيع بالدوزة أو بالكيلو — الثمن يُحسب دائماً من سعر الغرام. 1 كغ = 1000 غرام.'
+                : 'اختر «البيع بالكيلو» — الثمن يُحسب دائماً من سعر الغرام.';
         }
 
         const qtyLabel = document.getElementById('sellQtyLabel');
@@ -6130,20 +6210,24 @@ window.addEventListener('unhandledrejection', (event) => {
         if (qtyInput) qtyInput.placeholder = kilo ? '0.5' : '1';
 
         const productId = String(product?.id ?? '');
-        const basisInput = document.getElementById('sellPriceBasis');
-        if (basisInput && basisInput.dataset.productId !== productId) {
-            basisInput.value = defaultGramSalePrice(product) ? 'gram' : 'standard';
-            basisInput.dataset.productId = productId;
-            const gramInput = document.getElementById('sellGramPrice');
-            if (gramInput) gramInput.value = defaultGramSalePrice(product);
-            const doseGramsInput = document.getElementById('sellDoseGrams');
-            if (doseGramsInput) doseGramsInput.value = defaultDoseGrams(product);
+        const gramInput = document.getElementById('sellGramPrice');
+        // Refill with the selling gram price saved on the product whenever the product
+        // changes or the field was cleared by a form reset — but never while the user is
+        // typing a price of their own for this sale.
+        if (gramInput && (gramInput.dataset.productId !== productId ||
+            (gramInput.value === '' && gramInput.dataset.userEdited !== 'true'))) {
+            gramInput.value = defaultGramSalePrice(product);
+            gramInput.dataset.productId = productId;
+            gramInput.dataset.userEdited = 'false';
         }
-        const gramMode = !!product && (kilo || isDose) && basisInput?.value === 'gram';
-        const basisFields = document.getElementById('sellPriceBasisFields');
-        if (basisFields) basisFields.classList.toggle('hidden', !product || (!kilo && !isDose));
-        const standardOption = basisInput?.querySelector('option[value="standard"]');
-        if (standardOption) standardOption.textContent = kilo ? 'السعر العادي للكيلو' : 'السعر العادي للدوزة';
+        const doseGramsInput = document.getElementById('sellDoseGrams');
+        if (doseGramsInput && doseGramsInput.dataset.productId !== productId) {
+            doseGramsInput.value = defaultDoseGrams(product);
+            doseGramsInput.dataset.productId = productId;
+        }
+        // No per-dose and no per-kilo price to choose anymore: dose and weighed sales are
+        // priced by the gram, and the purchase gram price gives the cost.
+        const gramMode = !!product && (kilo || isDose);
         const gramFields = document.getElementById('sellGramPriceFields');
         if (gramFields) gramFields.classList.toggle('hidden', !gramMode);
         document.getElementById('sellDoseGramsFields')?.classList.toggle('hidden', !gramMode || kilo);
@@ -6151,28 +6235,14 @@ window.addEventListener('unhandledrejection', (event) => {
         if (gramHint) gramHint.textContent = kilo
             ? 'الإجمالي = سعر الغرام × 1000 × عدد الكيلوغرامات.'
             : 'الإجمالي = سعر الغرام × غرامات الدوزة × عدد الدوزات. يُخصم نفس عدد الغرامات من المخزون.';
-        const kiloFields = document.getElementById('sellKiloPriceFields');
-        if (kiloFields) kiloFields.classList.toggle('hidden', !kilo || gramMode);
-        const kiloInput = document.getElementById('sellKiloPrice');
-        if (kiloInput) {
-            if (!kilo) {
-                kiloInput.value = '';
-                kiloInput.dataset.productId = '';
-                kiloInput.dataset.userEdited = 'false';
-            } else if (kiloInput.dataset.productId !== productId) {
-                // Prefilled with the kilo price saved on the product; it can still be changed for this sale.
-                kiloInput.value = defaultKiloSalePrice(product);
-                kiloInput.dataset.productId = productId;
-                kiloInput.dataset.userEdited = 'false';
-            }
-        }
-        const stockUnitBadge = document.getElementById('sellKiloStockUnit');
+        const stockUnitBadge = document.getElementById('sellGramStockUnit');
         if (stockUnitBadge && product) {
             const spec = parseWeightSpec(product.weight);
-            stockUnitBadge.textContent = isDose
-                ? `الخصم: 1 كغ = 1000 ${spec.unitLabel}`
-                : `الخصم من المخزون: ${spec.unitLabel}`;
+            stockUnitBadge.textContent = kilo
+                ? (isDose ? 'الخصم: 1 كغ = 1000 غرام' : `الخصم من المخزون: ${spec.unitLabel}`)
+                : 'الخصم: غرام';
         }
+        updateSellGramProfitHint(product);
 
         // Rebuild the quick buttons only when the mode or the product actually changes,
         // so typing a weight/price does not churn the DOM on every keystroke.
@@ -6180,9 +6250,6 @@ window.addEventListener('unhandledrejection', (event) => {
         if (signature !== sellModeUiSignature) {
             sellModeUiSignature = signature;
             renderSellQtyPresets(kilo);
-            const kiloQuickWrap = document.getElementById('sellKiloQuickPrices');
-            if (kiloQuickWrap) kiloQuickWrap.innerHTML = '';
-            if (kilo) renderSellKiloQuickPrices(product);
         }
         return kilo;
     }
@@ -6199,10 +6266,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const kilo = syncSellUnitModeUI(product);
         if (typeof updateStockInfoDisplay === 'function') updateStockInfoDisplay();
         if (typeof window.updateProductCreditSplit === 'function') window.updateProductCreditSplit();
-        if (kilo) {
-            const priceInput = document.getElementById(getElemVal('sellPriceBasis') === 'gram' ? 'sellGramPrice' : 'sellKiloPrice');
-            priceInput?.focus();
-        }
+        if (kilo) document.getElementById('sellGramPrice')?.focus();
     }
     window.setSellUnitMode = setSellUnitMode;
 
@@ -6216,20 +6280,12 @@ window.addEventListener('unhandledrejection', (event) => {
 
     function getProductSalePriceDetails(product) {
         if (isGramModeActive(product)) {
-            const gram = resolveGramSale({ product, mode: isKiloModeActive(product) ? 'kilo' : 'dose',
-                qty: 1, pricePerGram: getElemVal('sellGramPrice'), gramsPerDose: getElemVal('sellDoseGrams') });
+            const kiloMode = isKiloModeActive(product);
+            const gram = resolveGramSale({ product, mode: kiloMode ? 'kilo' : 'dose',
+                qty: 1, pricePerGram: getElemVal('sellGramPrice'), gramsPerDose: getElemVal('sellDoseGrams'),
+                costPerGram: gramCostPriceOf(product) });
             return { unitPrice: gram.valid ? gram.total : 0, isCustom: true,
-                isKilo: isKiloModeActive(product), isGram: true, valid: gram.valid };
-        }
-        if (isKiloModeActive(product)) {
-            const rawPrice = getSellKiloPrice();
-            const pricePerKg = Number(rawPrice);
-            return {
-                unitPrice: Number.isFinite(pricePerKg) ? pricePerKg : 0,
-                isCustom: true,
-                isKilo: true,
-                valid: String(rawPrice).trim() !== '' && Number.isFinite(pricePerKg) && pricePerKg > 0
-            };
+                isKilo: kiloMode, isGram: true, valid: gram.valid };
         }
         const priceInput = document.getElementById('sellCustomPrice');
         const productId = String(product?.id ?? '');
@@ -6265,12 +6321,6 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         if (sellUnitModeProductId !== String(product.id)) {
             sellUnitModeProductId = String(product.id);
-            const kiloPriceInput = document.getElementById('sellKiloPrice');
-            if (kiloPriceInput) {
-                kiloPriceInput.value = defaultKiloSalePrice(product);
-                kiloPriceInput.dataset.productId = String(product.id);
-                kiloPriceInput.dataset.userEdited = 'false';
-            }
         }
         const kiloMode = syncSellUnitModeUI(product);
         const isBoxProduct = isSealedBoxProduct(product);
@@ -6289,7 +6339,6 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         const qty = parseFloat(getElemVal('sellProdQty')) || 1;
         const currentStock = Number(product.stock || 0);
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         const weightSpec = parseWeightSpec(product.weight);
 
         // Automatic calculation based on measurement/weight — in kilo mode the sold
@@ -6297,7 +6346,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const gramSale = getGramSale(product, qty);
         const deduction = gramSale ? (gramSale.valid ? gramSale.stockDeduction : 0)
             : kiloMode ? resolveKiloStockDeduction(product, qty, weightSpec)
-            : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+            : resolveUnitStockDeduction(product, qty);
         const priceDetails = getProductSalePriceDetails(product);
         const unitPrice = priceDetails.valid ? priceDetails.unitPrice : Number(product.price || 0);
         const hasPrice = (!kiloMode && !gramSale) || priceDetails.valid;
@@ -6320,17 +6369,28 @@ window.addEventListener('unhandledrejection', (event) => {
         stockInfo.className = `text-xs font-bold p-2.5 rounded-xl border ${locColor}`;
         const weightBadge = product.weight ? ` <span class="text-[10px] text-indigo-700 font-bold">(${product.weight})</span>` : '';
         const totalLine = (totalPrice === null)
-            ? `<span>إجمالي المبلغ: <strong class="text-emerald-700 font-extrabold">${gramSale ? 'أدخل سعر الغرام ووزن الدوزة الصحيح' : 'أدخل سعر الكيلو'}</strong></span>`
+            ? `<span>إجمالي المبلغ: <strong class="text-emerald-700 font-extrabold">${gramSale ? 'أدخل سعر الغرام ووزن الدوزة الصحيح' : 'أدخل سعراً صحيحاً'}</strong></span>`
             : `<span>إجمالي المبلغ: <strong class="${kiloMode || gramSale ? 'text-emerald-700' : 'text-blue-700'} font-extrabold">${totalPrice} دج</strong> ${gramSale ? `(${escapeHTML(String(getElemVal('sellGramPrice')))} دج/غ × ${gramSale.gramsSold} غ)` : `(${unitWord}: ${unitPrice} دج${kiloMode ? ' / كغ' : ''})`}</span>`;
+        // Net profit of the sale on screen, straight from the two gram prices.
+        const gramCost = gramCostPriceOf(product);
+        const profitLine = (gramSale && gramSale.valid && gramCost > 0)
+            ? `<div class="mt-1 flex items-center justify-between text-[11px] border-t ${kiloMode ? 'border-emerald-200/60' : 'border-blue-200/60'} pt-1">
+                   <span>التكلفة: <strong class="font-extrabold text-slate-700">${Number(gramSale.cost).toLocaleString()} دج</strong> <span class="text-[10px] text-indigo-700 font-black">(${gramCost} دج/غ)</span></span>
+                   <span>صافي الربح: <strong class="font-extrabold ${Number(gramSale.profit) < 0 ? 'text-red-600' : 'text-blue-700'}">${Number(gramSale.profit).toLocaleString()} دج</strong></span>
+               </div>`
+            : ((gramSale && gramSale.valid)
+                ? `<div class="mt-1 text-[10px] text-amber-700 font-bold border-t ${kiloMode ? 'border-emerald-200/60' : 'border-blue-200/60'} pt-1">سجّل «سعر الغرام الواحد للشراء» لهذا المنتج ليُحسب صافي الربح.</div>`
+                : '');
         stockInfo.innerHTML = `
             <div class="flex items-center justify-between">
                 <span>موقع المخزن: <strong class="font-extrabold">${locName}</strong>${weightBadge}</span>
-                <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock}</strong></span>
+                <span>المتوفر بـ Stock 1: <strong class="font-extrabold">${currentStock} ${stockUnitWord(product)}</strong></span>
             </div>
             <div class="mt-1 flex items-center justify-between text-[11px] opacity-90 border-t ${kiloMode ? 'border-emerald-200/60' : 'border-blue-200/60'} pt-1">
-                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction}${deductionUnit ? ' ' + deductionUnit : ''})</span></span>
+                <span>المتبقي بعد الخصم: <strong class="${rem < 0 ? 'text-red-600 font-black' : 'text-slate-800 font-extrabold'}">${rem} ${stockUnitWord(product)}</strong> <span class="text-[10px] text-indigo-700 font-black">(الخصم: ${deduction}${deductionUnit ? ' ' + deductionUnit : ''})</span></span>
                 ${totalLine}
             </div>
+            ${profitLine}
         `; } window.updateStockInfoDisplay = updateStockInfoDisplay;
 
     // Current sale total for the selected product/qty/custom price (used by the credit split preview).
@@ -6379,12 +6439,13 @@ window.addEventListener('unhandledrejection', (event) => {
         if (isCredit) window.updateProductCreditSplit();
     };
     window.toggleProductSaleCreditFields();
-    ['sellProdId', 'sellProdQty', 'sellCustomPrice', 'sellKiloPrice', 'sellPriceBasis', 'sellGramPrice', 'sellDoseGrams'].forEach(id => {
+    ['sellProdId', 'sellProdQty', 'sellCustomPrice', 'sellGramPrice', 'sellDoseGrams'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.addEventListener('input', () => window.updateProductCreditSplit()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
     });
-    // Keep the live stock/total panel in sync while the per-kilo price is typed.
-    ['sellKiloPrice', 'sellGramPrice', 'sellDoseGrams'].forEach(id =>
+    // Keep the live stock/total panel (and the net profit line) in sync while the
+    // selling gram price or the dose weight is typed.
+    ['sellGramPrice', 'sellDoseGrams'].forEach(id =>
         document.getElementById(id)?.addEventListener('input', function() {
             this.dataset.userEdited = 'true';
             updateStockInfoDisplay();
@@ -6489,24 +6550,21 @@ window.addEventListener('unhandledrejection', (event) => {
             showErrorToast('يرجى تحديد كمية صحيحة يدوياً');
             return; }
 
-        const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
         const gramSale = getGramSale(product, qty);
         if (gramSale && !gramSale.valid) {
             showErrorToast(gramSaleError(gramSale));
             document.getElementById(gramSale.error === 'invalid_grams' ? 'sellDoseGrams' : 'sellGramPrice')?.focus();
             return;
         }
-        const kiloSale = isKiloModeActive(product)
-            ? (gramSale || resolveKiloSale({ product, qtyKg: qty, pricePerKg: getSellKiloPrice() }))
-            : null;
+        // In kilo mode the price always comes from the selling gram price.
+        const kiloSale = isKiloModeActive(product) ? gramSale : null;
+        if (isKiloModeActive(product) && !kiloSale) {
+            showErrorToast('يرجى إدخال سعر الغرام الواحد عند البيع لهذه البيعة');
+            document.getElementById('sellGramPrice')?.focus();
+            return;
+        }
         const doseGramSale = gramSale && !kiloSale ? gramSale : null;
-        if (kiloSale && !kiloSale.valid) {
-            showErrorToast(kiloSale.error === 'invalid_price'
-                ? 'يرجى إدخال سعر الكيلو لهذه البيعة (أكبر من صفر)'
-                : 'يرجى إدخال وزن صحيح بالكيلو (مثال: 0.5 = نصف كيلو)');
-            document.getElementById(kiloSale.error === 'invalid_price' ? 'sellKiloPrice' : 'sellProdQty')?.focus();
-            return; }
-        let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+        let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : resolveUnitStockDeduction(product, qty);
         let salePrice;
         if (kiloSale) {
             salePrice = kiloSale.pricePerKg;
@@ -6528,7 +6586,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const stockLocName = isStock2 ? 'مخزون 2 (Stock 2)' : 'مخزون 1 (Stock 1)';
 
         if (Number(product.stock || 0) < stockDeduction) {
-            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
+            showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction} ${stockUnitWord(product)}) من المخزون ولكن المتوفر في ${stockLocName} هو (${product.stock || 0}) فقط!`);
             return; }
 
         let saleTotal = gramSale ? gramSale.total : kiloSale ? kiloSale.total : Number((salePrice * qty).toFixed(2));
@@ -6560,7 +6618,7 @@ window.addEventListener('unhandledrejection', (event) => {
             stockDeduction: stockDeduction,
             unitMode: kiloSale ? 'kilo' : doseGramSale ? 'dose_gram' : 'unit',
             ...(kiloSale ? { qtyUnit: 'kg', pricePerKg: kiloSale.pricePerKg } : {}),
-            ...(gramSale ? { priceBasis: 'gram', pricePerGram: gramSale.pricePerGram, gramsSold: gramSale.gramsSold } : {}),
+            ...(gramSale ? { priceBasis: 'gram', pricePerGram: gramSale.pricePerGram, costPerGram: gramSale.costPerGram || 0, gramsSold: gramSale.gramsSold } : {}),
             ...(doseGramSale ? { qtyUnit: 'dose', gramsPerDose: doseGramSale.gramsPerDose } : {}),
             price: salePrice,
             cost: saleCost, total: saleTotal,
@@ -6576,6 +6634,12 @@ window.addEventListener('unhandledrejection', (event) => {
             window.saveFirebaseSectionItem('products', product);
         }
         saveState(); this.reset();
+        // The reset clears the gram price typed for this sale: mark the fields untouched
+        // again so the next sale of the same product is prefilled from the product itself.
+        ['sellGramPrice', 'sellDoseGrams'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.dataset.userEdited = 'false';
+        });
         sellUnitMode = 'unit'; sellUnitModeProductId = '';
         syncSellUnitModeUI(null);
         if (typeof window.toggleProductSaleCreditFields === 'function') window.toggleProductSaleCreditFields();
@@ -9599,25 +9663,21 @@ window.addEventListener('unhandledrejection', (event) => {
             const coachInput = document.getElementById('sellCoachName');
             const coachVal = coachName || ((coachInput && coachInput.value.trim()) ? coachInput.value.trim() : 'عام');
 
-            const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(product.weight) : null;
             const gramSale = getGramSale(product, qty);
             if (gramSale && !gramSale.valid) {
                 showErrorToast(gramSaleError(gramSale));
                 document.getElementById(gramSale.error === 'invalid_grams' ? 'sellDoseGrams' : 'sellGramPrice')?.focus();
                 return false;
             }
-            const kiloSale = isKiloModeActive(product)
-                ? (gramSale || resolveKiloSale({ product, qtyKg: qty, pricePerKg: getSellKiloPrice() }))
-                : null;
-            const doseGramSale = gramSale && !kiloSale ? gramSale : null;
-            if (kiloSale && !kiloSale.valid) {
-                showErrorToast(kiloSale.error === 'invalid_price'
-                    ? 'يرجى إدخال سعر الكيلو لهذه البيعة (أكبر من صفر)'
-                    : 'يرجى إدخال وزن صحيح بالكيلو (مثال: 0.5 = نصف كيلو)');
-                document.getElementById(kiloSale.error === 'invalid_price' ? 'sellKiloPrice' : 'sellProdQty')?.focus();
+            // In kilo mode the price always comes from the selling gram price.
+            const kiloSale = isKiloModeActive(product) ? gramSale : null;
+            if (isKiloModeActive(product) && !kiloSale) {
+                showErrorToast('يرجى إدخال سعر الغرام الواحد عند البيع لهذه البيعة');
+                document.getElementById('sellGramPrice')?.focus();
                 return false;
             }
-            let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : ((weightVal && weightVal > 0) ? (qty * weightVal) : qty);
+            const doseGramSale = gramSale && !kiloSale ? gramSale : null;
+            let stockDeduction = gramSale ? gramSale.stockDeduction : kiloSale ? kiloSale.stockDeduction : resolveUnitStockDeduction(product, qty);
             let salePrice;
             if (kiloSale) {
                 salePrice = kiloSale.pricePerKg;
@@ -9636,7 +9696,7 @@ window.addEventListener('unhandledrejection', (event) => {
             let unitLabel = kiloSale ? ' (بالكيلو)' : doseGramSale ? ' (دوزة بالغرام)' : '';
 
             if (currentStock < stockDeduction) {
-                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction}${kiloSale ? ' ' + kiloSale.stockUnitLabel : ''}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
+                showErrorToast(`الكمية المطلوبة تتطلب خصم (${stockDeduction} ${stockUnitWord(product)}) من المخزون وغير متوفرة في Stock 1 (المتوفر: ${currentStock})`);
                 return false;
             }
 
@@ -9682,7 +9742,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 stockDeduction: stockDeduction,
                 unitMode: kiloSale ? 'kilo' : doseGramSale ? 'dose_gram' : 'unit',
                 ...(kiloSale ? { qtyUnit: 'kg', pricePerKg: kiloSale.pricePerKg } : {}),
-                ...(gramSale ? { priceBasis: 'gram', pricePerGram: gramSale.pricePerGram, gramsSold: gramSale.gramsSold } : {}),
+                ...(gramSale ? { priceBasis: 'gram', pricePerGram: gramSale.pricePerGram, costPerGram: gramSale.costPerGram || 0, gramsSold: gramSale.gramsSold } : {}),
                 ...(doseGramSale ? { qtyUnit: 'dose', gramsPerDose: doseGramSale.gramsPerDose } : {}),
                 price: salePrice,
                 cost: saleCost,
@@ -9729,10 +9789,11 @@ window.addEventListener('unhandledrejection', (event) => {
             // Restore this product's saved price after each quick sale, rather than
             // accidentally reusing an override typed for the previous transaction.
             sellUnitMode = 'unit';
-            const basisInput = document.getElementById('sellPriceBasis');
-            if (basisInput) basisInput.value = defaultGramSalePrice(product) ? 'gram' : 'standard';
             const gramInput = document.getElementById('sellGramPrice');
-            if (gramInput) gramInput.value = defaultGramSalePrice(product);
+            if (gramInput) {
+                gramInput.value = defaultGramSalePrice(product);
+                gramInput.dataset.userEdited = 'false';
+            }
             const doseGramsInput = document.getElementById('sellDoseGrams');
             if (doseGramsInput) doseGramsInput.value = defaultDoseGrams(product);
             if (typeof updateSellProductDropdown === 'function') updateSellProductDropdown();
@@ -9790,9 +9851,10 @@ window.addEventListener('unhandledrejection', (event) => {
                         return;
                     }
 
-                    // Products priced by the gram require an explicit dose/kilo choice.
-                    // Never let a barcode silently charge the old per-piece catalog price.
-                    if (getSellUnitMode() === 'kilo' || normalizeGramPrice(prodStock1.gramPrice) > 0) {
+                    // Dose and weighed products are priced by the gram, so they always need
+                    // an explicit dose/kilo choice. Never let a barcode silently charge the
+                    // old per-piece catalog price.
+                    if (getSellUnitMode() === 'kilo' || isKiloSaleProduct(prodStock1)) {
                         const sellProductSelect = document.getElementById('sellProdId');
                         if (sellProductSelect) sellProductSelect.value = String(prodStock1.id);
                         updateStockInfoDisplay();
@@ -9807,7 +9869,6 @@ window.addEventListener('unhandledrejection', (event) => {
                     const qtyInput = document.getElementById('sellProdQty');
                     const chosenQty = (qtyInput && parseFloat(qtyInput.value) > 0) ? parseFloat(qtyInput.value) : 1;
 
-                    const weightValBarcode = (typeof parseProductWeight === 'function') ? parseProductWeight(prodStock1.weight) : null;
                     const gramBarcodeSale = getGramSale(prodStock1, chosenQty);
                     if (gramBarcodeSale && !gramBarcodeSale.valid) {
                         showErrorToast(gramSaleError(gramBarcodeSale));
@@ -9816,10 +9877,10 @@ window.addEventListener('unhandledrejection', (event) => {
                         return;
                     }
                     const requiredStockBarcode = gramBarcodeSale ? gramBarcodeSale.stockDeduction :
-                        (weightValBarcode && weightValBarcode > 0) ? (chosenQty * weightValBarcode) : chosenQty;
+                        resolveUnitStockDeduction(prodStock1, chosenQty);
 
                     if (Number(prodStock1.stock || 0) < requiredStockBarcode) {
-                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
+                        showErrorToast(`الكمية المتوفرة في Stock 1 (${prodStock1.stock} ${stockUnitWord(prodStock1)}) أقل من الكمية المطلوب خصمها (${requiredStockBarcode})!`);
                         await closeBarcodeCamera();
                         isProcessingBarcode = false;
                         return;
@@ -9856,7 +9917,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     isProcessingBarcode = false;
                     return;
                 } else if (prodStock2) {
-                    showErrorToast(`عفواً! المنتج (${prodStock2.name}) متوفر في المستودع (Stock 2) فقط (${prodStock2.stock} قطعة). لا يمكن البيع المباشر من المستودع، يرجى تحويل الكمية إلى Stock 1 أولاً.`);
+                    showErrorToast(`عفواً! المنتج (${prodStock2.name}) متوفر في المستودع (Stock 2) فقط (${prodStock2.stock} ${stockUnitWord(prodStock2)}). لا يمكن البيع المباشر من المستودع، يرجى تحويل الكمية إلى Stock 1 أولاً.`);
                     await closeBarcodeCamera();
                     isProcessingBarcode = false;
                     return;
@@ -10275,11 +10336,14 @@ window.addEventListener('unhandledrejection', (event) => {
            }
            const currentStock = Number(p.stock || 0);
            const isOutOfStock = currentStock <= 0;
-           const isLowStock = currentStock < 5;
+           // Gram-priced products hold grams, so "low" is less than one dose/package.
+           const stockWord = stockUnitWord(p);
+           const lowStockLimit = isGramPricedProduct(p) ? gramsPerUnit(p) : 5;
+           const isLowStock = currentStock < lowStockLimit;
 
            let stockStatusBadge = '';
            if (isOutOfStock) {
-               stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-red-100 text-red-800 border border-red-300 px-2 py-0.5 rounded-md font-bold shadow-2xs"><svg class="w-3 h-3 text-red-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg><span>نفذ المخزون (0 قطعة)</span></span>`;
+               stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-red-100 text-red-800 border border-red-300 px-2 py-0.5 rounded-md font-bold shadow-2xs"><svg class="w-3 h-3 text-red-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg><span>نفذ المخزون (0 ${stockUnitWord(p)})</span></span>`;
            } else if (isLowStock) {
                stockStatusBadge = `<span class="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-md font-extrabold animate-pulse shadow-xs"><svg class="w-3.5 h-3.5 text-amber-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg><span>تنبيه: مخزون منخفض (&lt; 5 قطع)</span></span>`;
            }
@@ -10292,8 +10356,8 @@ window.addEventListener('unhandledrejection', (event) => {
                : (isLowStock ? '<div class="absolute left-0 top-0 bottom-0 w-2.5 bg-amber-500 animate-pulse"></div>' : '');
 
            const stockQtyDisplay = isOutOfStock
-               ? '<strong class="text-red-600 font-black">0 قطعة (منتهي)</strong>'
-               : (isLowStock ? `<strong class="text-amber-800 font-black bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 inline-flex items-center gap-1"><span>⚠️</span><span>${currentStock} قطع فقط</span></strong>` : `<strong class="text-slate-800">${currentStock}</strong>`);
+               ? `<strong class="text-red-600 font-black">0 ${stockWord} (منتهي)</strong>`
+               : (isLowStock ? `<strong class="text-amber-800 font-black bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 inline-flex items-center gap-1"><span>⚠️</span><span>${currentStock} ${stockWord} فقط</span></strong>` : `<strong class="text-slate-800">${currentStock} ${stockWord}</strong>`);
 
            return `
            <div id="product-card-${p.id}" data-product-id="${p.id}" data-barcode="${p.barcode || ''}" class="transition-all duration-300 flex justify-between items-center p-3.5 border ${cardClass} rounded-xl mb-2.5 shadow-sm relative overflow-hidden">
@@ -10308,7 +10372,7 @@ window.addEventListener('unhandledrejection', (event) => {
                    </div>
                    <div class="text-xs text-slate-500 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                        <span>سعر البيع: <strong class="text-slate-800">${parseFloat(p.price) || 0} دج</strong></span>
-                       ${normalizeGramPrice(p.gramPrice) ? `<span class="text-emerald-700 font-bold">سعر الغرام: ${Number(p.gramPrice)} دج/غ${isDoseProduct(p) ? ` · الدوزة ${defaultDoseGrams(p)} غ` : ''}</span>` : ''}
+                       ${(gramCostPriceOf(p) || gramSalePriceOf(p)) ? `<span class="text-emerald-700 font-bold">الغرام: شراء ${gramCostPriceOf(p) || 0} دج/غ · بيع ${gramSalePriceOf(p) || 0} دج/غ${isDoseProduct(p) ? ` · الدوزة ${defaultDoseGrams(p)} غ` : ''}</span>` : ''}
                        <span class="text-slate-300">|</span>
                        <span>سعر الشراء: <span class="text-slate-700 font-semibold">${parseFloat(p.cost) || 0} دج</span></span>
                        <span class="text-slate-300">|</span>
@@ -10365,8 +10429,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (sale.prodId && appState.products) {
                 const prod = appState.products.find(p => p.id === sale.prodId);
                 if (prod) {
-                    const weightVal = (typeof parseProductWeight === 'function') ? parseProductWeight(prod.weight) : null;
-                    const stockToRestore = Number(sale.stockDeduction) || ((weightVal && weightVal > 0) ? (Number(sale.qty || 1) * weightVal) : Number(sale.qty || 1));
+                    const stockToRestore = Number(sale.stockDeduction) || resolveUnitStockDeduction(prod, Number(sale.qty || 1));
                     prod.stock = Number(prod.stock || 0) + stockToRestore;
                     if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('products', prod);
                 }
