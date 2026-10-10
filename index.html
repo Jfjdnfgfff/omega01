@@ -890,19 +890,20 @@
                                   <option value="stock1">Stock 1 فقط (صالة البيع)</option>
                                   <option value="stock2">Stock 2 فقط (المستودع)</option>
                               </select> </div>
-                          <div>
+                          <div id="prodCostField">
                               <label class="block text-[10px] text-slate-500 mb-1 font-bold">التكلفة (سعر الشراء)</label>
                               <input type="number" id="prodCost" required placeholder="0" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 bg-slate-50">
-                          </div> <div>
+                          </div> <div id="prodPriceField">
                               <label id="prodPriceLabel" class="block text-[10px] text-slate-500 mb-1 font-bold">السعر (سعر البيع)</label>
                               <input type="number" id="prodPrice" required placeholder="0" class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500 bg-slate-50">
-                              </div> <div id="prodKiloPriceField" class="hidden">
-                              <label class="block text-[10px] text-emerald-700 mb-1 font-bold">سعر الكيلو (⚖️ للبيع بالكيلو)</label>
-                              <input type="number" id="prodKiloPrice" min="0" step="any" placeholder="0" class="w-full border border-emerald-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 bg-emerald-50/40">
-                          </div>
+                              </div>
                           <div id="prodGramPriceField" class="hidden">
-                              <label for="prodGramPrice" class="block text-[10px] text-emerald-700 mb-1 font-bold">سعر الغرام الواحد (دج) — للدوزة والكيلو</label>
+                              <label for="prodGramPrice" class="block text-[10px] text-emerald-700 mb-1 font-bold">سعر الغرام الواحد للشراء (دج)</label>
                               <input type="number" id="prodGramPrice" min="0.0001" step="any" inputmode="decimal" placeholder="مثال: 4 دج للغرام" class="w-full border border-emerald-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 bg-emerald-50/40">
+                          </div>
+                          <div id="prodGramSalePriceField" class="hidden">
+                              <label for="prodGramSalePrice" class="block text-[10px] text-emerald-700 mb-1 font-bold">سعر الغرام الواحد عند البيع (دج)</label>
+                              <input type="number" id="prodGramSalePrice" min="0.0001" step="any" inputmode="decimal" placeholder="مثال: 6 دج للغرام" class="w-full border border-emerald-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 bg-emerald-50/40">
                           </div>
                           <div id="prodDoseGramsField" class="hidden">
                               <label for="prodDoseGrams" class="block text-[10px] text-emerald-700 mb-1 font-bold">وزن الدوزة الواحدة (غرام)</label>
@@ -914,7 +915,33 @@
                               </label>
                               <input type="date" id="prodExpiryDate" class="w-full bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 outline-none focus:border-blue-500">
                           </div> </div>
-                      <!-- Dual Stock Quantity Section (Stock 1 & Stock 2 simultaneously) -->
+                      <!-- Gram pricing summary: both unit prices and the net profit are computed
+                            from the two gram prices, so nothing here is typed by hand. -->
+                       <div id="prodGramSummary" class="hidden p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 shadow-2xs space-y-1.5">
+                           <div class="flex items-center justify-between text-[11px] font-extrabold text-emerald-950">
+                               <span class="flex items-center gap-1.5">
+                                   <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                                   <span>محسوب تلقائياً من سعر الغرام</span>
+                               </span>
+                               <span id="prodGramSummaryUnit" class="text-[10px] font-black text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-200">الدوزة</span>
+                           </div>
+                           <div class="grid grid-cols-3 gap-2 text-center">
+                               <div class="bg-white/80 rounded-xl border border-emerald-100 px-2 py-1.5">
+                                   <div class="text-[9px] font-bold text-slate-500">التكلفة <span id="prodGramSummaryUnitCost">للدوزة</span></div>
+                                   <div id="prodGramSummaryCost" class="text-sm font-black text-slate-800" dir="ltr">0 دج</div>
+                               </div>
+                               <div class="bg-white/80 rounded-xl border border-emerald-100 px-2 py-1.5">
+                                   <div class="text-[9px] font-bold text-slate-500">سعر البيع <span id="prodGramSummaryUnitPrice">للدوزة</span></div>
+                                   <div id="prodGramSummaryPrice" class="text-sm font-black text-emerald-700" dir="ltr">0 دج</div>
+                               </div>
+                               <div class="bg-white/80 rounded-xl border border-emerald-200 px-2 py-1.5">
+                                   <div class="text-[9px] font-bold text-slate-500">صافي الربح</div>
+                                   <div id="prodGramSummaryProfit" class="text-sm font-black text-blue-700" dir="ltr">0 دج</div>
+                               </div>
+                           </div>
+                           <p id="prodGramSummaryHint" class="text-[10px] text-emerald-800 font-medium">أدخل سعر الغرام للشراء وسعر الغرام عند البيع — التكلفة وسعر البيع وصافي الربح تُحسب وحدها.</p>
+                       </div>
+                       <!-- Dual Stock Quantity Section (Stock 1 & Stock 2 simultaneously) -->
                       <div id="bothStockContainer" class="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
                           <div class="flex items-center justify-between text-xs font-bold text-slate-800">
                               <span class="flex items-center gap-1.5">
@@ -1111,30 +1138,18 @@
                               <input type="number" id="sellCustomPrice" min="0.01" step="0.01" inputmode="decimal" placeholder="أدخل سعر البيع" class="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm font-black text-slate-800 bg-white outline-none focus:border-blue-500">
                               <p class="text-[10px] text-blue-800 font-medium">السعر الافتراضي هو سعر المنتج المسجل؛ تغييره هنا يؤثر على هذه البيعة فقط.</p>
                           </div>
-                          <div id="sellPriceBasisFields" class="hidden bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl space-y-1.5">
-                              <label for="sellPriceBasis" class="block text-[10px] text-emerald-900 font-extrabold">طريقة حساب الثمن لهذه البيعة</label>
-                              <select id="sellPriceBasis" onchange="window.updateStockInfoDisplay(); window.updateProductCreditSplit()" class="w-full border border-emerald-200 rounded-lg px-3 py-2 text-sm font-bold bg-white text-slate-800">
-                                  <option value="standard">السعر العادي</option>
-                                  <option value="gram">حسب سعر الغرام</option>
-                              </select>
-                          </div>
                           <div id="sellGramPriceFields" class="hidden bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl space-y-2">
-                              <label for="sellGramPrice" class="block text-[10px] text-emerald-900 font-extrabold">سعر الغرام الواحد (دج)</label>
-                              <input type="number" id="sellGramPrice" min="0.0001" step="any" inputmode="decimal" placeholder="مثال: 4 دج للغرام" class="w-full border border-emerald-200 rounded-lg px-3 py-2 text-sm font-black text-slate-800 bg-white outline-none focus:border-emerald-500">
+                              <div class="flex items-center justify-between gap-2">
+                                  <label for="sellGramPrice" class="block text-[10px] text-emerald-900 font-extrabold">سعر الغرام الواحد عند البيع (دج)</label>
+                                  <span id="sellGramStockUnit" class="text-[9px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">الخصم: غرام</span>
+                              </div>
+                              <input type="number" id="sellGramPrice" min="0.0001" step="any" inputmode="decimal" placeholder="مثال: 6 دج للغرام" class="w-full border border-emerald-200 rounded-lg px-3 py-2 text-sm font-black text-slate-800 bg-white outline-none focus:border-emerald-500">
                               <div id="sellDoseGramsFields" class="hidden">
                                   <label for="sellDoseGrams" class="block text-[10px] text-emerald-900 font-extrabold mb-1">وزن الدوزة الواحدة (غرام)</label>
                                   <input type="number" id="sellDoseGrams" min="0.001" step="any" inputmode="decimal" value="50" placeholder="50" class="w-full border border-emerald-200 rounded-lg px-3 py-2 text-sm font-black text-slate-800 bg-white outline-none focus:border-emerald-500">
                               </div>
                               <p id="sellGramPriceHint" class="text-[10px] text-emerald-800 font-medium"></p>
-                          </div>
-                          <div id="sellKiloPriceFields" class="hidden bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl space-y-1.5">
-                              <div class="flex items-center justify-between gap-2">
-                                  <label for="sellKiloPrice" class="block text-[10px] text-emerald-900 font-extrabold">⚖️ سعر الكيلو الواحد لهذه البيعة (دج)</label>
-                                  <span id="sellKiloStockUnit" class="text-[9px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">الخصم: كغ</span>
-                              </div>
-                              <input type="number" id="sellKiloPrice" min="0.01" step="0.01" inputmode="decimal" placeholder="أدخل سعر الكيلو (مثال: 1800)" class="w-full border border-emerald-200 rounded-lg px-3 py-2 text-sm font-black text-slate-800 bg-white outline-none focus:border-emerald-500">
-                              <div class="flex items-center gap-1.5 flex-wrap" id="sellKiloQuickPrices"></div>
-                              <p class="text-[10px] text-emerald-800 font-medium">أنت تحدد السعر في كل بيعة — المبلغ الكلي = الوزن × سعر الكيلو. لا يتغيّر سعر المنتج المسجّل في المخزون.</p>
+                              <p id="sellGramProfitHint" class="text-[10px] text-blue-800 font-extrabold"></p>
                           </div>
                           <div>
                               <label class="block text-[10px] text-slate-600 mb-1 font-bold">طريقة الدفع</label>

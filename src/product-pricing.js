@@ -100,7 +100,11 @@ export function resolveKiloStockDeduction(product, qtyKg, spec) {
 
 // A kilo sale is priced per kilogram with a price chosen at sale time, and it
 // deducts the sold weight from stock instead of whole packages/doses.
-export function resolveKiloSale({ product, qtyKg, pricePerKg } = {}) {
+// `costPerGram` is the purchase price of one gram (سعر الغرام الواحد للشراء): when it
+// is set, the cost of the sale is the grams sold × that price, which is what makes
+// the net profit of a weighed sale exact. Without it the cost falls back to the
+// package purchase price saved on the product.
+export function resolveKiloSale({ product, qtyKg, pricePerKg, costPerGram } = {}) {
     const spec = parseWeightSpec(product?.weight);
     if (!isKiloSaleProduct(product, spec)) {
         return { valid: false, error: 'not_a_kilo_product', spec };
@@ -116,6 +120,7 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg } = {}) {
     }
 
     const stockDeduction = resolveKiloStockDeduction(product, qty, spec);
+    const gramsSold = roundTo(qty * GRAMS_PER_KG, 3);
     // Cost follows the same denominator as the stock deduction, so selling a part of
     // a package costs the matching part of the package purchase price.
     const unitCost = Number(product?.cost || 0);
@@ -128,9 +133,13 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg } = {}) {
     const costPerStockUnit = (!isDose && Number.isFinite(packSize) && packSize > 0)
         ? unitCost / packSize
         : unitCost;
-    const cost = isDose
-        ? roundTo(unitCost * qty, 2)
-        : roundTo(costPerStockUnit * stockDeduction, 2);
+    const gramCost = normalizeGramPrice(costPerGram);
+    const cost = gramCost > 0
+        ? roundTo(gramCost * gramsSold, 2)
+        : (isDose
+            ? roundTo(unitCost * qty, 2)
+            : roundTo(costPerStockUnit * stockDeduction, 2));
+    const total = roundTo(price * qty, 2);
 
     return {
         valid: true,
@@ -140,16 +149,21 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg } = {}) {
         qtyKg: roundTo(qty, 3),
         pricePerKg: roundTo(price, 2),
         stockDeduction,
+        gramsSold,
+        costPerGram: gramCost,
         cost,
-        total: roundTo(price * qty, 2),
+        total,
+        profit: roundTo(total - cost, 2),
         qtyUnit: 'kg',
         stockUnitLabel: spec.unitLabel
     };
 }
 
 // Optional per-gram pricing for a dose (e.g. 50 g) or a weighed kilo sale.
+// The entered gram price is the SELLING price of one gram; `costPerGram` is its
+// purchase price, and the difference between the two is the net profit.
 // The entered gram price is never saved as the product's catalog price.
-export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose } = {}) {
+export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose, costPerGram } = {}) {
     const quantity = Number(qty);
     const gramPrice = Number(pricePerGram);
     if (mode !== 'kilo' && (mode !== 'dose' || !isDoseProduct(product))) {
@@ -162,20 +176,32 @@ export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose
     if (pricePerGram === '' || pricePerGram === null || pricePerGram === undefined ||
         !Number.isFinite(gramPrice) || gramPrice <= 0) return { valid: false, error: 'invalid_price' };
     if (mode === 'kilo') {
-        const kiloSale = resolveKiloSale({ product, qtyKg: quantity, pricePerKg: gramPrice * GRAMS_PER_KG });
+        const kiloSale = resolveKiloSale({
+            product, qtyKg: quantity, pricePerKg: gramPrice * GRAMS_PER_KG, costPerGram
+        });
         if (!kiloSale.valid) return kiloSale;
         return { ...kiloSale, pricePerGram: gramPrice, priceBasis: 'gram', gramsSold: roundTo(quantity * GRAMS_PER_KG, 3) };
     }
     const grams = Number(gramsPerDose);
     if (gramsPerDose === '' || gramsPerDose === null || gramsPerDose === undefined ||
         !Number.isFinite(grams) || grams <= 0) return { valid: false, error: 'invalid_grams' };
+    const gramsSold = roundTo(grams * quantity, 3);
+    const gramCost = normalizeGramPrice(costPerGram);
+    const total = roundTo(gramsSold * gramPrice, 2);
+    // With a purchase price per gram the cost is the exact weight sold × that price;
+    // otherwise fall back to the package cost saved on the product.
+    const cost = gramCost > 0
+        ? roundTo(gramCost * gramsSold, 2)
+        : roundTo(Number(product?.cost || 0) * quantity, 2);
     return {
         valid: true, error: '', priceBasis: 'gram', pricePerGram: gramPrice,
-        gramsPerDose: grams, gramsSold: roundTo(grams * quantity, 3),
-        stockDeduction: roundTo(grams * quantity, 3), stockUnitLabel: 'غرام',
+        gramsPerDose: grams, gramsSold,
+        stockDeduction: gramsSold, stockUnitLabel: 'غرام',
         pricePerUnit: roundTo(grams * gramPrice, 2),
-        total: roundTo(grams * quantity * gramPrice, 2),
-        cost: roundTo(Number(product.cost || 0) * quantity, 2),
+        total,
+        costPerGram: gramCost,
+        cost,
+        profit: roundTo(total - cost, 2),
         qtyUnit: 'dose'
     };
 }
@@ -205,9 +231,72 @@ export function normalizeGramPrice(value) {
     return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
+// Prefill of the SELLING gram price (سعر الغرام الواحد عند البيع) for this product.
+// The purchase gram price is no longer used as a selling price, so a product saved
+// before this field existed simply has no prefill.
 export function defaultGramSalePrice(product) {
+    const price = normalizeGramPrice(product?.gramSalePrice);
+    return price > 0 ? String(price) : '';
+}
+
+// Prefill of the PURCHASE gram price (سعر الغرام الواحد للشراء) for this product.
+export function defaultGramCostPrice(product) {
     const price = normalizeGramPrice(product?.gramPrice);
     return price > 0 ? String(price) : '';
+}
+
+// Purchase / selling price of one gram saved on the product (0 = not set).
+export function gramCostPriceOf(product) { return normalizeGramPrice(product?.gramPrice); }
+export function gramSalePriceOf(product) { return normalizeGramPrice(product?.gramSalePrice); }
+
+// How many grams one sale unit of the product holds: one dose for a dose product,
+// the measured package for a weighed product (kg converted to grams). 0 when the
+// product is not priced by the gram.
+export function gramsPerUnit(product, spec) {
+    const weightSpec = spec || parseWeightSpec(product?.weight);
+    if (isDoseProduct(product, weightSpec)) {
+        const grams = Number(product?.doseGrams);
+        return (Number.isFinite(grams) && grams > 0) ? roundTo(grams, 3) : 0;
+    }
+    if (isWeightSaleProduct(product, weightSpec)) {
+        const pack = Number(weightSpec.value);
+        if (!Number.isFinite(pack) || pack <= 0) return 0;
+        return roundTo(weightSpec.isGrams ? pack : pack * GRAMS_PER_KG, 3);
+    }
+    return 0;
+}
+
+// Dose and weighed products are the ones priced by the gram, as long as the weight
+// of one sale unit is known.
+export function isGramPricedProduct(product, spec) {
+    return isKiloSaleProduct(product, spec) && gramsPerUnit(product, spec) > 0;
+}
+
+// Both per-unit prices of a gram-priced product, derived from the two gram prices:
+//   التكلفة للدوزة/العلبة = سعر غرام الشراء × غرامات الوحدة
+//   سعر البيع للدوزة/العلبة = سعر غرام البيع × غرامات الوحدة
+// and the net profit is the difference between them.
+export function deriveUnitPricesFromGrams({ product, costPerGram, salePerGram, spec } = {}) {
+    const perUnit = gramsPerUnit(product, spec);
+    const cost = normalizeGramPrice(costPerGram);
+    const sale = normalizeGramPrice(salePerGram);
+    if (perUnit <= 0) {
+        return { valid: false, error: 'no_unit_grams', gramsPerUnit: 0, cost: 0, price: 0, profit: 0 };
+    }
+    if (cost <= 0) {
+        return { valid: false, error: 'invalid_cost_gram', gramsPerUnit: perUnit, cost: 0, price: 0, profit: 0 };
+    }
+    if (sale <= 0) {
+        return { valid: false, error: 'invalid_sale_gram', gramsPerUnit: perUnit, cost: roundTo(cost * perUnit, 2), price: 0, profit: 0 };
+    }
+    return {
+        valid: true,
+        error: '',
+        gramsPerUnit: perUnit,
+        cost: roundTo(cost * perUnit, 2),
+        price: roundTo(sale * perUnit, 2),
+        profit: roundTo((sale - cost) * perUnit, 2)
+    };
 }
 
 export function defaultDoseGrams(product) {

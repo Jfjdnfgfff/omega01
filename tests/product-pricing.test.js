@@ -6,6 +6,7 @@ import {
     isWeightSaleProduct,
     isDoseProduct,
     isKiloSaleProduct,
+    isGramPricedProduct,
     stockUnitsPerKg,
     resolveKiloStockDeduction,
     resolveKiloSale,
@@ -14,7 +15,10 @@ import {
     defaultKiloSalePrice,
     normalizeGramPrice,
     defaultGramSalePrice,
-    defaultDoseGrams
+    defaultGramCostPrice,
+    defaultDoseGrams,
+    gramsPerUnit,
+    deriveUnitPricesFromGrams
 } from '../src/product-pricing.js';
 
 test('box sales can use a per-sale price override while keeping the catalog default intact', () => {
@@ -218,11 +222,86 @@ test('a product saves fractional gram pricing and a dose weight to prefill both 
     assert.equal(normalizeGramPrice(''), 0);
     assert.equal(normalizeGramPrice('-5'), 0);
     assert.equal(normalizeGramPrice('bad'), 0);
-    const product = { category: 'doses', gramPrice: normalizeGramPrice('4'), doseGrams: 50 };
-    assert.equal(defaultGramSalePrice(product), '4');
+    const product = {
+        category: 'doses',
+        gramPrice: normalizeGramPrice('4'),
+        gramSalePrice: normalizeGramPrice('6'),
+        doseGrams: 50
+    };
+    assert.equal(defaultGramCostPrice(product), '4');
+    assert.equal(defaultGramSalePrice(product), '6');
     assert.equal(defaultDoseGrams(product), '50');
-    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, gramsPerDose: defaultDoseGrams(product), pricePerGram: defaultGramSalePrice(product) }).total, 200);
-    assert.equal(resolveGramSale({ product, mode: 'kilo', qty: 1, pricePerGram: defaultGramSalePrice(product) }).total, 4000);
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 1, gramsPerDose: defaultDoseGrams(product), pricePerGram: defaultGramSalePrice(product) }).total, 300);
+    assert.equal(resolveGramSale({ product, mode: 'kilo', qty: 1, pricePerGram: defaultGramSalePrice(product) }).total, 6000);
+    // A product saved before the selling gram price existed has no prefill for it:
+    // its old `gramPrice` is the purchase price, never a selling price.
+    assert.equal(defaultGramSalePrice({ category: 'doses', gramPrice: 4 }), '');
+    assert.equal(defaultGramCostPrice({ category: 'doses', gramPrice: 4 }), '4');
     assert.equal(defaultGramSalePrice({}), '');
+    assert.equal(defaultGramCostPrice({}), '');
     assert.equal(defaultDoseGrams({}), '50');
+});
+
+test('the two gram prices give the cost, the selling price and the net profit of one dose', () => {
+    const product = { category: 'doses', weight: 'الكمية (Doza) - 30 دوزة', doseGrams: 50 };
+    const derived = deriveUnitPricesFromGrams({ product, costPerGram: '4', salePerGram: '6' });
+
+    assert.equal(derived.valid, true);
+    assert.equal(derived.gramsPerUnit, 50);
+    assert.equal(derived.cost, 200);
+    assert.equal(derived.price, 300);
+    assert.equal(derived.profit, 100);
+    // A missing gram price is reported instead of silently saving a zero price.
+    assert.equal(deriveUnitPricesFromGrams({ product, costPerGram: '', salePerGram: '6' }).error, 'invalid_cost_gram');
+    assert.equal(deriveUnitPricesFromGrams({ product, costPerGram: '4', salePerGram: '' }).error, 'invalid_sale_gram');
+    // A sale below the purchase price is still computed, it is simply a loss.
+    assert.equal(deriveUnitPricesFromGrams({ product, costPerGram: 6, salePerGram: 4 }).profit, -100);
+});
+
+test('a weighed product is priced per gram over the whole package weight', () => {
+    const kgPack = { weight: 'الوزن - 2.5kg' };
+    const gramPack = { weight: 'الوزن - 500g' };
+    const box = { category: 'boxes', weight: '' };
+
+    assert.equal(gramsPerUnit(kgPack), 2500);
+    assert.equal(gramsPerUnit(gramPack), 500);
+    assert.equal(isGramPricedProduct(kgPack), true);
+    assert.equal(isGramPricedProduct({ category: 'doses', weight: 'الكمية (Doza) - 30 دوزة', doseGrams: 50 }), true);
+    // Without a dose weight there is nothing to price by the gram yet.
+    assert.equal(isGramPricedProduct({ category: 'doses', weight: '' }), false);
+    assert.equal(isGramPricedProduct(box), false);
+    assert.equal(deriveUnitPricesFromGrams({ product: kgPack, costPerGram: 4, salePerGram: 6 }).price, 15000);
+});
+
+test('a dose sale priced by the gram charges the selling gram price and costs the purchase one', () => {
+    const product = { category: 'doses', weight: 'الكمية (Doza) - 30 دوزة', cost: 150, price: 300, stock: 2000 };
+
+    const sale = resolveGramSale({ product, mode: 'dose', qty: 2, gramsPerDose: 50, pricePerGram: 6, costPerGram: 4 });
+
+    assert.equal(sale.valid, true);
+    assert.equal(sale.gramsSold, 100);
+    assert.equal(sale.total, 600);
+    assert.equal(sale.cost, 400);
+    assert.equal(sale.profit, 200);
+    assert.equal(sale.costPerGram, 4);
+    // Without a purchase gram price the recorded package cost is still used.
+    assert.equal(resolveGramSale({ product, mode: 'dose', qty: 2, gramsPerDose: 50, pricePerGram: 6 }).cost, 300);
+});
+
+test('a kilo sale priced by the gram costs the grams sold times the purchase gram price', () => {
+    const product = { category: 'doses', weight: 'الكمية (Doza) - 60 دوزة', cost: 9000, stock: 2400 };
+
+    const sale = resolveGramSale({ product, mode: 'kilo', qty: 0.5, pricePerGram: 6, costPerGram: 4 });
+
+    assert.equal(sale.valid, true);
+    assert.equal(sale.gramsSold, 500);
+    assert.equal(sale.stockDeduction, 500);
+    assert.equal(sale.total, 3000);
+    assert.equal(sale.cost, 2000);
+    assert.equal(sale.profit, 1000);
+
+    const weighed = resolveKiloSale({ product: { weight: 'الوزن - 2.5kg', cost: 10000, stock: 10 }, qtyKg: 0.5, pricePerKg: 6000, costPerGram: 4 });
+    assert.equal(weighed.total, 3000);
+    assert.equal(weighed.cost, 2000);
+    assert.equal(weighed.profit, 1000);
 });
