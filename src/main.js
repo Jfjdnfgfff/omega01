@@ -12318,43 +12318,75 @@ window.addEventListener('unhandledrejection', (event) => {
                 } } catch (err) { showErrorToast('فشل قراءة الملف: ' + err.message);
             } }; reader.readAsText(file); };
     // Auto-sync debounce trigger: upload automatically to Drive if user enabled auto-sync and has connected account
-    let gdriveAutoSyncTimer = null; window.triggerGoogleDriveAutoSync = function() {
+    // Auto-sync: debounce, then upload a COMPLETE backup through the same resumable,
+    // retrying uploader the manual button uses.
+    //
+    // Two invariants that must not be broken here:
+    //  1. Never call saveState() — saveState() itself calls triggerGoogleDriveAutoSync()
+    //     (see the saveState body), so persisting from inside the callback would
+    //     reschedule another sync forever.
+    //  2. Never upload the raw in-memory appState: it only holds the realtime window
+    //     that has been loaded, so buildFullBackupState() reads every v2/ section.
+    const GDRIVE_AUTOSYNC_DEBOUNCE_MS = 30000; // 30s debounce to save quotas
+    let gdriveAutoSyncTimer = null;
+    let gdriveAutoSyncRunning = false;
+
+    function buildAutoBackupFileName(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        const timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '-');
+        return `OmegaGym_AutoBackup_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${timeStr}.json`;
+    }
+
+    // Writes the sync outcome where the modal reads it. Deliberately does NOT persist.
+    function setAutoSyncStatus(status) {
+        if (!appState.gdriveSettings) appState.gdriveSettings = {};
+        appState.gdriveSettings.lastSyncStatus = status;
+    }
+
+    window.triggerGoogleDriveAutoSync = function() {
         if (!appState.gdriveSettings?.autoSync) return;
-        const token = getValidGDriveToken(); if (!token) return; // Silent if not authenticated
+        if (!getValidGDriveToken()) return; // Silent if not authenticated
         if (gdriveAutoSyncTimer) clearTimeout(gdriveAutoSyncTimer);
         gdriveAutoSyncTimer = setTimeout(async () => {
-            try { const now = new Date(); const dateStr = now.toISOString().slice(0, 10);
-                const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }).replace(':', '-');
-                const fileName = `OmegaGym_AutoBackup_${dateStr}_${timeStr}.json`;
-                const backupData = { version: '3.0',
-                    appName: 'Omega Gym Management',
-                    lastModified: now.toISOString(),
-                    state: appState }; const fileContent = JSON.stringify(backupData, null, 2);
-                const boundary = '-------314159265358979323846';
-                const delimiter = "\r\n--" + boundary + "\r\n";
-                const close_delim = "\r\n--" + boundary + "--";
-                const metadata = { name: fileName,
-                    mimeType: 'application/json',
-                    description: 'نسخة احتياطية تلقائية لنظام OMEGA GYM'
-                }; const body = delimiter +
-                    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-                    JSON.stringify(metadata) +
-                    delimiter +
-                    'Content-Type: application/json\r\n\r\n' +
-                    fileContent + close_delim;
-                const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-                    method: 'POST', headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': `multipart/related; boundary=${boundary}`
-                    }, body: body }); if (res.ok) {
-                    const data = await res.json();
-                    if (appState.gdriveSettings) {
-                        appState.gdriveSettings.lastSyncTime = now.toISOString();
-                        appState.gdriveSettings.lastSyncStatus = 'متزامن تلقائياً في Google Drive';
-                        appState.gdriveSettings.lastFileId = data.id;
-                    } console.log('Background Google Drive auto-sync completed:', data.id);
-                } } catch (e) { console.warn('Auto Google Drive sync notice:', e);
-            } }, 30000); // 30s debounce to save quotas
+            if (gdriveAutoSyncRunning) return; // never run two uploads at once
+            gdriveAutoSyncRunning = true;
+            try {
+                // Re-validate before uploading: a token that expired while the app was
+                // idle would otherwise fail with a bare 401.
+                const token = await ensureGDriveToken();
+                if (!token) {
+                    setAutoSyncStatus('انتهى الاتصال بـ Google Drive — اضغط لتسجيل الدخول');
+                    updateGoogleDriveUI();
+                    return;
+                }
+                const now = new Date();
+                const { state, failedSections } = await window.buildFullBackupState();
+                const content = JSON.stringify({
+                    version: '3.0', appName: 'Omega Gym Management',
+                    lastModified: now.toISOString(), autoBackup: true, state
+                }, null, 2);
+                const fileName = buildAutoBackupFileName(now);
+                const file = await uploadBackupToDrive(token, fileName, content);
+                if (!appState.gdriveSettings) appState.gdriveSettings = {};
+                appState.gdriveSettings.lastSyncTime = now.toISOString();
+                appState.gdriveSettings.lastFileId = file.id;
+                appState.gdriveSettings.lastFileName = file.name || fileName;
+                setAutoSyncStatus(failedSections.length
+                    ? `متزامن تلقائياً، لكن تعذر قراءة: ${failedSections.join('، ')}`
+                    : 'متزامن تلقائياً في Google Drive');
+                updateGoogleDriveUI();
+                console.log('Background Google Drive auto-sync completed:', file.id);
+            } catch (e) {
+                // A silent failure here means the user believes they are backed up
+                // while no copy exists, so the reason is surfaced in the modal.
+                console.warn('Auto Google Drive sync notice:', e);
+                if (e && e.status === 401) gdriveClearToken();
+                setAutoSyncStatus('فشل الحفظ التلقائي: ' + gdriveErrorMessage(e));
+                updateGoogleDriveUI();
+            } finally {
+                gdriveAutoSyncRunning = false;
+            }
+        }, GDRIVE_AUTOSYNC_DEBOUNCE_MS);
     };
     // ==========================================
     // 2. CATEGORY PROFITS & INCOME ANALYTICS

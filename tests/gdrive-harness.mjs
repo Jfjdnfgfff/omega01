@@ -60,7 +60,8 @@ class FakeStorage {
     get length() { return this.m.size; }
 }
 
-function makeFakeXHR(sink) {
+// `net` lets a test force the Drive endpoints to fail: net.uploadStatus = 403.
+function makeFakeXHR(sink, net) {
     return class FakeXHR {
         constructor() {
             this.method = null; this.url = null;
@@ -77,18 +78,73 @@ function makeFakeXHR(sink) {
                 kind: 'xhr', method: this.method, url: this.url,
                 headers: this._headers, body, xhr: this,
             });
-            this.status = 201;
-            this.responseText = JSON.stringify({ id: 'fake-file-id', name: 'uploaded.json' });
+            this.status = net.uploadStatus;
+            this.responseText = net.uploadStatus >= 200 && net.uploadStatus < 300
+                ? JSON.stringify(net.uploadBody)
+                : JSON.stringify({ error: { message: 'forced failure' } });
             this._respHeaders = {};
             if (typeof this.onload === 'function') this.onload();
         }
     };
 }
 
-export function createEnv() {
+// Real-enough Firebase stubs. main.js runs its own init shortly after load and
+// assigns window.firebaseDB / firebaseRef / firebaseGet from these, so they must
+// return usable objects — otherwise `buildFullBackupState()` sees no database and
+// silently falls back to whatever is in memory. Tests drive `firebase.data`.
+function makeFirebaseStubs(firebase) {
+    const snap = (value) => ({
+        exists: () => value !== null && value !== undefined,
+        val: () => value,
+    });
+    return {
+        'firebase/app': {
+            initializeApp: () => ({ name: 'stub-app' }),
+        },
+        'firebase/database': {
+            getDatabase: () => firebase.db,
+            ref: (_db, path) => ({ path: String(path) }),
+            get: async (r) => {
+                const path = String(r?.path ?? '');
+                if (typeof firebase.onGet === 'function') return firebase.onGet(path);
+                return snap(Object.hasOwn(firebase.data, path) ? firebase.data[path] : null);
+            },
+            set: async () => undefined,
+            update: async () => undefined,
+            push: () => ({ key: 'stub-key', set: async () => undefined }),
+            remove: async () => undefined,
+            onValue: () => () => {},
+            off: () => {},
+            query: (q) => q,
+            limitToLast: (q) => q, limitToFirst: (q) => q,
+            startAt: (q) => q, endAt: (q) => q,
+            startAfter: (q) => q, endBefore: (q) => q,
+            orderByKey: (q) => q, orderByChild: (q) => q, equalTo: (q) => q,
+        },
+    };
+}
+
+export function createEnv(options = {}) {
     const xhrCalls = [];
     const fetchCalls = [];
     const elements = new Map();
+
+    // Test-controlled Drive endpoint behaviour.
+    const net = {
+        uploadStatus: 201,
+        uploadBody: { id: 'fake-file-id', name: 'uploaded.json' },
+    };
+
+    // Test-controlled Realtime Database contents, keyed by path (e.g. 'v2/products').
+    const firebase = {
+        db: { name: 'stub-database' },
+        data: {},
+        onGet: null,
+    };
+
+    // The auto-sync debounce is a real 30 s timer in the app. Tests may shrink it
+    // so the suite does not have to sleep, without changing what is exercised.
+    const debounceMs = options.autoSyncDebounceMs;
 
     // The sandbox object IS the global object, and `window` is an alias for it,
     // exactly like a browser. Anything main.js assigns to `window.x` therefore
@@ -153,7 +209,9 @@ export function createEnv() {
         },
         history: { pushState() {}, replaceState() {} },
         console,
-        setTimeout, clearTimeout,
+        setTimeout: (fn, ms, ...args) =>
+            setTimeout(fn, debounceMs !== undefined ? Math.min(Number(ms) || 0, debounceMs) : ms, ...args),
+        clearTimeout,
         // src/main.js:868 starts a perpetual setInterval(); unref it so the Node
         // test process can still exit once the tests are done.
         setInterval: (fn, ms, ...args) => {
@@ -169,7 +227,7 @@ export function createEnv() {
         addEventListener: () => {},
         removeEventListener: () => {},
         fetch: fetchStub,
-        XMLHttpRequest: makeFakeXHR(xhrCalls),
+        XMLHttpRequest: makeFakeXHR(xhrCalls, net),
         Blob: globalThis.Blob,
         TextEncoder: globalThis.TextEncoder,
         TextDecoder: globalThis.TextDecoder,
@@ -197,12 +255,16 @@ export function createEnv() {
 
     return {
         context, sandbox, windowStub: win, documentStub,
-        elements, xhrCalls, fetchCalls,
+        elements, xhrCalls, fetchCalls, net, firebase,
         el: (id) => documentStub.getElementById(id),
         // Sign in as a Google Drive account for the duration of a test.
         signIn() {
             sandbox.sessionStorage.setItem('sm_gdrive_token', 'ya29.fake-token');
             sandbox.sessionStorage.setItem('sm_gdrive_expires_at', String(Date.now() + 3600_000));
+        },
+        // Wait for the debounced auto-sync callback to have run.
+        async flushAutoSync(extra = 40) {
+            await new Promise((r) => setTimeout(r, (debounceMs ?? 0) + extra));
         },
     };
 }
@@ -226,6 +288,8 @@ export async function loadMain(env) {
         importModuleDynamically: async (spec) => import(spec),
     });
 
+    const stubs = makeFirebaseStubs(env.firebase);
+
     await module.link(async (specifier) => {
         if (specifier.startsWith('.')) {
             const target = path.resolve(path.dirname(MAIN_JS), specifier);
@@ -234,8 +298,9 @@ export async function loadMain(env) {
             });
         }
         const names = stubCache.get(specifier) || [];
+        const impl = stubs[specifier] || {};
         return new vm.SyntheticModule(names, function () {
-            for (const n of names) this.setExport(n, () => undefined);
+            for (const n of names) this.setExport(n, impl[n] || (() => undefined));
         }, { identifier: specifier, context: env.context });
     });
 
