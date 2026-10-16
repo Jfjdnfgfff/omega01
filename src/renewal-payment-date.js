@@ -1,6 +1,6 @@
-// Date rules for the payment date of a subscription renewal (تجديد الاشتراك).
-// The cash received is booked in the caisse of the chosen payment day, not in the
-// day the renewal is typed in. No DOM access here, so this also runs under `node --test`.
+// Date rules shared by subscription payment flows (new registrations and renewals).
+// Cash received is booked in the caisse of the chosen payment day, not the day the
+// entry is typed in. No DOM access here, so this also runs under `node --test`.
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -27,9 +27,8 @@ export function isValidDateKey(value) {
         && check.getUTCDate() === day;
 }
 
-// Validates the payment date typed in the renewal form. Today and past days are
-// allowed; future days are not.
-export function resolveRenewalPaymentDate(value, now = new Date()) {
+// Validates a payment date. Today and past days are allowed; future days are not.
+export function resolvePaymentDate(value, now = new Date()) {
     const text = String(value ?? '').trim();
     if (!text) return { ok: false, error: 'missing' };
     if (!isValidDateKey(text)) return { ok: false, error: 'invalid' };
@@ -37,10 +36,10 @@ export function resolveRenewalPaymentDate(value, now = new Date()) {
     return { ok: true, dateKey: text };
 }
 
-// Timestamp stored on the caisse movement for a payment day: that local day, at the
+// Timestamp stored on a caisse movement for a payment day: that local day, at the
 // current local time of day. For today this is simply `now`, so the order of
 // same-day movements is unchanged.
-export function renewalPaymentTimestamp(dateKey, now = new Date()) {
+export function paymentDateTimestamp(dateKey, now = new Date()) {
     if (!isValidDateKey(dateKey)) throw new RangeError(`invalid payment date: ${dateKey}`);
     if (dateKey === localDateKey(now)) return now.toISOString();
     const [year, month, day] = dateKey.split('-').map(Number);
@@ -55,3 +54,7 @@ export function renewalPaymentTimestamp(dateKey, now = new Date()) {
     );
     return stamped.toISOString();
 }
+
+// Backwards-compatible names retained for callers/tests that refer to renewals.
+export const resolveRenewalPaymentDate = resolvePaymentDate;
+export const renewalPaymentTimestamp = paymentDateTimestamp;

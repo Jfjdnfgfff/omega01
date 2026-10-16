@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
     localDateKey,
     isValidDateKey,
+    resolvePaymentDate,
+    paymentDateTimestamp,
     resolveRenewalPaymentDate,
     renewalPaymentTimestamp
 } from '../src/renewal-payment-date.js';
@@ -74,4 +76,39 @@ test('a backdated renewal payment is counted in the caisse of the chosen day onl
     assert.equal(onPaymentDay.transactions.length, 1);
     assert.equal(onRenewalDay.subIncome, 0);
     assert.equal(onRenewalDay.transactions.length, 0);
+});
+
+test('a new member payment is recorded in the caisse date selected in the add-member form', () => {
+    const selectedDate = resolvePaymentDate('2026-10-05', NOW);
+    assert.deepEqual(selectedDate, { ok: true, dateKey: '2026-10-05' });
+
+    const cycleId = 'sub_member_1';
+    const state = {
+        customers: [{
+            id: 'member_1',
+            subscriptionCycleId: cycleId,
+            paymentDate: selectedDate.dateKey,
+            startDate: NOW.toISOString(),
+            paymentStatus: 'paid',
+            price: 2500
+        }],
+        caisseLogs: [{
+            id: `cash_subscription_${cycleId}`,
+            type: 'cash_movement',
+            source: 'subscription',
+            sourceId: cycleId,
+            direction: 'in',
+            amount: 2500,
+            date: paymentDateTimestamp(selectedDate.dateKey, NOW),
+            title: 'اشتراك: test'
+        }]
+    };
+
+    const onSelectedDate = buildCaisseMovements(state, '2026-10-05', localDateKey);
+    const onStartDate = buildCaisseMovements(state, '2026-10-09', localDateKey);
+
+    assert.equal(onSelectedDate.subIncome, 2500);
+    assert.equal(onSelectedDate.transactions.length, 1);
+    assert.equal(onStartDate.subIncome, 0);
+    assert.equal(onStartDate.transactions.length, 0);
 });
