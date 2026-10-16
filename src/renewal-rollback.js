@@ -3,7 +3,7 @@
 const SUBSCRIPTION_FIELDS = [
     'subscriptionCycleId', 'packageId', 'price', 'subscriptionType',
     'status', 'paymentStatus', 'debtAmount', 'startDate', 'endDate',
-    'totalSessions', 'remainingSessions'
+    'totalSessions', 'remainingSessions', 'paymentDate'
 ];
 
 export function snapshotSubscription(customer) {

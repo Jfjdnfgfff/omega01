@@ -3576,6 +3576,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 direction: 'in', amount: subscriptionCashPaid, date: cashPaymentTimestamp,
                 title: `اشتراك: ${custName}`, detail: pkg ? pkg.name : 'اشتراك', sourceLabel: 'الاشتراكات'
             });
+            if (subscriptionCashPaid > 0) {
+                appState.selectedCaisseDate = paymentDateCheck.dateKey;
+                const caisseDateInput = document.getElementById('caisseInspectionDate');
+                if (caisseDateInput) caisseDateInput.value = paymentDateCheck.dateKey;
+                const clotureDateInput = document.getElementById('clotureFormDate');
+                if (clotureDateInput) clotureDateInput.value = paymentDateCheck.dateKey;
+                if (typeof window.renderCaisseView === 'function') window.renderCaisseView();
+            }
             if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'} - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, custPrice);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', newCustomer);
@@ -3599,7 +3607,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (typeof window.toggleDebtFieldView === 'function') window.toggleDebtFieldView();
             closeModal('addCustomerModal');
             const ageMsg = dobValidation.age ? ' (العمر: ' + dobValidation.age + ' سنة)' : '';
-            showSuccessToast('تم إضافة المشترك بنجاح' + ageMsg);
+            showSuccessToast('تم إضافة المشترك بنجاح' + ageMsg + (subscriptionCashPaid > 0 ? ` — ${subscriptionCashPaid.toLocaleString()} دج في صندوق ${paymentDateCheck.dateKey.split('-').reverse().join('/')}` : ''));
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render(); } catch (err) { console.error('Error in handleAddCustomerSubmit:', err);
             showErrorToast('حدث خطأ أثناء إضافة المشترك');
@@ -3670,6 +3678,11 @@ window.addEventListener('unhandledrejection', (event) => {
         } 
         if (customer.endDate && document.getElementById('editEndDate')) { 
             setElemValue('editEndDate', new Date(customer.endDate).toISOString().split('T')[0]);
+        }
+        const editPaymentDateEl = document.getElementById('editPaymentDate');
+        if (editPaymentDateEl) {
+            const pd = customer.paymentDate || (customer.startDate ? new Date(customer.startDate).toISOString().split('T')[0] : '');
+            setElemValue('editPaymentDate', pd || '');
         }
         // Image setup for edit modal
         const imgPreview = document.getElementById('editCustImagePreview');
@@ -3759,6 +3772,15 @@ window.addEventListener('unhandledrejection', (event) => {
         const editEndDateVal = getElemVal('editEndDate');
         if (editStartDateVal) customer.startDate = new Date(editStartDateVal).toISOString();
         if (editEndDateVal) customer.endDate = new Date(editEndDateVal).toISOString();
+        const editPaymentDateVal = getElemVal('editPaymentDate');
+        if (editPaymentDateVal) {
+            const pdCheck = resolvePaymentDate(editPaymentDateVal, new Date());
+            if (!pdCheck.ok) {
+                showErrorToast(pdCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دفع صحيح');
+                return;
+            }
+            customer.paymentDate = pdCheck.dateKey;
+        }
         const extraDays = parseInt(getElemVal('editExtraDays')) || 0;
         if (extraDays > 0 && editSubType !== 'session') {
             const currentEnd = new Date(customer.endDate || new Date());
@@ -4218,6 +4240,14 @@ window.addEventListener('unhandledrejection', (event) => {
             metadata: { customerId: customer.id, previousSubscription,
                 renewalCreditId, renewalDebtAmount: debtAmount }
         });
+        if (renewalCashPaid > 0) {
+            appState.selectedCaisseDate = paymentDateCheck.dateKey;
+            const caisseDateInput = document.getElementById('caisseInspectionDate');
+            if (caisseDateInput) caisseDateInput.value = paymentDateCheck.dateKey;
+            const clotureDateInput = document.getElementById('clotureFormDate');
+            if (clotureDateInput) clotureDateInput.value = paymentDateCheck.dateKey;
+            if (typeof window.renderCaisseView === 'function') window.renderCaisseView();
+        }
 
         // Credit record handling
         if (renewalCreditId) {
@@ -10803,6 +10833,8 @@ window.addEventListener('unhandledrejection', (event) => {
             const priceVal = c.price !== undefined && c.price !== null ? c.price : (pkg && pkg.price ? pkg.price : null);
             const priceSuffix = priceVal !== null ? ` (${priceVal} دج)` : '';
             const expiryStr = formatCustomerExpiry(c);
+            const paymentDateVal = c.paymentDate || (c.startDate ? new Date(c.startDate).toISOString().slice(0, 10) : '');
+            const paymentDateStr = paymentDateVal ? String(paymentDateVal).split('-').reverse().join('/') : 'غير محدد';
             const firstLetter = c.name ? c.name.trim().charAt(0) : '؟';
             const genderLabel = c.gender === 'female' ? 'أنثى' : 'ذكر';
             const avatarHtml = c.imageUrl ? `<img src="${c.imageUrl}" alt="${c.name}" class="w-12 h-12 rounded-full object-cover shrink-0 shadow-sm border border-slate-200">`
@@ -10849,6 +10881,10 @@ window.addEventListener('unhandledrejection', (event) => {
                     <div class="flex items-center justify-between text-xs sm:text-sm">
                         <span class="text-slate-400 font-medium">تنتهي في:</span>
                         <span class="font-bold text-slate-800">${expiryStr}</span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs sm:text-sm">
+                        <span class="text-slate-400 font-medium">تاريخ الدفع:</span>
+                        <span class="font-bold text-slate-800">${paymentDateStr}</span>
                     </div>
                 </div>
 
@@ -10916,6 +10952,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let monthlySubIncome = 0; let yearlySubIncome = 0;
         let totalDebt = 0, activeCount = 0, nearExpiryCount = 0;
         let totalQuickSessionClients = 0; let totalQuickSessionsCount = 0;
+        let monthlyQuickSessionsCount = 0; let monthlyCardioCount = 0; let monthlyMusculationCount = 0;
         // Count and income from quick sessions
         if (Array.isArray(appState.quickSessions)) {
             appState.quickSessions.forEach(qs => {
@@ -10926,6 +10963,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 totalQuickSessionClients += clients;
                 totalQuickSessionsCount += sessions;
                 const qDate = new Date(qs.date || Number(qs.id) || Date.now());
+                if (qDate.getMonth() === currentMonth && qDate.getFullYear() === currentYear) {
+                    monthlyQuickSessionsCount += sessions;
+                    const qsClients = Array.isArray(qs.clients) ? qs.clients : [];
+                    qsClients.forEach(cl => {
+                        if (cl?.activity === 'cardio') monthlyCardioCount++;
+                        else if (cl?.activity === 'musculation') monthlyMusculationCount++;
+                    });
+                }
                 if (qDate.toDateString() === todayStr) {
                     todaySubIncome += p; } if (qDate.getMonth() === currentMonth && qDate.getFullYear() === currentYear) {
                     monthlySubIncome += p; } if (qDate.getFullYear() === currentYear) {
@@ -11056,6 +11101,15 @@ window.addEventListener('unhandledrejection', (event) => {
         setElemText('nearExpiryCount', nearExpiryCount);
         if (document.getElementById('sessionSubscribersCount')) {
             setElemText('sessionSubscribersCount', totalQuickSessionClients);
+        }
+        if (document.getElementById('monthlyQuickSessionsCount')) {
+            setElemText('monthlyQuickSessionsCount', monthlyQuickSessionsCount);
+        }
+        if (document.getElementById('monthlyCardioCount')) {
+            setElemText('monthlyCardioCount', monthlyCardioCount);
+        }
+        if (document.getElementById('monthlyMusculationCount')) {
+            setElemText('monthlyMusculationCount', monthlyMusculationCount);
         }
         // Update new dashboard metrics
         if (document.getElementById('todaySubIncome')) {
