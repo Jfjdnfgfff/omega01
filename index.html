@@ -2977,7 +2977,7 @@
                   <select id="packageIdView" required onchange="updateAddCustomerEndDate()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all"></select>
               </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">سعر الاشتراك (دج)*</label>
-                  <input type="number" id="custPriceView" min="0" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white font-bold text-blue-700 transition-all" placeholder="أدخل السعر بالدينار (مثال: 3000)">
+                  <input type="number" id="custPriceView" min="0" required oninput="updateAddCustomerPaymentDateHint()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white font-bold text-blue-700 transition-all" placeholder="أدخل السعر بالدينار (مثال: 3000)">
               </div>
                <input type="hidden" id="addCustSubscriptionType" value="time">
               <!-- Start and End dates in compact 2-column grid -->
@@ -2992,13 +2992,18 @@
                   </div>
               </div> <div>
                   <label class="block text-xs font-semibold text-slate-500 mb-1.5">حالة الدفع</label>
-                  <select id="paymentStatusView" onchange="toggleDebtFieldView()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all">
+                  <select id="paymentStatusView" onchange="toggleDebtFieldView(); updateAddCustomerPaymentDateHint()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white cursor-pointer transition-all">
                       <option value="paid">تم الدفع بالكامل</option>
                       <option value="credit">كريدي (لم يدفع بعد)</option>
                   </select> </div>
               <div id="debtAmountContainerView" style="display: none;">
                   <label class="block text-xs font-semibold text-slate-700 mb-1.5">المبلغ المتبقي (كريدي) بالدينار</label>
-                  <input type="number" id="debtAmountView" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-slate-800 transition-all" placeholder="مثال: 1000" dir="ltr" style="text-align: right;">
+                  <input type="number" id="debtAmountView" oninput="updateAddCustomerPaymentDateHint()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white text-slate-800 transition-all" placeholder="مثال: 1000" dir="ltr" style="text-align: right;">
+              </div>
+              <div>
+                  <label for="addCustPaymentDate" class="block text-xs font-semibold text-slate-700 mb-1.5">تاريخ دخول المبلغ النقدي إلى الصندوق</label>
+                  <input type="date" id="addCustPaymentDate" required dir="ltr" onchange="updateAddCustomerPaymentDateHint()" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50 focus:bg-white transition-all">
+                  <p id="addCustPaymentDateHint" class="hidden mt-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 border"></p>
               </div>
               <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-100 transition-all mt-6">إضافة المشترك</button>
           </form> </div> </div>

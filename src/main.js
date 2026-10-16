@@ -69,7 +69,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
-  import { resolveRenewalPaymentDate, renewalPaymentTimestamp } from './renewal-payment-date.js';
+  import { resolvePaymentDate, paymentDateTimestamp } from './renewal-payment-date.js';
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
 
   // High-Speed PWA Caching Engine Registration
@@ -2656,11 +2656,19 @@ window.addEventListener('unhandledrejection', (event) => {
             if (dateInput && !dateInput.value) {
                 dateInput.value = new Date().toISOString().split('T')[0];
             } } else if (id === 'addCustomerModal') {
+            const todayKey = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
             const startDateInput = document.getElementById('addCustStartDate');
             if (startDateInput && !startDateInput.value) {
-                startDateInput.value = new Date().toISOString().split('T')[0];
+                startDateInput.value = todayKey;
                 if (typeof updateAddCustomerEndDate === 'function') updateAddCustomerEndDate();
-            } } else if (id === 'staffPayoutsModal') {
+            }
+            const paymentDateInput = document.getElementById('addCustPaymentDate');
+            if (paymentDateInput) {
+                paymentDateInput.max = todayKey;
+                paymentDateInput.value = todayKey;
+            }
+            if (typeof window.updateAddCustomerPaymentDateHint === 'function') window.updateAddCustomerPaymentDateHint();
+        } else if (id === 'staffPayoutsModal') {
             const dateInput = document.getElementById('staffPayoutDate');
             if (dateInput && !dateInput.value) {
                 dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
@@ -3402,7 +3410,40 @@ window.addEventListener('unhandledrejection', (event) => {
             const endDate = new Date(startDate);
             endDate.setDate(startDate.getDate() + duration);
             endDateInput.value = endDate.toISOString().split('T')[0];
-        } }; window.handleAddCustomerSubmit = function(e) {
+        }
+        if (typeof window.updateAddCustomerPaymentDateHint === 'function') window.updateAddCustomerPaymentDateHint();
+    };
+    window.updateAddCustomerPaymentDateHint = function() {
+        const hint = document.getElementById('addCustPaymentDateHint');
+        if (!hint) return;
+        const check = resolvePaymentDate(getElemVal('addCustPaymentDate'), new Date());
+        let tone = '';
+        let text = '';
+        if (!check.ok) {
+            tone = 'text-red-700 bg-red-50 border-red-200';
+            text = check.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل.' : 'يرجى اختيار تاريخ دفع صحيح.';
+        } else {
+            const paymentStatus = getElemVal('paymentStatusView') || 'paid';
+            const price = Number(getElemVal('custPriceView') || 0);
+            const debt = paymentStatus === 'credit' ? Number(getElemVal('debtAmountView') || 0) : 0;
+            const cashPaid = paymentStatus === 'credit' ? Math.max(0, price - debt) : price;
+            const displayDate = check.dateKey.split('-').reverse().join('/');
+            const details = typeof window.calculateCaisseDetails === 'function' ? window.calculateCaisseDetails(check.dateKey) : null;
+            if (cashPaid <= 0) {
+                tone = 'text-slate-700 bg-slate-50 border-slate-200';
+                text = 'لا يوجد مبلغ نقدي مستلم الآن؛ لن تُسجَّل حركة دخل في الصندوق.';
+            } else if (details && details.isClosed) {
+                tone = 'text-amber-800 bg-amber-50 border-amber-200';
+                text = `صندوق يوم ${displayDate} مُغلق. إضافة المبلغ ستغيّر فرق الإغلاق لذلك اليوم.`;
+            } else if (check.dateKey !== getLocalDateString(new Date())) {
+                tone = 'text-blue-800 bg-blue-50 border-blue-200';
+                text = `سيُسجَّل المبلغ النقدي في صندوق يوم ${displayDate}.`;
+            }
+        }
+        hint.textContent = text;
+        hint.className = text ? `mt-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 border ${tone}` : 'hidden';
+    };
+    window.handleAddCustomerSubmit = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         if (e && e.stopPropagation) e.stopPropagation();
         try { const custNameElem = document.getElementById('custNameView');
@@ -3445,6 +3486,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 endDate.setDate(startDate.getDate() + duration);
             } const paymentStatus = getElemVal('paymentStatusView') || 'paid';
             const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('debtAmountView') || 0) : 0;
+            const paymentDateNow = new Date();
+            const paymentDateCheck = resolvePaymentDate(getElemVal('addCustPaymentDate'), paymentDateNow);
+            if (!paymentDateCheck.ok) {
+                showErrorToast(paymentDateCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دفع صحيح');
+                document.getElementById('addCustPaymentDate')?.focus();
+                return false;
+            }
+            const cashPaymentTimestamp = paymentDateTimestamp(paymentDateCheck.dateKey, paymentDateNow);
             const imageUrl = getElemVal('addCustImageUrl') || null;
             if (!Array.isArray(appState.customers)) {
                 appState.customers = appState.customers ? Object.values(appState.customers) : [];
@@ -3462,7 +3511,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 remainingSessions: remainingSessions,
                 attendedSessions: 0,
                 sessionHistory: [],
-                paymentStatus, debtAmount,
+                paymentStatus, debtAmount, paymentDate: paymentDateCheck.dateKey,
                 status: 'active', startDate: startDate.toISOString(),
                 endDate: endDate.toISOString() };
             appState.customers.unshift(newCustomer);
@@ -3471,10 +3520,10 @@ window.addEventListener('unhandledrejection', (event) => {
                 : (paymentStatus === 'credit' ? Math.max(0, Number(custPrice || 0) - Number(debtAmount || 0)) : 0);
             recordCaisseMovement({
                 source: 'subscription', sourceId: newCustomer.subscriptionCycleId,
-                direction: 'in', amount: subscriptionCashPaid, date: new Date().toISOString(),
+                direction: 'in', amount: subscriptionCashPaid, date: cashPaymentTimestamp,
                 title: `اشتراك: ${custName}`, detail: pkg ? pkg.name : 'اشتراك', sourceLabel: 'الاشتراكات'
             });
-            if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'}`, custPrice);
+            if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'} - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, custPrice);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', newCustomer);
             }
@@ -4029,7 +4078,7 @@ window.addEventListener('unhandledrejection', (event) => {
     window.updateRenewPaymentDateHint = function() {
         const hint = document.getElementById('renewPaymentDateHint');
         if (!hint) return;
-        const check = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        const check = resolvePaymentDate(getElemVal('renewPaymentDate'), new Date());
         let tone = '';
         let text = '';
         if (!check.ok) {
@@ -4070,7 +4119,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const debtAmount = paymentStatus === 'credit' ? parseInt(getElemVal('renewDebtAmount') || renewPrice || 0) : 0;
 
         // The payment date is required and cannot be in the future. Check it before the customer record is changed.
-        const paymentDateCheck = resolveRenewalPaymentDate(getElemVal('renewPaymentDate'), new Date());
+        const paymentDateCheck = resolvePaymentDate(getElemVal('renewPaymentDate'), new Date());
         if (!paymentDateCheck.ok) {
             showErrorToast(paymentDateCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دفع صحيح');
             document.getElementById('renewPaymentDate')?.focus();
@@ -4089,6 +4138,7 @@ window.addEventListener('unhandledrejection', (event) => {
         customer.paymentStatus = paymentStatus;
         customer.debtAmount = debtAmount;
         customer.subscriptionCycleId = renewalId;
+        customer.paymentDate = paymentDateCheck.dateKey;
         customer.updatedAt = Date.now();
 
         if (subType === 'session') {
@@ -4108,7 +4158,7 @@ window.addEventListener('unhandledrejection', (event) => {
             : (paymentStatus === 'credit' ? Math.max(0, Number(renewPrice || 0) - Number(debtAmount || 0)) : 0);
         recordCaisseMovement({
             source: 'subscription', sourceId: customer.subscriptionCycleId,
-            direction: 'in', amount: renewalCashPaid, date: renewalPaymentTimestamp(paymentDateCheck.dateKey, new Date()),
+            direction: 'in', amount: renewalCashPaid, date: paymentDateTimestamp(paymentDateCheck.dateKey, new Date()),
             title: `تجديد اشتراك: ${customer.name || 'مشترك'}`,
             detail: pkg ? pkg.name : 'تجديد اشتراك', sourceLabel: 'الاشتراكات',
             allowZero: true, // also track fully unpaid renewals so they can be undone
