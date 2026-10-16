@@ -2958,8 +2958,11 @@ window.addEventListener('unhandledrejection', (event) => {
         const sessInput = document.getElementById('quickSessCount');
         if (sessInput) sessInput.value = '1';
         window.quickSessClientsData = [{ activity: 'musculation', price: '' }];
-        if (typeof window.renderQuickSessClientsUI === 'function') {
-            window.renderQuickSessClientsUI(); }
+        const paymentDateInput = document.getElementById('quickSessPaymentDate');
+        const todayKey = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().slice(0, 10);
+        if (paymentDateInput) { paymentDateInput.value = todayKey; paymentDateInput.max = todayKey; }
+        if (typeof window.renderQuickSessClientsUI === 'function') window.renderQuickSessClientsUI();
+        if (typeof window.renderQuickSessionHistory === 'function') window.renderQuickSessionHistory();
         if (typeof window.openModal === 'function') window.openModal('quickSessionModal');
     }; window.onQuickSessClientCountChange = function(val) {
         if (!Array.isArray(window.quickSessClientsData)) {
@@ -3038,9 +3041,12 @@ window.addEventListener('unhandledrejection', (event) => {
             }); const overallPriceInput = getElemVal('quickSessPrice');
             const price = overallPriceInput !== '' && overallPriceInput !== null && overallPriceInput !== undefined
                 ? Math.max(0, parseInt(overallPriceInput))
-                : totalClientsPrice; if (!Array.isArray(appState.quickSessions)) appState.quickSessions = [];
+                : totalClientsPrice;
+            const paymentDateCheck = resolvePaymentDate(getElemVal('quickSessPaymentDate'), new Date());
+            if (!paymentDateCheck.ok) { showErrorToast(paymentDateCheck.error === 'future' ? 'تاريخ الدفع لا يمكن أن يكون في المستقبل' : 'يرجى اختيار تاريخ دخول المبلغ إلى الصندوق'); return false; }
+            if (!Array.isArray(appState.quickSessions)) appState.quickSessions = [];
             const newQuickSession = { id: Date.now().toString(),
-                date: new Date().toISOString(),
+                date: paymentDateTimestamp(paymentDateCheck.dateKey, new Date()),
                 clientCount: clientCount,
                 sessionCount: sessionCount,
                 price: price, clients: clientsData.map(c => ({ activity: c.activity, price: Number(c.price || 0) }))
@@ -3062,6 +3068,53 @@ window.addEventListener('unhandledrejection', (event) => {
         } catch (err) { console.error('Error in handleQuickSessionSubmit:', err);
             if (typeof showErrorToast === 'function') showErrorToast('حدث خطأ أثناء تسجيل اشتراك الحصة');
         } return false; };
+    window.renderQuickSessionHistory = function() {
+        const container = document.getElementById('quickSessionHistory');
+        if (!container) return;
+        const allSessions = Array.isArray(appState.quickSessions) ? appState.quickSessions : [];
+        const sessions = allSessions.slice(0, 30);
+        const totals = allSessions.reduce((result, session) => {
+            (Array.isArray(session.clients) ? session.clients : []).forEach(client => {
+                if (client?.activity === 'cardio') result.cardio++;
+                else if (client?.activity === 'musculation') result.musculation++;
+            });
+            return result;
+        }, { musculation: 0, cardio: 0 });
+        const totalsContainer = document.getElementById('quickSessionActivityTotals');
+        if (totalsContainer) totalsContainer.innerHTML = `<div class="rounded-lg bg-blue-50 border border-blue-100 px-2 py-1.5 text-center text-[10px] font-bold text-blue-800">Musculation: ${totals.musculation} شخص</div><div class="rounded-lg bg-violet-50 border border-violet-100 px-2 py-1.5 text-center text-[10px] font-bold text-violet-800">Cardio: ${totals.cardio} شخص</div>`;
+        container.innerHTML = sessions.length ? sessions.map(session => {
+            const id = String(session.id || '');
+            const date = getLocalDateString(session.date) || '—';
+            const clients = Array.isArray(session.clients) ? session.clients : [];
+            const musculationCount = clients.filter(client => client?.activity === 'musculation').length;
+            const cardioCount = clients.filter(client => client?.activity === 'cardio').length;
+            return `<div class="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div class="min-w-0"><div class="text-[11px] font-bold text-slate-800">Musculation: ${musculationCount} · Cardio: ${cardioCount} · ${Number(session.sessionCount || 0)} حصص</div>
+                <div class="text-[10px] text-slate-500">${date} · ${Number(session.price || 0).toLocaleString()} دج</div></div>
+                <button type="button" onclick="deleteQuickSession('${id}')" class="shrink-0 rounded-lg bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-600 hover:text-white">حذف</button>
+            </div>`;
+        }).join('') : '<p class="text-[11px] text-slate-500">لا توجد حصص مسجلة بعد.</p>';
+    };
+    window.deleteQuickSession = function(id) {
+        if (!id) return;
+        const session = (appState.quickSessions || []).find(item => String(item.id) === String(id));
+        if (!session) return;
+        const day = getLocalDateString(session.date);
+        promptWithPassword({ title: 'حذف حصة', prompt: `أدخل كلمة المرور لحذف الحصة وإزالة ${Number(session.price || 0).toLocaleString()} دج من صندوق يوم ${day}`, buttonText: 'تأكيد حذف الحصة' }, async () => {
+            const current = (appState.quickSessions || []).find(item => String(item.id) === String(id));
+            if (!current) return;
+            if (window.deleteFirebaseSectionItem) {
+                const deleted = await window.deleteFirebaseSectionItem('quickSessions', current.id, current);
+                if (deleted === false) { showErrorToast('تعذر حذف الحصة من قاعدة البيانات، ولم يتغير الصندوق.'); return; }
+            }
+            appState.quickSessions = (appState.quickSessions || []).filter(item => String(item.id) !== String(id));
+            if (typeof logActivity === 'function') logActivity('customer', 'حذف حصة سريعة', `حذف حصة سريعة بتاريخ ${day} وإزالة ${Number(current.price || 0).toLocaleString()} دج من الصندوق`, Number(current.price || 0));
+            saveState();
+            window.renderQuickSessionHistory();
+            render();
+            showSuccessToast('تم حذف الحصة وإزالة مبلغها من الصندوق بنجاح');
+        });
+    };
 
     // ==========================================
     // قسم مستحقات مدربة الإناث (33% من المشتركين)
@@ -6711,25 +6764,38 @@ window.addEventListener('unhandledrejection', (event) => {
                 : kiloSale ? `⚖️ تم بيع ${qty} كغ من [${product.name}] بسعر ${salePrice} دج/كغ — الإجمالي ${saleTotal.toLocaleString()} دج (خصم ${stockDeduction} ${kiloSale.stockUnitLabel} من ${stockLocName})`
                 : `تم البيع نقداً وخصم (${stockDeduction}) مباشرة من ${stockLocName}`);
         }
-        render(); }); function deleteCustomer(id) {
+        render(); }); async function deleteCustomer(id) {
         if (!id) return;
-        promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, () => {
+        if (typeof window.lazyLoadSection === 'function') await window.lazyLoadSection('caisseLogs');
+        promptWithPassword({ title: 'حذف مشترك', prompt: 'أدخل كلمة المرور لتأكيد حذف المشترك نهائياً', buttonText: 'تأكيد الحذف' }, async () => {
             if (!Array.isArray(appState.customers)) return;
             const deletedCust = appState.customers.find(c => String(c && c.id) === String(id));
-            const custNameStr = deletedCust ? deletedCust.name : id;
+            if (!deletedCust) return;
+            const custNameStr = deletedCust.name || id;
+            const cycleIds = new Set([String(deletedCust.subscriptionCycleId || ''), `sub_${id}`]);
+            const receipts = (Array.isArray(appState.caisseLogs) ? appState.caisseLogs : []).filter(log =>
+                log && log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription' &&
+                (String(log.customerId || '') === String(id) || cycleIds.has(String(log.sourceId || ''))));
+            if (window.deleteFirebaseSectionItem) {
+                for (const receipt of receipts) {
+                    const deleted = await window.deleteFirebaseSectionItem('caisseLogs', receipt.id, receipt);
+                    if (deleted === false) { showErrorToast('تعذر حذف حركة الاشتراك من الصندوق. لم يُحذف المشترك.'); return; }
+                }
+                const deleted = await window.deleteFirebaseSectionItem('customers', id, deletedCust);
+                if (deleted === false) { showErrorToast('تعذر حذف المشترك من قاعدة البيانات. يرجى المحاولة مجدداً.'); return; }
+            }
             if (typeof logActivity === 'function') logActivity('customer', 'حذف مشترك', `حذف المشترك: ${custNameStr}`);
             window.appState.customers = appState.customers.filter(c => String(c && c.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('customers', id);
-            }
-            // Clean up auto-generated credits for this customer
+            const receiptIds = new Set(receipts.map(log => String(log.id)));
+            if (Array.isArray(appState.caisseLogs)) appState.caisseLogs = appState.caisseLogs.filter(log => !log || !receiptIds.has(String(log.id)));
             if (Array.isArray(appState.credits)) {
-                const autoId = 'cr_auto_' + id;
-                window.appState.credits = appState.credits.filter(c => c.id !== autoId);
+                const autoCredits = appState.credits.filter(c => String(c.customerId || '') === String(id) && String(c.id || '').startsWith('cr_auto_'));
+                window.appState.credits = appState.credits.filter(c => !autoCredits.includes(c));
                 if (window.deleteFirebaseSectionItem) {
-                    window.deleteFirebaseSectionItem('credits', autoId);
+                    for (const credit of autoCredits) await window.deleteFirebaseSectionItem('credits', credit.id, credit);
                 }
-            } saveState(); showSuccessToast('تم حذف المشترك بنجاح');
+            }
+            saveState(); showSuccessToast(`تم حذف المشترك ${receipts.length ? 'وحذف مبلغ اشتراكه من الصندوق ' : ''}بنجاح`);
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render();
         }); }
