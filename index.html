@@ -1246,7 +1246,7 @@
                                       <span class="text-slate-300">|</span>
                                       <button type="button" onclick="clearPosFilterDate()" class="text-slate-500 hover:text-slate-800 font-bold">الكل</button>
                                   </div> </div>
-                              <input type="date" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                              <input type="date" id="posFilterDate" onchange="renderSalesList()" class="bg-white border border-slate-200 text-slate-700 px-3 sm:px-3.5 py-1.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                           </div> </div>
                       <div class="space-y-2 h-[calc(100vh-520px)] min-h-[220px] overflow-y-auto pr-2 hide-scrollbar">
                           <div id="salesList"></div>
