@@ -7,7 +7,7 @@
 
 | المشكلة في التقرير | الحل المطبَّق | الأثر المتوقّع |
 | --- | --- | --- |
-| `C8F5ewMw.css` + Google Fonts تحجب العرض | خطوط مستضافة ذاتياً + Critical CSS مضمّن + تحميل الـ CSS الكامل بشكل غير متزامن (Vite plugin) | إزالة ~2–3 طلبات حاجبة لجهة خارجية، FCP أسرع بـ 300–700ms على 4G/3G |
+| `C8F5ewMw.css` + Google Fonts تحجب العرض | خط Tajawal مضمّن Base64 داخل الصفحة (صفر طلبات) + Critical CSS مضمّن + تحميل الـ CSS الكامل بشكل غير متزامن (Vite plugin) | إزالة ~2–3 طلبات حاجبة لجهة خارجية، FCP أسرع بـ 300–700ms على 4G/3G |
 | `firebaseio.com` بحجم نقل كبير وبدون TTL | نوافذ قراءة محدودة + شرح حقيقة أرشفة Firebase + ETag / Edge cache (اختياري) | تقليل النقل بشكل حاسم مع كل إعادة تحميل |
 | `GbT6rcde.js` — JavaScript غير مستخدم | Firebase SDK صار `import()` ديناميكي + تجزئة vendor + `modulePreload.polyfill=false` | الـ JS الحرج: 184KB → 133KB (gzip) |
 | LCP / FCP / TBT | preconnect + preload للخطوط + تقليل العمل في الـ main thread | راجع القسم 4 |
@@ -16,9 +16,9 @@
 
 ## 1) طلبات حجب العرض (Render-Blocking)
 
-### 1.1 الخطوط: من Google Fonts إلى الاستضافة الذاتية
+### 1.1 الخطوط: Tajawal مضمّن داخل الصفحة (Base64) — صفر طلبات شبكة
 
-**قبل** (سلسلة حاجبة: HTML ← CSS خارجي ← ملف الخط):
+**قبل** (سلسلة حاجبة لجهة خارجية: HTML ← CSS من Google ← ملف الخط):
 
 ```html
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -26,29 +26,39 @@
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
 ```
 
-**بعد** — الملفات موجودة في `public/fonts/*.woff2` (عائلة Tajawal، الأوزان 400/500/700،
-مقسمة إلى مجموعتَي محارف `arabic` و`latin`)، وتُعرَّف في `src/style.css`:
-
-```css
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;                       /* النص يظهر فوراً بخط النظام ثم يُستبدل */
-  src: url('/fonts/tajawal-arabic-400-normal.woff2') format('woff2');
-  unicode-range: U+0600-06FF, /* ... */;     /* المتصفح ينزّل المجموعة المطلوبة فقط */
-}
-```
-
-وفي `index.html` نُسبق تحميل الملفين الأهم (نص عادي + عناوين عريضة):
+**بعد** — ملفات `public/fonts/*.woff2` (Tajawal 400/500/700، مجموعتا `arabic`/`latin`)
+تُحوَّل إلى Base64 وتُكتب **داخل `index.html`** في بلوك `<style id="omega-fonts">`:
 
 ```html
-<link rel="preload" href="/fonts/tajawal-arabic-400-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/fonts/tajawal-arabic-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<!-- OMEGA_FONTS_START -->
+<style id="omega-fonts">
+@font-face{font-family:'Tajawal';font-style:normal;font-weight:400;font-display:swap;
+  src:url(data:font/woff2;base64,d09GMgABAAAAACL0...) format('woff2');
+  unicode-range:U+0600-06FF,U+0750-077F,...}
+/* 600 غير متوفّر في Tajawal: الملف 700 يخدم المدى 600–900 */
+@font-face{...font-weight:600 900;src:url(data:font/woff2;base64,...)...}
+</style>
+<!-- OMEGA_FONTS_END -->
 ```
 
-> ملاحظة: `crossorigin` إلزامي مع `preload as="font"` وإلا يُحمَّل الملف مرتين.
-> إن أردت خطاً آخر: `npx @fontsource/...` أو حمّل الـ woff2 وضعَه في `public/fonts`.
+البلوك **مُولَّد آلياً** — لا تُعدّله يدوياً:
+
+```bash
+npm run fonts:embed        # scripts/embed-fonts.js
+```
+
+- لا يوجد أي طلب `fonts.googleapis.com` / `fonts.gstatic.com` ولا أي طلب لملف خط.
+- الخط يظهر من أول إطار (لا FOIT/FOUT) ويعمل أوفلاين لأن الصفحة نفسها تحمله.
+- `unicode-range` ضروري: ملف `arabic` لا يحتوي محارف لاتينية، فبدونه تُعرض الأرقام
+  والأسماء اللاتينية بخط النظام بدل Tajawal.
+
+**الثمن المقاس:** `index.html` من 373KB إلى 452KB (gzip: 57KB → 116KB)، لأن Base64 يضيف
+~33% ولا يقبل الضغط مجدداً. لكن إجمالي النقل في أول زيارة **شبه ثابت**: الخطوط كانت تُنزَّل
+منفصلة (~58KB woff2 غير مضغوط) وأصبحت داخل الصفحة. المكسب: طلبان إلى ثلاثة أقل، وظهور فوري
+للخط، وعمل أوفلاين كامل. الثمن الحقيقي: HTML أكبر يُحلَّل قبل أول رسم، وفقدان كاش مستقل للخطوط.
+على الزيارات المتكررة لا فرق (إعادة تحقق 304 تعيد استخدام HTML المخزّن).
+للعودة إلى الأسلوب الأخف: احذف البلوك بين العلامتين وأعِد `@font-face` مع
+`url('/fonts/tajawal-arabic-400-normal.woff2')` + `preload` (الملفات ما زالت في `public/fonts`).
 
 ### 1.2 Critical CSS مضمّن داخل `<head>`
 
@@ -289,9 +299,10 @@ npm run build && npx vite preview --port 4173
 ### نتائج البناء قبل/بعد (من `vite build`)
 
 ```
-قبل:  index.html 370KB · index CSS 86KB · firebase 232KB (preload حاجب) · zxing 457KB · html2canvas 264KB · app 516KB
-بعد:  index.html 373KB · index CSS 88KB (غير حاجب) · firebase 244KB (ديناميكي) · zxing 457KB (ديناميكي)
-      html2canvas 264KB (ديناميكي) · vendor 4KB · app 516KB  ←  المسار الحرج: فقط app + CSS + خطّان
+قبل:  index.html 370KB · CSS 86KB (حاجب) · firebase 232KB (preload حاجب) · zxing 457KB · html2canvas 264KB · app 516KB
+بعد:  index.html 452KB (يشمل 6 خطوط Base64) · CSS 86KB (غير حاجب) · firebase 244KB (ديناميكي)
+      zxing 457KB (ديناميكي) · html2canvas 264KB (ديناميكي) · app 516KB
+      ← المسار الحرج: index.html + app + CSS فقط (صفر طلبات لجهات خارجية، صفر طلبات خطوط)
 ```
 
 ---
@@ -316,11 +327,13 @@ npm run build && npx vite preview --port 4173
 
 ```
 index.html          ← preconnect/preload + Critical CSS + إزالة Google Fonts
-src/style.css       ← @font-face محلية لـ Tajawal (swap + unicode-range)
+index.html          ← بلوك <style id="omega-fonts"> (Tajawal Base64) — مُولَّد آلياً
+src/style.css       ← أُزيلت @font-face (الخط مضمّن الآن في الصفحة)
 src/main.js         ← تحميل Firebase SDK عبر dynamic import
 vite.config.js      ← async-css plugin + manualChunks + modulePreload.polyfill=false
-public/fonts/*      ← Tajawal woff2 (6 ملفات، ~58KB)
-public/sw.js        ← كاش v5 + الخطوط المحلية
+public/fonts/*      ← Tajawal woff2 (6 ملفات، ~58KB) — مصدر التضمين (احتياطي/بديل)
+scripts/embed-fonts.js ← توليد بلوك الخطوط Base64 داخل index.html
+public/sw.js        ← كاش v6 (أُزيلت خطوط الشبكة من الـ precache)
 vercel.json         ← cache headers + security headers + SPA rewrites  (جديد)
 docs/performance.md ← هذه الوثيقة
 ```

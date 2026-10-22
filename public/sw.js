@@ -1,5 +1,5 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v5';
+const CACHE_NAME = 'omega-gym-v6';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -7,9 +7,7 @@ const STATIC_ASSETS = [
   '/apple-touch-icon.png',
   '/icon-192.png',
   '/icon-512.png',
-  '/icon.svg',
-  '/fonts/tajawal-arabic-400-normal.woff2',
-  '/fonts/tajawal-arabic-700-normal.woff2'
+  '/icon.svg'
 ];
 
 self.addEventListener('install', (event) => {

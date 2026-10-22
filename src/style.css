@@ -1,60 +1,10 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Tajawal — self-hosted (no render-blocking request to fonts.googleapis.com).
-   Files live in /public/fonts and are served with a 1-year immutable cache.
-   Only the subsets actually needed by the page are downloaded by the browser
-   (unicode-range), and font-display:swap keeps text visible during load.
+   Tajawal — الخط مضمّن Base64 داخل index.html (بلوك <style id="omega-fonts">)
+   لتجنّب أي طلب شبكة للخط. لا تُضِف @font-face هنا وإلا سيتكرر التحميل.
+   لإعادة التوليد بعد تغيير ملفات public/fonts:  npm run fonts:embed
    ========================================================================== */
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('/fonts/tajawal-arabic-400-normal.woff2') format('woff2');
-  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
-}
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('/fonts/tajawal-latin-400-normal.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('/fonts/tajawal-arabic-500-normal.woff2') format('woff2');
-  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
-}
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('/fonts/tajawal-latin-500-normal.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-/* 600 is not provided by Tajawal; 700 covers bold headings (closest match). */
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 600 900;
-  font-display: swap;
-  src: url('/fonts/tajawal-arabic-700-normal.woff2') format('woff2');
-  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
-}
-@font-face {
-  font-family: 'Tajawal';
-  font-style: normal;
-  font-weight: 600 900;
-  font-display: swap;
-  src: url('/fonts/tajawal-latin-700-normal.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
 
 /* Custom Base Styles & Mobile Responsiveness */
 *, *::before, *::after { box-sizing: border-box; }
