@@ -120,7 +120,8 @@ function asyncCssPlugin() {
 - `/fonts/*` → سنة كاملة + `immutable` + `Access-Control-Allow-Origin: *`
 - `/sw.js` → `max-age=0, must-revalidate` (حتى يصل تحديث الـ PWA فوراً)
 - `/manifest.json` → ساعة واحدة
-- الصور (`png/svg/ico/webp/jpg`) → أسبوع + `stale-while-revalidate`
+- الصور الثابتة (`/icon-192.png`, `/favicon.png`, `/apple-touch-icon.png`, …) → أسبوع + `stale-while-revalidate`
+  (مذكورة ملفاً ملفاً: Vercel لا يقبل تعبيراً نمطياً مثل `/.*\\.(png|svg)` في `source`)
 - بقية المسارات → رؤوس أمان (`nosniff`, `Referrer-Policy`, `X-DNS-Prefetch-Control`)
   و`Permissions-Policy` تسمح بالكاميرا لأن ماسح الباركود يستخدمها.
 
