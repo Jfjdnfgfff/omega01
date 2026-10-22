@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { minifyFirebase } from './scripts/vite-minify-firebase.js';
 import tailwindcss from '@tailwindcss/vite';
 
 import { inlineSmallStylesheet } from './scripts/vite-inline-styles.js';
@@ -7,6 +8,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     inlineSmallStylesheet(),
+    minifyFirebase(),
   ],
   server: {
     host: '0.0.0.0',

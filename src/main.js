@@ -1,3 +1,4 @@
+import { createRealtimeSections, readSectionWithLegacy } from './realtime-sections.js';
 
 // Safe DOM helpers to prevent null property errors
 function getElem(id) {
@@ -19,7 +20,8 @@ function setElemHTML(id, html) {
 }
 function setElemText(id, txt) {
     const el = getElem(id);
-    if (el) el.innerText = (txt !== undefined && txt !== null) ? txt : "";
+    const text = (txt !== undefined && txt !== null) ? String(txt) : "";
+    if (el && el.textContent !== text) el.textContent = text;
 }
 function setElemDisplay(id, display) {
     const el = getElem(id);
@@ -331,6 +333,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (items.length === 0) { window.salesHistoryComplete = true; break; }
         window.applyFirebaseSectionUpdate('sales', items, 'Silent Sales History Pager');
         if (items.length < pageSize) { window.salesHistoryComplete = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
     } catch (e) {
       console.warn('Silent sales history completion note:', e);
@@ -340,106 +343,61 @@ window.addEventListener('unhandledrejection', (event) => {
     }
   };
 
+  const startupSections = ['stats', 'privacy', 'products', 'customers', 'sales',
+    'quickSessions', 'expenses', 'credits', 'suppliers', 'supplierTransactions',
+    'packages', 'staffPayouts', 'coachAbsences', 'caisseLogs'];
+  const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
+    : `v2/${name === 'caisseLogs' ? 'caisse' : name}`;
+  const legacyPath = name => ['stats', 'privacy'].includes(name) ? null : name;
+  let realtimeSections = null;
+
+  function applySectionSnapshot(name, data) {
+    if (name === 'privacy') {
+      if (typeof data === 'boolean') {
+        window.applyFirebaseSectionUpdate('appState', { hideFinances: data }, 'Realtime privacy');
+        scheduleRender();
+      }
+    } else if (data != null) {
+      const payload = name === 'stats' ? data : Object.entries(data)
+        .filter(([, item]) => item && typeof item === 'object')
+        .map(([key, item]) => ({ ...item, id: item.id ?? key, _rtdbKey: key }));
+      if (window.applyFirebaseSectionUpdate(name, payload, `Section ${name}`) === false) {
+        throw new Error(`Unable to apply Firebase section: ${name}`);
+      }
+      if (name === 'sales' && payload.length < window.SALES_REALTIME_WINDOW) {
+        window.salesHistoryComplete = true;
+      }
+    } else if (name === 'sales') {
+      window.salesHistoryComplete = true;
+    }
+    window.firebaseLoadedSections[name] = true;
+  }
+
   window.lazyLoadSection = async function(sectionName, force = false) {
     if (!sectionName) return [];
-    if (window.firebaseLoadedSections[sectionName] && !force) {
+    // Await initialization itself, not an arbitrary 3-second race against the
+    // network. Navigation and startup share the same listener/first snapshot.
+    await window.__firebaseInitPromise;
+    if (realtimeSections) {
+      await realtimeSections.load(sectionName);
       return window.appState[sectionName] || [];
     }
-    if (window.firebaseLoadingPromises[sectionName]) {
-      return window.firebaseLoadingPromises[sectionName];
-    }
-
-    const loadPromise = (async () => {
-      try {
-        const v2Sec = sectionName === 'caisseLogs' ? 'caisse' : sectionName;
-        let items = [];
-
-        const mapFirebaseItem = (k, v) => ({
-          ...v,
-          id: (v && v.id !== undefined && v.id !== null) ? v.id : k,
-          _rtdbKey: k
-        });
-
-        if (window.firebaseDB && window.firebaseRef && window.firebaseGet) {
-          try {
-            // Bounded initial window for the append-heavy sales section (older history is
-            // completed silently via cursor pagination instead of one huge full-node fetch).
-            let snap;
-            if (sectionName === 'sales' && window.firebaseQuery && window.firebaseOrderByKey && window.firebaseLimitToLast) {
-              snap = await window.firebaseGet(window.firebaseQuery(
-                window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`),
-                window.firebaseOrderByKey(),
-                window.firebaseLimitToLast(window.SALES_REALTIME_WINDOW || 3000)
-              ));
-            } else {
-              snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${v2Sec}`));
-            }
-            if (snap.exists()) {
-              const data = snap.val();
-              items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
-            }
-          } catch(e) {}
-          if (items.length === 0) {
-            try {
-              let legSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, sectionName));
-              if (legSnap.exists()) {
-                const data = legSnap.val();
-                items = Object.entries(data).map(([k, v]) => mapFirebaseItem(k, v));
-              }
-            } catch(e) {}
-          }
-        }
-
-        if (items.length === 0) {
-          const baseUrl = getRTDBUrl();
-          const [v2Res, rootRes] = await Promise.all([
-            fetch(`${baseUrl}/v2/${v2Sec}.json`).then(r => r.ok ? r.json() : null).catch(() => null),
-            fetch(`${baseUrl}/${sectionName}.json`).then(r => r.ok ? r.json() : null).catch(() => null)
-          ]);
-          const map = new Map();
-          const addData = (data) => {
-            if (!data) return;
-            if (Array.isArray(data)) {
-              data.forEach((item, idx) => {
-                if (item) {
-                  const key = String(item.id || item._rtdbKey || item.barcode || idx);
-                  map.set(key, { ...item, id: item.id || key });
-                }
-              });
-            } else if (typeof data === 'object') {
-              Object.entries(data).forEach(([k, item]) => {
-                if (item) {
-                  const key = String(item.id || item._rtdbKey || item.barcode || k);
-                  map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
-                }
-              });
-            }
-          };
-          addData(rootRes);
-          addData(v2Res);
-          items = Array.from(map.values());
-        }
-
-        window.firebaseLoadedSections[sectionName] = true;
-        if (items.length > 0) {
-          window.applyFirebaseSectionUpdate(sectionName, items, `LazyLoad ${sectionName}`);
-        }
-        // Kick off silent background completion of older sales history (cursor pagination)
-        if (sectionName === 'sales' && items.length >= (window.SALES_REALTIME_WINDOW || 3000)) {
-          window.completeSalesHistorySilently();
-        }
-        scheduleRender();
-        return items;
-      } catch (err) {
-        console.warn(`Lazy loading error for ${sectionName}:`, err);
-        return [];
-      } finally {
-        delete window.firebaseLoadingPromises[sectionName];
-      }
-    })();
-
-    window.firebaseLoadingPromises[sectionName] = loadPromise;
-    return loadPromise;
+    if (window.firebaseLoadedSections[sectionName] && !force) return window.appState[sectionName] || [];
+    if (window.firebaseLoadingPromises[sectionName]) return window.firebaseLoadingPromises[sectionName];
+    // REST is a fallback for an unavailable SDK, not a second startup channel.
+    const read = async (path) => {
+      const response = await fetch(`${getRTDBUrl()}/${path}.json`);
+      if (!response.ok) throw new Error(`Firebase ${path}: HTTP ${response.status}`);
+      return response.json();
+    };
+    const promise = readSectionWithLegacy(read, sectionPath(sectionName), legacyPath(sectionName))
+      .then(data => {
+        applySectionSnapshot(sectionName, data);
+        if (sectionName === 'sales') window.salesHistoryComplete = true; // REST fallback reads the full node
+        return window.appState[sectionName] || [];
+      }).finally(() => { delete window.firebaseLoadingPromises[sectionName]; });
+    window.firebaseLoadingPromises[sectionName] = promise;
+    return promise;
   };
 
   // Global Engine to Apply Incoming Firebase Data to Application State
@@ -602,6 +560,11 @@ window.addEventListener('unhandledrejection', (event) => {
       if (sectionData.daily) Object.assign(window.appState.v2Stats.daily, sectionData.daily);
       if (sectionData.monthly) Object.assign(window.appState.v2Stats.monthly, sectionData.monthly);
       if (sectionData.yearly) Object.assign(window.appState.v2Stats.yearly, sectionData.yearly);
+      // The old REST bootstrap supplied allTime as well as period aggregates.
+      // Preserve those exact totals now that realtime is the single read path.
+      if (sectionData.allTime) {
+        window.appState.v2Stats.allTime = { ...(window.appState.v2Stats.allTime || {}), ...sectionData.allTime };
+      }
       scheduleRender();
       return true;
     }
@@ -1794,125 +1757,8 @@ window.addEventListener('unhandledrejection', (event) => {
 
   // Robust Data Sync with Firebase Realtime Database
   window.__firebaseAlreadyFetched = false;
-  window.fetchAndLoadFirebaseData = async function(force) {
-    if (window.__firebaseAlreadyFetched && !force) return true;
-
-    try {
-      const baseUrl = getRTDBUrl();
-      const safeFetch = (path) => fetch(`${baseUrl}/${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
-
-      const sections = [
-        { name: 'customers', v2: 'customers' },
-        { name: 'products', v2: 'products' },
-        { name: 'quickSessions', v2: 'quickSessions' },
-        { name: 'expenses', v2: 'expenses' },
-        { name: 'credits', v2: 'credits' },
-        { name: 'suppliers', v2: 'suppliers' },
-        { name: 'staffPayouts', v2: 'staffPayouts' },
-        { name: 'caisseLogs', v2: 'caisse' },
-        { name: 'packages', v2: 'packages' },
-        { name: 'coachAbsences', v2: 'coachAbsences' },
-        { name: 'supplierTransactions', v2: 'supplierTransactions' }
-      ];
-      // When the realtime SDK is active, sales are served by the bounded window listener +
-      // silent cursor pager — skip the full-node REST download of the entire sales history.
-      if (!window.firebaseDB) {
-        sections.push({ name: 'sales', v2: 'sales' });
-      }
-
-      const coreResults = await Promise.all([
-        safeFetch('v2/meta/health.json'),
-        safeFetch('v2/stats.json'),
-        safeFetch('appState.json'),
-        // Phase 1: download ONLY the optimized v2 nodes (source of truth)
-        ...sections.map(sec => safeFetch(`v2/${sec.v2}.json`))
-      ]);
-      const meta = coreResults[0];
-      const v2Stats = coreResults[1];
-      const appStateCfg = coreResults[2];
-      const v2Results = coreResults.slice(3);
-
-      const isEmptyData = (d) =>
-        !d ||
-        (Array.isArray(d) && d.length === 0) ||
-        (typeof d === 'object' && Object.keys(d).length === 0);
-
-      // Phase 2: fetch the legacy root copy ONLY for sections where v2 has
-      // no data yet (un/partially-migrated databases). This roughly halves
-      // startup download size and payload parsing time.
-      const legacyResults = await Promise.all(
-        sections.map((sec, i) =>
-          isEmptyData(v2Results[i]) ? safeFetch(`${sec.name}.json`) : Promise.resolve(null)
-        )
-      );
-
-      window.__firebaseAlreadyFetched = true;
-      window.appState = window.appState || {};
-
-      sections.forEach((sec, i) => {
-        // Per-section isolation: one malformed section never blocks the rest
-        try {
-          const v2Data = v2Results[i];
-          const rootData = legacyResults[i];
-
-          const map = new Map();
-          const addData = (data) => {
-            if (!data) return;
-            if (Array.isArray(data)) {
-              data.forEach((item, idx) => {
-                if (item) {
-                  const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || idx);
-                  map.set(key, { ...item, id: item.id || key });
-                }
-              });
-            } else if (typeof data === 'object') {
-              Object.entries(data).forEach(([k, item]) => {
-                if (item) {
-                  const key = String(item.id || item._rtdbKey || item.barcode || (item.phone ? cleanPhone(item.phone) : '') || k);
-                  map.set(key, { ...item, id: item.id || key, _rtdbKey: k });
-                }
-              });
-            }
-          };
-
-          addData(rootData);
-          addData(v2Data);
-
-          const combinedItems = Array.from(map.values());
-          if (combinedItems.length > 0) {
-            window.applyFirebaseSectionUpdate(sec.name, combinedItems, `Startup ${sec.name} Sync`);
-          }
-          window.firebaseLoadedSections[sec.name] = true;
-        } catch (secErr) {
-          console.warn(`Startup sync isolated error for ${sec.name}:`, secErr);
-          try { window.lazyLoadSection && window.lazyLoadSection(sec.name, true); } catch (e) {}
-        }
-      });
-
-      if (v2Stats) {
-        window.appState.v2Stats = v2Stats;
-      }
-
-      if (appStateCfg && typeof appStateCfg === 'object') {
-        if (typeof appStateCfg.hideFinances === 'boolean') {
-          window.appState.hideFinances = appStateCfg.hideFinances;
-        }
-      }
-
-      window.firebaseSyncState = window.firebaseSyncState || {};
-      window.firebaseSyncState.rtdb = 'connected';
-      window.firebaseSyncState.lastSync = new Date();
-      updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
-
-      if (typeof saveLocalStorageImmediate === 'function') {
-        saveLocalStorageImmediate();
-      }
-      scheduleRender();
-      return true;
-    } catch (err) {
-      console.warn('Initial startup fetch error:', err);
-    }
-    return false;
+  window.fetchAndLoadFirebaseData = function(force = false) {
+    return window.runStartupFirebaseFetch(force);
   };
   // Test connection button handler - tests lightweight health endpoint without loading or pushing full database
   window.testFirebaseConnection = async function() {
@@ -1977,37 +1823,48 @@ window.addEventListener('unhandledrejection', (event) => {
       if (typeof showSuccessToast === 'function') showSuccessToast('تم نسخ القواعد بنجاح!');
     });
   };
-  // Startup sync: prefer the realtime SDK (bounded sales window + silent history pager).
-  // Only fall back to the full bulk REST fetch (including all sales) when the SDK is unavailable.
   window.__startupFetchPromise = null;
-  window.runStartupFirebaseFetch = function(maxWaitMs = 3000) {
+  window.runStartupFirebaseFetch = function(force = false) {
+    if (force && window.__firebaseAlreadyFetched) {
+      window.__startupFetchPromise = null;
+      window.__firebaseAlreadyFetched = false;
+    }
     if (window.__startupFetchPromise) return window.__startupFetchPromise;
     window.__startupFetchPromise = (async () => {
-      const started = Date.now();
-      while (!window.firebaseDB && !window.__firebaseSDKFailed && (Date.now() - started) < maxWaitMs) {
-        await new Promise(r => setTimeout(r, 150));
+      await window.__firebaseInitPromise;
+      const results = await Promise.allSettled(startupSections.map(async name => {
+        const items = await window.lazyLoadSection(name, force);
+        // Only sales readiness gates its history. A failed unrelated section
+        // must not leave financial reports permanently on the bounded window.
+        if (name === 'sales' && window.firebaseDB && !window.salesHistoryComplete) {
+          window.completeSalesHistorySilently();
+        }
+        return items;
+      }));
+      const failures = results.filter(result => result.status === 'rejected');
+      if (failures.length) {
+        window.__startupFetchPromise = null; // failed reads stay retryable, never mark them loaded
+        updateFirebaseUIBadge('error', 'Firebase: تعذّر تحميل بعض البيانات', failures[0].reason?.message);
+        return false;
       }
-      try {
-        await window.fetchAndLoadFirebaseData();
-      } catch (e) { console.warn('Startup bulk fetch note:', e); }
-      // Complete older sales history in the background once the SDK is live
-      if (window.firebaseDB && typeof window.completeSalesHistorySilently === 'function') {
-        window.completeSalesHistorySilently();
-      }
+      window.__firebaseAlreadyFetched = true;
+      return true;
     })();
     return window.__startupFetchPromise;
   };
-
-  // Single immediate fast fetch (no duplicate event listeners)
-  window.runStartupFirebaseFetch();
-  async function initFirebase() { try { try {
-        const cfgRes = await fetch('/firebase.config.json');
-        if (cfgRes.ok) { const cfgJson = await cfgRes.json();
-          if (cfgJson && cfgJson.apiKey) {
-            firebaseConfig = { ...firebaseConfig, ...cfgJson };
-          } } } catch (e) {} 
-      // Pull the Firebase SDK chunk in parallel with the fetch above (see loadFirebaseSDK).
-      await loadFirebaseSDK();
+  async function initFirebase() { try {
+      // Configuration and SDK code are independent downloads. Read only JSON
+      // and keep the built-in/env configuration when the optional file is absent.
+      const [sdkResult] = await Promise.allSettled([
+        loadFirebaseSDK(),
+        fetch('/firebase.config.json').then(async response => {
+          if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
+            const config = await response.json();
+            if (config?.apiKey) firebaseConfig = { ...firebaseConfig, ...config };
+          }
+        }).catch(() => {}),
+      ]);
+      if (sdkResult.status === 'rejected') throw sdkResult.reason;
       const app = initializeApp(firebaseConfig);
       // Realtime Database High-Speed Sectional WebSocket Listeners & Bounded Queries
       try {
@@ -2054,54 +1911,35 @@ window.addEventListener('unhandledrejection', (event) => {
           return [];
         };
 
-        // Realtime Listeners for instant Live Sync across tabs, browsers, and devices.
-        // Sales uses a bounded window (limitToLast) so every new sale no longer re-downloads
-        // the ENTIRE sales history; older records are completed by the silent cursor pager.
-        const realTimeListeners = [
-          { name: 'stats', q: ref(database, 'v2/stats') },
-          { name: 'products', q: ref(database, 'v2/products') },
-          { name: 'customers', q: ref(database, 'v2/customers') },
-          { name: 'sales', q: query(ref(database, 'v2/sales'), orderByKey(), limitToLast(window.SALES_REALTIME_WINDOW || 3000)) },
-          { name: 'quickSessions', q: ref(database, 'v2/quickSessions') },
-          { name: 'expenses', q: ref(database, 'v2/expenses') },
-          { name: 'credits', q: ref(database, 'v2/credits') },
-          { name: 'suppliers', q: ref(database, 'v2/suppliers') },
-          { name: 'supplierTransactions', q: ref(database, 'v2/supplierTransactions') },
-          { name: 'packages', q: ref(database, 'v2/packages') },
-          { name: 'staffPayouts', q: ref(database, 'v2/staffPayouts') },
-          { name: 'coachAbsences', q: ref(database, 'v2/coachAbsences') },
-          { name: 'caisseLogs', q: ref(database, 'v2/caisse') }
-        ];
-
         let firebaseReadyDispatched = false;
-        realTimeListeners.forEach(sec => {
-          // Per-listener isolation: a registration/callback failure in ONE
-          // section never prevents the other sections from syncing.
-          try {
-            onValue(sec.q, (snapshot) => {
-              try {
-                if (snapshot.exists()) {
-                  window.applyFirebaseSectionUpdate(sec.name, snapshot.val(), `Realtime ${sec.name}`);
-                }
-                window.firebaseSyncState.rtdb = 'connected';
-                window.firebaseSyncState.lastSync = new Date();
-                updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (مباشر Realtime)');
-                if (!firebaseReadyDispatched) {
-                  firebaseReadyDispatched = true;
-                  window.dispatchEvent(new Event('firebaseReady'));
-                }
-              } catch (cbErr) {
-                console.warn(`Realtime callback isolated error (${sec.name}):`, cbErr);
-              }
-            }, (error) => {
-              console.warn(`Firebase ${sec.name} sync note:`, error?.message || error);
-              if (error?.message && (error.message.includes('permission_denied') || error.message.includes('Permission denied'))) {
-                updateFirebaseUIBadge('error', 'Firebase: الصلاحيات مقفلة', 'يرجى تفعيل .read: true, .write: true في قواعد Realtime Database');
-              }
-            });
-          } catch (regErr) {
-            console.warn(`Listener registration isolated error (${sec.name}):`, regErr);
-          }
+        realtimeSections = createRealtimeSections({
+          subscribe(name, onData, onError) {
+            const target = name === 'sales'
+              ? query(ref(database, sectionPath(name)), orderByKey(), limitToLast(window.SALES_REALTIME_WINDOW))
+              : ref(database, sectionPath(name));
+            return onValue(target, snapshot => onData(snapshot.val()), onError);
+          },
+          async readLegacy(name) {
+            const path = legacyPath(name);
+            if (!path) return null;
+            const snapshot = await get(ref(database, path));
+            return snapshot.val();
+          },
+          apply: applySectionSnapshot,
+          onReady(name) {
+            window.firebaseSyncState.rtdb = 'connected';
+            window.firebaseSyncState.lastSync = new Date();
+            updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن (مباشر Realtime)');
+            if (!firebaseReadyDispatched) {
+              firebaseReadyDispatched = true;
+              window.dispatchEvent(new Event('firebaseReady'));
+            }
+          },
+          onError(name, error) {
+            window.firebaseLoadedSections[name] = false;
+            console.warn(`Firebase ${name} sync note:`, error?.message || error);
+            updateFirebaseUIBadge('error', 'Firebase: تعذّر مزامنة البيانات', error?.message);
+          },
         });
 
         // Ultra-Fast Cursor-Based Pagination: Loads older historical records using orderByKey() & endBefore() without scanning/sorting in memory
@@ -2173,11 +2011,11 @@ window.addEventListener('unhandledrejection', (event) => {
         };
 
       } catch (rtdbInitErr) {
-        console.warn('RTDB Init Note:', rtdbInitErr);
+        throw rtdbInitErr;
       } } catch (error) { console.warn('Notice initializing Firebase:', error?.message || error);
-      window.__firebaseSDKFailed = true; // release the startup bulk-REST fallback immediately
+      window.__firebaseSDKFailed = true; // startup will use the single REST fallback
       updateFirebaseUIBadge('error', 'Firebase: خطأ في الاتصال', error?.message || String(error));
-    } } initFirebase();
+    } } window.__firebaseInitPromise = initFirebase();
 
     // ==========================================
     // SECURITY, VALIDATION & SANITIZATION ENGINE
@@ -7356,625 +7194,36 @@ window.addEventListener('unhandledrejection', (event) => {
                     </div>
                 </div>
             `; }).join(''); } window.renderSuppliersList = renderSuppliersList;
-    function openFullReportModal() {
-        renderFullReport(); openModal('fullReportModal');
-    } window.openFullReportModal = openFullReportModal;
-    let html2canvasInstance = null;
-    async function loadLocalHtml2Canvas() {
-        if (!html2canvasInstance) {
-            // html2canvas-pro: maintained fork that supports Tailwind v4 oklch()/color-mix()
-            // colors (html2canvas 1.4.1 throws "unsupported color function oklch" and fails)
-            const mod = await import('html2canvas-pro');
-            html2canvasInstance = mod.default || mod.html2canvas || mod;
-        }
-        return html2canvasInstance;
+    let fullReportPromise = null;
+    let fullReportApi = null;
+    function loadFullReport() {
+        if (!fullReportPromise) fullReportPromise = import('./full-report.js')
+            .then(module => (fullReportApi = module.createFullReport({
+                getState: () => appState, openModal, showToast: window.showToast, logActivity, showSuccessToast, showErrorToast, getPackageById, calculateStatus, getDisplayPhone, getUniqueCoaches, getLocalDateString
+            }))).catch(error => { fullReportPromise = null; throw error; });
+        return fullReportPromise;
     }
-    // Print ONLY the comprehensive financial report modal content (not the whole app page)
-    function printFullReportSheet() {
-        const modal = document.getElementById('fullReportModal');
-        if (!modal) return;
-        const body = document.body;
-        let cleanedUp = false;
-        const cleanup = () => {
-            if (cleanedUp) return;
-            cleanedUp = true;
-            body.classList.remove('printing-full-report');
-            window.removeEventListener('afterprint', cleanup);
-        };
-        window.addEventListener('afterprint', cleanup);
-        // Safety net for browsers that never fire the 'afterprint' event
-        setTimeout(cleanup, 120000);
-        body.classList.add('printing-full-report');
-        try {
-            window.print();
-        } catch (err) {
-            console.error('Print failed:', err);
-            if (typeof showToast === 'function') showToast('تعذر فتح نافذة الطباعة', 'error');
-        }
-        if (typeof logActivity === 'function') {
-            try { logActivity('system', 'طباعة التقرير المالي الشامل', 'تم فتح نافذة الطباعة للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
-        }
+    async function openFullReportModal() {
+        try { return (await loadFullReport()).openFullReportModal(); }
+        catch (error) { showErrorToast('تعذّر تحميل التقرير، أعد المحاولة'); }
     }
-    window.printFullReportSheet = printFullReportSheet;
-    // In-app preview of the generated PNG so it can be saved even where direct
-    // downloads are blocked (sandboxed preview iframes, some mobile browsers)
-    let _lastReportBlobUrl = null;
-    function releaseReportBlobUrl() {
-        if (_lastReportBlobUrl) {
-            try { URL.revokeObjectURL(_lastReportBlobUrl); } catch (e) { /* noop */ }
-            _lastReportBlobUrl = null;
-        }
+    async function renderFullReport() {
+        try { return (await loadFullReport()).renderFullReport(); }
+        catch (error) { showErrorToast('تعذّر تحميل التقرير، أعد المحاولة'); }
     }
-    function showReportImagePreview(url, filename, blob) {
-        const modal = document.getElementById('reportImageModal');
-        const img = document.getElementById('reportImagePreview');
-        const dlBtn = document.getElementById('reportImageDownloadBtn');
-        const shareBtn = document.getElementById('reportImageShareBtn');
-        if (!modal || !img) return;
-        releaseReportBlobUrl();
-        if (blob) _lastReportBlobUrl = url; // only blob: URLs need revoking
-        img.src = url;
-        const fname = filename || 'التقرير_الشامل_المالي_والإداري.png';
-        if (dlBtn) {
-            dlBtn.onclick = function () {
-                const a = document.createElement('a');
-                a.download = fname;
-                a.href = url;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            };
-        }
-        if (shareBtn) {
-            // Web Share lets mobile users save the PNG straight to Photos/Files,
-            // which works even when anchor downloads are blocked inside iframes
-            let shareFile = null;
-            try {
-                shareFile = blob ? new File([blob], fname, { type: 'image/png' }) : null;
-            } catch (e) { shareFile = null; }
-            const canShare = !!(shareFile && navigator.canShare && navigator.canShare({ files: [shareFile] }));
-            shareBtn.classList.toggle('hidden', !canShare);
-            if (canShare) {
-                shareBtn.onclick = function () {
-                    navigator.share({ files: [shareFile], title: 'التقرير المالي والإداري الشامل' })
-                        .catch(err => console.warn('Share dismissed/failed:', err));
-                };
-            }
-        }
-        openModal('reportImageModal');
-    }
-    window.showReportImagePreview = showReportImagePreview;
-    async function printFullReport() {
-        const reportElem = document.getElementById('fullReportContent');
-        const printBtn = document.getElementById('printReportBtn');
-        if (!reportElem) return;
-        const originalBtnContent = printBtn ? printBtn.innerHTML : '';
-        if (printBtn) {
-            printBtn.disabled = true;
-            printBtn.innerHTML = `
-                <svg class="w-4 h-4 animate-spin text-white inline-block" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-                <span>جاري حفظ الصورة...</span>
-            `;
-        }
-        try {
-            const html2canvas = await loadLocalHtml2Canvas();
-            if (typeof html2canvas !== 'function') throw new Error('html2canvas-pro failed to load');
-            // Adaptive scale: very long reports at scale 2 can exceed the mobile
-            // canvas pixel limit (~16.7M px on iOS) which makes export fail silently
-            const TARGET_W = 1050;
-            const srcW = Math.max(1, reportElem.scrollWidth || TARGET_W);
-            const estH = Math.max(1, Math.round((reportElem.scrollHeight || 1000) * (TARGET_W / srcW)));
-            const MAX_CANVAS_AREA = 16000000; // safe under iOS Safari's 16777216 px cap
-            let scale = 2;
-            if (TARGET_W * estH * 4 > MAX_CANVAS_AREA) {
-                scale = Math.max(1, Math.sqrt(MAX_CANVAS_AREA / (TARGET_W * estH)));
-            }
-            const canvas = await html2canvas(reportElem, {
-                scale, useCORS: true,
-                backgroundColor: '#ffffff',
-                windowWidth: 1280, width: 1050,
-                scrollX: 0, scrollY: 0, logging: false, onclone: (clonedDoc) => {
-                    const clonedReport = clonedDoc.getElementById('fullReportContent');
-                    if (clonedReport) {
-                        clonedReport.style.width = '1050px';
-                        clonedReport.style.maxWidth = '1050px';
-                        clonedReport.style.minWidth = '1050px';
-                        clonedReport.style.padding = '32px';
-                        clonedReport.style.backgroundColor = '#ffffff';
-                        clonedReport.style.boxSizing = 'border-box';
-                    }
-                    // Convert all select elements into crystal-clear styled divs for html2canvas
-                    const selects = clonedDoc.querySelectorAll('#fullReportContent select');
-                    selects.forEach(select => {
-                        let text = ''; if (select.selectedIndex >= 0 && select.options[select.selectedIndex]) {
-                            text = select.options[select.selectedIndex].text;
-                        } else { text = select.value || 'الكل';
-                        } const div = clonedDoc.createElement('div');
-                        div.style.cssText = 'display: flex; align-items: center; justify-content: flex-start; height: 38px; min-height: 38px; padding: 4px 12px; font-size: 13px; font-weight: 800; color: #0f172a; background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 12px; line-height: 1.6; box-sizing: border-box; overflow: visible; font-family: "Tajawal", sans-serif;';
-                        div.textContent = text;
-                        if (select.parentNode) {
-                            select.parentNode.replaceChild(div, select);
-                        } });
-                    // Convert all input elements into styled divs for html2canvas
-                    const inputs = clonedDoc.querySelectorAll('#fullReportContent input');
-                    inputs.forEach(input => { if (input.type === 'hidden') return;
-                        const text = input.value || input.placeholder || '-';
-                        const div = clonedDoc.createElement('div');
-                        div.style.cssText = 'display: flex; align-items: center; justify-content: flex-start; height: 38px; min-height: 38px; padding: 4px 12px; font-size: 13px; font-weight: 800; color: #0f172a; background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 12px; line-height: 1.6; box-sizing: border-box; overflow: visible; font-family: "Tajawal", sans-serif;';
-                        div.textContent = text;
-                        if (input.parentNode) {
-                            input.parentNode.replaceChild(div, input);
-                        } }); }
-            });
-            // Prefer toBlob (smaller memory footprint, no giant data-URL strings);
-            // fall back to toDataURL only if toBlob is unavailable or empty
-            const now = new Date();
-            const dateStr = now.toISOString().split('T')[0];
-            const filename = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
-            let blob = null;
-            try {
-                blob = await new Promise((resolve, reject) => {
-                    if (typeof canvas.toBlob !== 'function') { reject(new Error('toBlob unsupported')); return; }
-                    canvas.toBlob(b => b ? resolve(b) : reject(new Error('empty blob')), 'image/png');
-                });
-            } catch (blobErr) { blob = null; }
-            let href = null;
-            if (blob) {
-                href = URL.createObjectURL(blob);
-            } else {
-                href = canvas.toDataURL('image/png');
-                if (!href || href === 'data:,' || href.length < 128) throw new Error('تم توليد صورة فارغة');
-            }
-            // 1) Direct download attempt
-            const link = document.createElement('a');
-            link.download = filename;
-            link.href = href;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            // 2) In-app preview fallback: lets the user save the image (long-press /
-            //    right-click, share button, or the download button) even if the direct
-            //    download was silently blocked by the browser or a sandboxed iframe
-            showReportImagePreview(href, filename, blob);
-            if (typeof showSuccessToast === 'function') {
-                showSuccessToast('تم إنشاء صورة التقرير! إن لم يبدأ التنزيل تلقائياً استخدم نافذة المعاينة');
-            }
-            if (typeof logActivity === 'function') {
-                try { logActivity('system', 'تصدير التقرير المالي كصورة', 'تم إنشاء صورة PNG للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
-            }
-        } catch (err) {
-            console.error('Error exporting image:', err);
-            const detail = (err && err.message) ? ` (${String(err.message).slice(0, 80)})` : '';
-            const msg = 'فشل إنشاء صورة التقرير، حاول مرة أخرى' + detail;
-            if (typeof showErrorToast === 'function') showErrorToast(msg);
-            else if (typeof showToast === 'function') showToast(msg, 'error');
-        } finally {
-            if (printBtn) {
-                printBtn.disabled = false;
-                printBtn.innerHTML = originalBtnContent;
-            }
-        }
-    }
-    window.printFullReport = printFullReport;
-    function renderFullReport() { const reportContainer = document.getElementById('fullReportContent');
-        if (!reportContainer) return; const now = new Date();
-        const formattedDate = now.toLocaleDateString('ar-DZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-        const formattedTime = now.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        let totalIncome = 0; let totalDebt = 0;
-        let activeCount = 0; let expiredCount = 0;
-        (appState.customers || []).forEach(c => {
-            const pkg = getPackageById(c.packageId);
-            const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
-            let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
-            else if (c.paymentStatus === 'credit') {
-                const debt = parseInt(c.debtAmount) || 0;
-                totalDebt += debt; paidAmount = Math.max(0, price - debt);
-            } totalIncome += paidAmount; const status = calculateStatus ? calculateStatus(c) : 'active';
-            if (status === 'active' || status === 'near_expiry') activeCount++;
-            else if (status === 'expired') expiredCount++;
-        }); const totalStaffPayouts = (appState.staffPayouts || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-        const totalExpenses = (appState.expenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
-        // Prefer exact pre-aggregated yearly stats while older sales history is still loading
-        const yearlyStatsR = appState.v2Stats && appState.v2Stats.yearly ? appState.v2Stats.yearly : null;
-        const salesInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStatsR && Object.keys(yearlyStatsR).length > 0);
-        const totalSales = salesInterim
-            ? Object.values(yearlyStatsR).reduce((sum, ys) => sum + (Number(ys && ys.sales) || 0), 0)
-            : (appState.sales || []).reduce((sum, s) => sum + (Number(s.total) || 0), 0);
-        const netProfit = (totalIncome + totalSales) - (totalExpenses + totalStaffPayouts);
-        let html = `
-        <!-- Header -->
-        <div class="border-b-2 border-slate-800 pb-4 mb-6 text-right">
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                <div>
-                    <h1 class="text-xl sm:text-2xl font-black text-slate-900">سبيس مانجر برو - التقرير الشامل للمؤسسة</h1>
-                    <p class="text-xs text-slate-600 mt-1 font-bold">
-                        تاريخ ووقت الاستخراج: <span dir="ltr" class="inline-block">${formattedDate} - ${formattedTime}</span>
-                    </p>
-                </div>
-                <div class="bg-blue-50 border border-blue-200/90 px-3.5 py-2 rounded-xl text-xs font-extrabold text-blue-700 shadow-xs">
-                    سجل مالي وإداري محين تلقائياً
-                </div>
-            </div>
-        </div>
-
-        <!-- Summary Cards Grid -->
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 mb-6">
-            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                <div class="text-[11px] font-bold text-slate-500 mb-0.5">المشتركين الكلي</div>
-                <div class="text-base sm:text-lg font-black text-slate-800">${(appState.customers || []).length}</div>
-                <div class="text-[10px] text-blue-600 font-bold">${activeCount} نشط</div>
-            </div>
-            <div class="bg-blue-50 p-3 rounded-xl border border-blue-200">
-                <div class="text-[11px] font-bold text-blue-700 mb-0.5">مداخيل الاشتراكات</div>
-                <div class="text-base sm:text-lg font-black text-blue-700">${totalIncome.toLocaleString()} دج</div>
-            </div>
-            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                <div class="text-[11px] font-bold text-slate-700 mb-0.5">الديون (الكريدي)</div>
-                <div class="text-base sm:text-lg font-black text-slate-800">${totalDebt.toLocaleString()} دج</div>
-            </div>
-            <div class="bg-blue-50 p-3 rounded-xl border border-blue-200">
-                <div class="text-[11px] font-bold text-blue-700 mb-0.5">خلاص العمال/المدربين</div>
-                <div class="text-base sm:text-lg font-black text-blue-700">${totalStaffPayouts.toLocaleString()} دج</div>
-            </div>
-            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                <div class="text-[11px] font-bold text-slate-700 mb-0.5">المصاريف العامة</div>
-                <div class="text-base sm:text-lg font-black text-slate-700">${totalExpenses.toLocaleString()} دج</div>
-            </div>
-            <div class="bg-sky-50 p-3 rounded-xl border border-sky-200">
-                <div class="text-[11px] font-bold text-sky-700 mb-0.5">الصافي المتبقي</div>
-                <div class="text-base sm:text-lg font-black ${netProfit >= 0 ? 'text-blue-700' : 'text-slate-800'}">${netProfit.toLocaleString()} دج</div>
-            </div>
-        </div>
-
-        <!-- Section 1: Staff & Coach Payouts -->
-        <div class="mb-8">
-            <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل خلاص العمال والمدربين (${(appState.staffPayouts || []).length})
-                </h3>
-                <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                    المجموع: ${totalStaffPayouts.toLocaleString()} دج
-                </span>
-            </div>
-            <div class="overflow-x-auto rounded-xl border border-slate-200">
-                <table class="w-full text-right text-xs border-collapse">
-                    <thead>
-                        <tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                            <th class="p-2.5 border-l border-slate-200">اسم العامل / الكوتش</th>
-                            <th class="p-2.5 border-l border-slate-200">المبلغ المدفوع (دج)</th>
-                            <th class="p-2.5 border-l border-slate-200">طبيعة الدفعة</th>
-                            <th class="p-2.5 border-l border-slate-200">تاريخ ووقت الخلاص</th>
-                            <th class="p-2.5">ملاحظة إضافية</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${(appState.staffPayouts || []).length === 0 ? `
-                            <tr><td colspan="5" class="p-4 text-center text-slate-400 font-medium">لا توجد دفعات خلاص مسجلة للعمال أو المدربين</td></tr>
-                        ` : (appState.staffPayouts || []).map(p => {
-                            let payoutDateDisplay = p.payoutDate || p.date || '-';
-                            if (p.date && p.date.includes('T')) {
-                                const dt = new Date(p.date);
-                                if (!isNaN(dt.getTime())) {
-                                    payoutDateDisplay = `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()} - ${dt.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' })}`;
-                                } } return `
-                            <tr class="border-b border-slate-100 hover:bg-slate-50">
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${p.staffName || p.name || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${Number(p.amount || 0).toLocaleString()} دج</td>
-                                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${p.payoutType || p.type || 'راتب شهري'}</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-600 font-medium" dir="ltr" style="text-align: right;">${payoutDateDisplay}</td>
-                                <td class="p-2.5 text-slate-500 italic">${p.notes || '-'}</td>
-                            </tr>
-                            `; }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Section: Suppliers Report (سجل معاملات وفواتير الموردين) -->
-        <div class="mb-8">
-            <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل فواتير ومعاملات الموردين والسلع (${(appState.suppliers || []).length})
-                </h3>
-                <div class="flex gap-2">
-                    <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                        مدفوع: ${(appState.suppliers || []).reduce((s, x) => s + (Number(x.paid) || 0), 0).toLocaleString()} دج
-                    </span>
-                    <span class="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
-                        كريدي: ${(appState.suppliers || []).reduce((s, x) => s + (Number(x.debt) || 0), 0).toLocaleString()} دج
-                    </span>
-                </div>
-            </div>
-            <div class="overflow-x-auto rounded-xl border border-slate-200">
-                <table class="w-full text-right text-xs border-collapse">
-                    <thead>
-                        <tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                            <th class="p-2.5 border-l border-slate-200">اسم المورد</th>
-                            <th class="p-2.5 border-l border-slate-200">المعلومات / رقم الإثبات</th>
-                            <th class="p-2.5 border-l border-slate-200">السلع المشتراة (شاشريت منه)</th>
-                            <th class="p-2.5 border-l border-slate-200">شحال خلصت (مدفوع)</th>
-                            <th class="p-2.5 border-l border-slate-200">شحال راه كريدي (باقي)</th>
-                            <th class="p-2.5 border-l border-slate-200">التاريخ</th>
-                            <th class="p-2.5">ملاحظات</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${(appState.suppliers || []).length === 0 ? `
-                            <tr><td colspan="7" class="p-4 text-center text-slate-400 font-medium">لا توجد فواتير أو معاملات موردين مسجلة</td></tr>
-                        ` : (appState.suppliers || []).map(sup => {
-                            const d = sup.date ? new Date(sup.date) : null;
-                            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-';
-                            return `
-                            <tr class="border-b border-slate-100 hover:bg-slate-50">
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${sup.name || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-600">${sup.info || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-700 max-w-xs">${sup.items || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${Number(sup.paid || 0).toLocaleString()} دج</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${Number(sup.debt || 0).toLocaleString()} دج</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
-                                <td class="p-2.5 text-slate-500 italic">${sup.notes || '-'}</td>
-                            </tr>
-                            `; }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Section 2: Subscribers -->
-        <div class="mb-8">
-            <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل المشتركين التفصيلي (${(appState.customers || []).length})
-                </h3>
-                <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                    مداخيل الاشتراكات: ${totalIncome.toLocaleString()} دج
-                </span>
-            </div>
-            <div class="overflow-x-auto rounded-xl border border-slate-200">
-                <table class="w-full text-right text-xs border-collapse">
-                    <thead>
-                        <tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                            <th class="p-2.5 border-l border-slate-200">اسم المشترك</th>
-                            <th class="p-2.5 border-l border-slate-200">رقم الهاتف</th>
-                            <th class="p-2.5 border-l border-slate-200">الباقة</th>
-                            <th class="p-2.5 border-l border-slate-200">تاريخ البداية</th>
-                            <th class="p-2.5 border-l border-slate-200">تاريخ الانتهاء</th>
-                            <th class="p-2.5 border-l border-slate-200">حالة الدفع</th>
-                            <th class="p-2.5">الحالة</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${(appState.customers || []).length === 0 ? `
-                            <tr><td colspan="7" class="p-4 text-center text-slate-400 font-medium">لا يوجد مشتركين مسجلين</td></tr>
-                        ` : (appState.customers || []).map(c => {
-                            const pkg = getPackageById(c.packageId);
-                            const pkgName = pkg ? pkg.name : 'ملاكمة';
-                            const status = calculateStatus ? calculateStatus(c) : 'active';
-                            const statusLabel = status === 'active' ? 'نشط' : (status === 'near_expiry' ? 'قريب الانتهاء' : 'منتهي');
-                            const statusClass = status === 'active' ? 'text-blue-700 font-bold' : (status === 'near_expiry' ? 'text-blue-700 font-bold' : 'text-slate-700 font-bold');
-                            const dStart = c.startDate ? new Date(c.startDate) : null;
-                            const dEnd = c.endDate ? new Date(c.endDate) : null;
-                            const startStr = dStart && !isNaN(dStart.getTime()) ? `${dStart.getFullYear()}/${dStart.getMonth() + 1}/${dStart.getDate()}` : '-';
-                            const endStr = dEnd && !isNaN(dEnd.getTime()) ? `${dEnd.getFullYear()}/${dEnd.getMonth() + 1}/${dEnd.getDate()}` : '-';
-                            const payStr = c.paymentStatus === 'paid' ? 'خالص بالكامل' : `كريدي (${c.debtAmount || 0} دج)`;
-                            const payClass = c.paymentStatus === 'paid' ? 'text-blue-700 font-bold' : 'text-slate-800 font-bold';
-                            return `
-                            <tr class="border-b border-slate-100 hover:bg-slate-50">
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${c.name || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-600 font-medium" dir="ltr" style="text-align: right;">${getDisplayPhone(c.phone)}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-800">${pkgName}</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-600">${startStr}</td>
-                                <td class="p-2.5 border-l border-slate-200 text-slate-600">${endStr}</td>
-                                <td class="p-2.5 border-l border-slate-200 ${payClass}">${payStr}</td>
-                                <td class="p-2.5 ${statusClass}">${statusLabel}</td>
-                            </tr>
-                            `; }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Section 3: Sales Classification & Reports -->
-        <div class="mb-8 p-4 rounded-2xl bg-slate-50 border border-slate-200">
-            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-200 pb-3 mb-4 gap-2">
-                <div>
-                    <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span>
-                        سجل تصنيف المبيعات والمنتجات التفصيلي (${(appState.sales || []).length})
-                    </h3>
-                    <p class="text-xs text-slate-500 mt-0.5">تصنيف ومفلترة المبيعات حسب المنتج أو المدرب لاستخراج تقارير دقيقة</p>
-                </div>
-                <span class="text-xs font-bold text-blue-800 bg-blue-50 px-3 py-1 rounded-xl border border-blue-200">
-                    مجموع كافة المبيعات: ${totalSales.toLocaleString()} دج
-                </span>
-            </div>
-
-            <!-- Filter Bar for Report Modal -->
-            <div class="grid grid-cols-1 sm:grid-cols-5 gap-2.5 mb-4 no-print">
-                <div>
-                    <label class="block text-[11px] font-bold text-slate-700 mb-1">المخزن (Stock):</label>
-                    <select id="reportFilterStock" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
-                        <option value="all">جميع المخازن</option>
-                        <option value="stock1">مخزون 1 (Stock 1)</option>
-                        <option value="stock2">مخزون 2 (Stock 2)</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-[11px] font-bold text-slate-700 mb-1">تصنيف حسب المنتج:</label>
-                    <select id="reportFilterProduct" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
-                        <option value="all">جميع المنتجات</option>
-                        ${Array.from(new Set((appState.sales || []).map(s => s.prodName || s.productName).filter(Boolean))).map(p => `<option value="${p}">${p}</option>`).join('')}
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-[11px] font-bold text-slate-700 mb-1">تصنيف حسب المدرب:</label>
-                    <select id="reportFilterCoach" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
-                        <option value="all">جميع المدربين والمسؤولين</option>
-                        <option value="عام">عام / مبيعات مباشرة</option>
-                        ${getUniqueCoaches().map(c => `<option value="${c}">${c}</option>`).join('')}
-                    </select>
-                </div>
-                <div>
-                    <div class="flex justify-between items-center mb-1 gap-1">
-                        <label class="block text-[11px] font-bold text-slate-700 whitespace-nowrap">التاريخ:</label>
-                        <button type="button" onclick="setElemValue('reportFilterDate', ''); updateFullReportSalesSection();" class="text-[10px] text-blue-700 hover:text-blue-900 font-bold underline">الكل</button>
-                    </div>
-                    <input type="date" id="reportFilterDate" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-2 py-2 text-xs bg-white font-semibold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
-                </div>
-                <div>
-                    <label class="block text-[11px] font-bold text-slate-700 mb-1">بحث سريع:</label>
-                    <input type="text" id="reportSearchSales" oninput="updateFullReportSalesSection()" placeholder="بحث بالاسم..." class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
-                </div>
-            </div>
-
-            <!-- Dynamic Summary Cards -->
-            <div id="reportSalesSummaryCards" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3"></div>
-
-            <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                <table class="w-full text-right text-xs border-collapse">
-                    <thead>
-                        <tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                            <th class="p-2.5 border-l border-slate-200">اسم المنتج</th>
-                            <th class="p-2.5 border-l border-slate-200">المخزن</th>
-                            <th class="p-2.5 border-l border-slate-200">المدرب / المسؤول</th>
-                            <th class="p-2.5 border-l border-slate-200">الكمية</th>
-                            <th class="p-2.5 border-l border-slate-200">المبلغ الإجمالي</th>
-                            <th class="p-2.5 border-l border-slate-200">الربح الصافي</th>
-                            <th class="p-2.5 border-l border-slate-200">تاريخ البيع</th>
-                            <th class="p-2.5 no-print text-center">إجراءات</th>
-                        </tr>
-                    </thead>
-                    <tbody id="reportSalesTableBody">
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Section 4: Expenses -->
-        <div class="mb-6">
-            <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
-                <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-slate-600 inline-block"></span>
-                    سجل المصاريف العامة (${(appState.expenses || []).length})
-                </h3>
-                <span class="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
-                    مجموع المصاريف: ${totalExpenses.toLocaleString()} دج
-                </span>
-            </div>
-            <div class="overflow-x-auto rounded-xl border border-slate-200">
-                <table class="w-full text-right text-xs border-collapse">
-                    <thead>
-                        <tr class="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                            <th class="p-2.5 border-l border-slate-200">بيان المصروف</th>
-                            <th class="p-2.5 border-l border-slate-200">المبلغ (دج)</th>
-                            <th class="p-2.5">تاريخ المصروف</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${(appState.expenses || []).length === 0 ? `
-                            <tr><td colspan="3" class="p-4 text-center text-slate-400 font-medium">لا توجد مصاريف مسجلة</td></tr>
-                        ` : (appState.expenses || []).map(e => {
-                            const d = e.date ? new Date(e.date) : null;
-                            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-';
-                            return `
-                            <tr class="border-b border-slate-100 hover:bg-slate-50">
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${e.desc || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${Number(e.amount || 0).toLocaleString()} دج</td>
-                                <td class="p-2.5 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
-                            </tr>
-                            `; }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Footer signature lines for print -->
-        <div class="hidden print:flex justify-between items-center pt-8 border-t border-slate-300 mt-12 text-xs font-bold text-slate-700">
-            <div>توقيع وتختم الإدارة: ................................</div>
-            <div>تاريخ الاعتماد: ${formattedDate}</div>
-        </div>
-        `; reportContainer.innerHTML = html;
-        updateFullReportSalesSection(); } window.renderFullReport = renderFullReport;
     function updateFullReportSalesSection() {
-        const stockSelect = document.getElementById('reportFilterStock');
-        const prodSelect = document.getElementById('reportFilterProduct');
-        const coachSelect = document.getElementById('reportFilterCoach');
-        const dateInput = document.getElementById('reportFilterDate');
-        const searchInput = document.getElementById('reportSearchSales');
-        const tbody = document.getElementById('reportSalesTableBody');
-        const summaryCards = document.getElementById('reportSalesSummaryCards');
-        if (!tbody || !appState.sales) return;
-        const selectedStock = stockSelect ? stockSelect.value : 'all';
-        const selectedProd = prodSelect ? prodSelect.value : 'all';
-        const selectedCoach = coachSelect ? coachSelect.value : 'all';
-        const selectedDate = dateInput ? dateInput.value : '';
-        const searchVal = searchInput ? searchInput.value.trim().toLowerCase() : '';
-        let filtered = [...appState.sales]; if (selectedStock !== 'all') {
-            if (selectedStock === 'stock2') {
-                filtered = filtered.filter(s => s.stockLocation === 'stock2');
-            } else { filtered = filtered.filter(s => !s.stockLocation || s.stockLocation === 'stock1');
-            } } if (selectedProd !== 'all') {
-            filtered = filtered.filter(s => (s.prodName || s.productName) === selectedProd);
-        } if (selectedCoach !== 'all') { if (selectedCoach === 'عام') {
-                filtered = filtered.filter(s => !s.coachName || s.coachName === 'عام');
-            } else { filtered = filtered.filter(s => s.coachName === selectedCoach);
-            } } if (selectedDate) { filtered = filtered.filter(s => typeof getLocalDateString === 'function' ? getLocalDateString(s.date) === selectedDate : true);
-        } if (searchVal) { filtered = filtered.filter(s =>
-                (s.prodName || s.productName || '').toLowerCase().includes(searchVal) ||
-                (s.coachName || '').toLowerCase().includes(searchVal)
-            ); } const totalRevenue = filtered.reduce((sum, s) => sum + (Number(s.total) || 0), 0);
-        const totalProfit = filtered.reduce((sum, s) => sum + (Number(s.profit) || 0), 0);
-        const totalQty = filtered.reduce((sum, s) => sum + (Number(s.qty) || 1), 0);
-        if (summaryCards) { summaryCards.innerHTML = `
-                <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
-                    <div class="text-[10px] font-bold text-slate-500 mb-0.5">مبيعات التصنيف</div>
-                    <div class="text-sm font-extrabold text-slate-800" dir="ltr">${totalRevenue.toLocaleString()} دج</div>
-                </div>
-                <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
-                    <div class="text-[10px] font-bold text-slate-500 mb-0.5">الربح الصافي للتصنيف</div>
-                    <div class="text-sm font-extrabold text-blue-700" dir="ltr">${totalProfit.toLocaleString()} دج</div>
-                </div>
-                <div class="bg-white p-2.5 rounded-xl border border-blue-200/80 shadow-xs">
-                    <div class="text-[10px] font-bold text-slate-500 mb-0.5">عدد القطع المباعة</div>
-                    <div class="text-sm font-extrabold text-blue-700">${totalQty}</div>
-                </div>
-                <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
-                    <div class="text-[10px] font-bold text-slate-500 mb-0.5">عدد العمليات</div>
-                    <div class="text-sm font-extrabold text-slate-800">${filtered.length} عملية</div>
-                </div>
-            `; } if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-slate-400 font-medium">لا توجد مبيعات مسجلة تطابق هذا التصنيف</td></tr>`;
-            return; } tbody.innerHTML = filtered.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s => {
-            const d = s.date ? new Date(s.date) : null;
-            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} - ${d.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' })}` : '-';
-            const name = s.prodName || s.productName || '-';
-            const coach = s.coachName || 'عام';
-            const total = Number(s.total || 0);
-            const profit = Number(s.profit || 0);
-            const isStock2 = s.stockLocation === 'stock2';
-            const stockBadge = isStock2 ? `<span class="text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">مخزون 2</span>`
-                : `<span class="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">مخزون 1</span>`;
-            return `
-            <tr class="border-b border-slate-100 hover:bg-slate-50">
-                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${name}</td>
-                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${stockBadge}</td>
-                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700">
-                    <span class="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">${coach}</span>
-                </td>
-                <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${(s.unitMode === 'kilo' || s.qtyUnit === 'kg') ? `${s.qty || 1} كغ` : s.unitMode === 'dose_gram' ? `${s.qty || 1} دوزة (${Number(s.gramsSold || 0)} غ)` : (s.qty || 1)}</td>
-                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${total.toLocaleString()} دج</td>
-                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-600" dir="ltr" style="text-align: right;">${profit.toLocaleString()} دج</td>
-                <td class="p-2.5 border-l border-slate-200 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
-                <td class="p-2.5 no-print text-center">
-                    <button onclick="deleteSale('${s.id}')" class="text-slate-400 hover:text-slate-700 p-1 hover:bg-slate-100 rounded" title="حذف البيع">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                </td>
-            </tr>
-            `; }).join(''); } window.updateFullReportSalesSection = updateFullReportSalesSection;
+        // Deleting a sale on the dashboard must not download an unopened report.
+        if (fullReportApi) return fullReportApi.updateFullReportSalesSection();
+    }
+    window.openFullReportModal = openFullReportModal;
+    window.renderFullReport = renderFullReport;
+    window.updateFullReportSalesSection = updateFullReportSalesSection;
+    for (const action of ['printFullReport', 'printFullReportSheet', 'showReportImagePreview']) {
+        window[action] = async (...args) => {
+            try { return (await loadFullReport())[action](...args); }
+            catch (error) { showErrorToast('تعذّر تحميل التقرير، أعد المحاولة'); }
+        };
+    }
     function deleteAllCredits() { const count = Array.isArray(appState.credits) ? appState.credits.length : 0;
         if (count === 0) { showSuccessToast('لا توجد سجلات كريدي لحذفها'); return; }
         promptWithPassword({ title: 'حذف كل الكريدي', prompt: 'أدخل كلمة المرور لتأكيد حذف جميع سجلات الكريدي', buttonText: 'تأكيد الحذف' }, () => {
@@ -13512,301 +12761,39 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.ensureSeedActivityLogs = ensureSeedActivityLogs;
 
-    async function openActivityLogModal() {
-        ensureSeedActivityLogs();
-        const modal = document.getElementById('activityLogModal');
-        if (modal) {
-            modal.classList.add('active');
-            renderActivityLogModal();
-        }
-        if (window.lazyLoadSection) {
-            await window.lazyLoadSection('activityLogs');
-            renderActivityLogModal();
-        }
+    let activityLogPromise = null;
+    function loadActivityLogView() {
+        if (!activityLogPromise) activityLogPromise = import('./activity-log-view.js')
+            .then(module => module.createActivityLogView({ getState: () => appState,
+                ensureSeedActivityLogs, escapeHTML, promptWithPassword, saveState, showSuccessToast
+            })).catch(error => { activityLogPromise = null; throw error; });
+        return activityLogPromise;
+    }
+    async function openActivityLogModal(...args) {
+        try { return (await loadActivityLogView()).openActivityLogModal(...args); }
+        catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
     }
     window.openActivityLogModal = openActivityLogModal;
-
-    function getFieldIcon(name) {
-        if (!name) return '📝';
-        if (name.includes('الاسم')) return '👤';
-        if (name.includes('الهاتف')) return '📞';
-        if (name.includes('الباقة')) return '📦';
-        if (name.includes('السعر') || name.includes('المبلغ') || name.includes('التكلفة')) return '💰';
-        if (name.includes('الدين') || name.includes('الكريدي')) return '💳';
-        if (name.includes('نوع الاشتراك')) return '🏷️';
-        if (name.includes('الحصص')) return '🔢';
-        if (name.includes('الانتهاء') || name.includes('التاريخ')) return '⏳';
-        if (name.includes('الوزن')) return '🏋️';
-        if (name.includes('الكمية') || name.includes('المخزون')) return '📦';
-        if (name.includes('المدفوع')) return '💵';
-        if (name.includes('السلع')) return '🛒';
-        return '✏️';
-    }
-
-    function toggleActivityLogDetail(id) {
-        const detailEl = document.getElementById('log_detail_' + id);
-        const arrowEl = document.getElementById('log_arrow_' + id);
-        if (!detailEl) return;
-        if (detailEl.classList.contains('hidden')) {
-            detailEl.classList.remove('hidden');
-            if (arrowEl) arrowEl.classList.add('rotate-180');
-        } else {
-            detailEl.classList.add('hidden');
-            if (arrowEl) arrowEl.classList.remove('rotate-180');
-        }
-    }
-    window.toggleActivityLogDetail = toggleActivityLogDetail;
-
-    function parseDiffItem(diff) {
-        let fieldName = 'التعديل';
-        let rawValue = diff ? String(diff).trim() : '';
-        
-        if (rawValue.includes(': ')) {
-            const idx = rawValue.indexOf(': ');
-            fieldName = rawValue.substring(0, idx).trim();
-            rawValue = rawValue.substring(idx + 2).trim();
-        } else if (rawValue.includes(':')) {
-            const idx = rawValue.indexOf(':');
-            fieldName = rawValue.substring(0, idx).trim();
-            rawValue = rawValue.substring(idx + 1).trim();
-        }
-
-        let beforeVal = '--';
-        let afterVal = rawValue;
-
-        if (rawValue.includes('من ') && rawValue.includes(' إلى ')) {
-            const fromIdx = rawValue.indexOf('من ');
-            const toIdx = rawValue.indexOf(' إلى ');
-            
-            let rawBefore = rawValue.substring(fromIdx + 3, toIdx).trim();
-            let rawAfter = rawValue.substring(toIdx + 5).trim();
-
-            if (rawBefore.startsWith('"') && rawBefore.endsWith('"') && rawBefore.length >= 2) {
-                rawBefore = rawBefore.slice(1, -1);
-            }
-            if (rawAfter.startsWith('"') && rawAfter.endsWith('"') && rawAfter.length >= 2) {
-                rawAfter = rawAfter.slice(1, -1);
-            }
-
-            beforeVal = rawBefore || 'غير محدد';
-            afterVal = rawAfter || 'غير محدد';
-        } else if (rawValue.startsWith('إلى ')) {
-            beforeVal = 'سابقاً';
-            afterVal = rawValue.substring(4).trim();
-        }
-
-        // Format dates simply without ISO artifacts
-        if (fieldName.includes('تاريخ') || fieldName.includes('الميلاد') || fieldName.includes('الانتهاء') || fieldName.includes('dob') || fieldName.includes('endDate')) {
-            if (beforeVal && beforeVal.includes('T')) beforeVal = beforeVal.split('T')[0];
-            if (afterVal && afterVal.includes('T')) afterVal = afterVal.split('T')[0];
-        }
-
-        return { fieldName, beforeVal, afterVal, rawValue };
-    }
-
-    function formatActivityDetailsHtml(detailsText, itemId) {
-        if (!detailsText) return '';
-        const safeText = escapeHTML(detailsText);
-        const safeId = escapeHTML(itemId || 'item_' + Math.random().toString(36).substr(2, 6));
-        
-        if (safeText.includes(' | ')) {
-            const parts = safeText.split(' | ');
-            const mainSummary = parts[0];
-            const diffs = parts.slice(1);
-            
-            const badgeList = diffs.map(diff => {
-                const parsed = parseDiffItem(diff);
-                const icon = getFieldIcon(parsed.fieldName);
-                return `
-                    <span class="inline-flex items-center flex-wrap gap-1 text-[11px] font-bold px-2 py-1 rounded-xl border bg-blue-50 text-blue-950 border-blue-200 shadow-2xs max-w-full break-words">
-                        <span>${icon} <strong>${escapeHTML(parsed.fieldName)}:</strong></span>
-                        <span class="text-blue-600 font-bold">من</span>
-                        <span class="text-blue-800 font-extrabold break-all">${escapeHTML(parsed.beforeVal)}</span>
-                        <span class="text-blue-600 font-bold">إلى</span>
-                        <span class="text-blue-950 font-black break-all">${escapeHTML(parsed.afterVal)}</span>
-                    </span>
-                `;
-            }).join(' ');
-
-            const rowsHtml = diffs.map(diff => {
-                const parsed = parseDiffItem(diff);
-                const icon = getFieldIcon(parsed.fieldName);
-
-                return `
-                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 p-2 bg-blue-50/50 rounded-xl border border-blue-200 shadow-2xs transition-colors w-full min-w-0">
-                        <div class="flex items-center gap-1.5 shrink-0 bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-300 text-blue-950 font-black text-xs w-fit">
-                            <span>${icon}</span>
-                            <span>${escapeHTML(parsed.fieldName)}</span>
-                        </div>
-                        <div class="text-xs font-bold text-blue-950 text-right dir-rtl flex-1 leading-normal break-words min-w-0 w-full sm:w-auto">
-                            <span class="text-blue-600 font-bold mx-1">من</span>
-                            <span class="font-extrabold text-blue-800 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200 inline-block max-w-full break-words">${escapeHTML(parsed.beforeVal)}</span>
-                            <span class="text-blue-600 font-bold mx-1">إلى</span>
-                            <span class="font-black text-blue-950 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-300 inline-block max-w-full break-words">${escapeHTML(parsed.afterVal)}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            return `
-                <div class="mt-1 space-y-1 w-full min-w-0">
-                    <p class="text-xs font-extrabold text-slate-800 leading-relaxed break-words">${mainSummary}</p>
-                    <div class="flex flex-wrap gap-1 mt-1 w-full min-w-0">${badgeList}</div>
-
-                    <button type="button" onclick="event.stopPropagation(); toggleActivityLogDetail('${safeId}')" class="mt-2 text-xs font-black text-blue-600 hover:text-blue-800 flex items-center justify-between sm:justify-start gap-1.5 py-1.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all border border-blue-200 shadow-2xs cursor-pointer w-full sm:w-auto">
-                        <span class="truncate">🔍 اضغط لرؤية تفاصيل التغييرات (من ⬅️ إلى) (${diffs.length})</span>
-                        <svg id="log_arrow_${safeId}" class="w-3.5 h-3.5 shrink-0 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
-                    </button>
-
-                    <div id="log_detail_${safeId}" class="hidden mt-2 p-2.5 bg-blue-50/30 border border-blue-200/90 rounded-2xl space-y-2 shadow-inner w-full min-w-0">
-                        <div class="text-[11px] font-black text-blue-900 border-b border-blue-200 pb-1.5 flex items-center justify-between">
-                            <span>التعديلات المنجزة (من ⬅️ إلى بالعربية):</span>
-                            <span class="text-blue-700 font-extrabold">${diffs.length} حقول</span>
-                        </div>
-                        <div class="space-y-1.5 mt-2 w-full min-w-0">
-                            ${rowsHtml}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        
-        return `<p class="text-xs text-slate-600 font-medium leading-relaxed break-words mt-0.5">${safeText}</p>`;
-    }
-
-    function renderActivityLogModal() {
-        const container = document.getElementById('activityLogList');
-        const countElem = document.getElementById('activityLogTotalCount');
-        if (!container) return;
-
-        let logs = Array.isArray(appState.activityLogs) ? [...appState.activityLogs] : [];
-
-        const searchInput = document.getElementById('activityLogSearchInput');
-        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
-        if (q) {
-            logs = logs.filter(l => {
-                if (!l) return false;
-                const t = (l.title || '').toLowerCase();
-                const d = (l.details || '').toLowerCase();
-                return t.includes(q) || d.includes(q);
-            });
-        }
-
-        const catFilter = document.getElementById('activityLogCategoryFilter');
-        const cat = catFilter ? catFilter.value : 'all';
-        if (cat !== 'all') {
-            logs = logs.filter(l => l && l.type === cat);
-        }
-
-        logs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-
-        if (countElem) {
-            countElem.textContent = `${logs.length} عملية`;
-        }
-
-        if (logs.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-12 bg-slate-50 border border-slate-100 rounded-2xl">
-                    <div class="w-12 h-12 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center mx-auto mb-3">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    </div>
-                    <p class="text-sm font-bold text-slate-700">لا توجد عمليات مسجلة في السجل</p>
-                    <p class="text-xs text-slate-400 mt-1">سيتم تسجيل كافة التحركات المالية والاشتراكات والتعديلات هنا تلقائياً</p>
-                </div>
-            `;
-            return;
-        }
-
-        const typeConfig = {
-            customer: { label: 'مشتركين', color: 'bg-blue-50 text-blue-700 border-blue-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>' },
-            sale: { label: 'مبيعات', color: 'bg-emerald-50 text-emerald-700 border-emerald-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>' },
-            expense: { label: 'مصاريف', color: 'bg-rose-50 text-rose-700 border-rose-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>' },
-            credit: { label: 'كريدي', color: 'bg-amber-50 text-amber-700 border-amber-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>' },
-            payout: { label: 'خلاص عمال', color: 'bg-purple-50 text-purple-700 border-purple-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>' },
-            supplier: { label: 'موردين', color: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0zM13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 011 1v1M13 16h2.586a1 1 0 00.707-.293l3.414-3.414a1 1 0 00.293-.707V10a1 1 0 00-1-1h-1"></path></svg>' },
-            caisse: { label: 'جرد خزينة', color: 'bg-cyan-50 text-cyan-700 border-cyan-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z"></path></svg>' },
-            system: { label: 'النظام', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' }
-        };
-
-        container.innerHTML = logs.map(item => {
-            const safeId = escapeHTML(item.id || '');
-            const cfg = typeConfig[item.type] || typeConfig.system;
-            const dateObj = new Date(item.timestamp || Date.now());
-            const formattedDate = isNaN(dateObj.getTime()) 
-                ? (item.dateStr || '') 
-                : dateObj.toLocaleDateString('ar-DZ') + ' - ' + dateObj.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' });
-
-            const amt = Number(item.amount) || 0;
-            const amtBadge = amt > 0 
-                ? `<span class="px-2.5 py-1 rounded-xl bg-slate-900 text-white font-extrabold text-xs shrink-0 dir-ltr">${amt.toLocaleString()} دج</span>` 
-                : '';
-
-            return `
-            <div class="p-3 sm:p-4 bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl shadow-2xs transition-all w-full min-w-0 overflow-hidden space-y-2">
-                <!-- Top Row: Icon, Category Badge, Title, Amount & Delete Action -->
-                <div class="flex items-start justify-between gap-2 min-w-0 w-full">
-                    <div class="flex items-start gap-2.5 min-w-0 flex-1">
-                        <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl ${cfg.color} border flex items-center justify-center font-bold text-sm sm:text-base shrink-0 mt-0.5">
-                            ${cfg.icon}
-                        </div>
-                        <div class="min-w-0 flex-1">
-                            <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
-                                <span class="px-2 py-0.5 rounded-md text-[10px] font-black ${cfg.color} border shrink-0">${cfg.label}</span>
-                                <h4 class="font-bold text-slate-800 text-xs sm:text-sm break-words leading-snug">${escapeHTML(item.title || '')}</h4>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center gap-1.5 shrink-0">
-                        ${amtBadge}
-                        <button type="button" onclick="event.stopPropagation(); deleteActivityLog('${safeId}')" class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-slate-50 hover:bg-rose-100 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 flex items-center justify-center transition-colors shadow-2xs cursor-pointer" title="حذف من سجل العمليات">
-                            <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Full Width Details & Timestamp -->
-                <div class="w-full min-w-0 text-right dir-rtl">
-                    ${formatActivityDetailsHtml(item.details || '', safeId)}
-                    <span class="text-[10px] text-slate-400 font-bold block mt-1.5">${formattedDate}</span>
-                </div>
-            </div>
-            `;
-        }).join('');
+    async function renderActivityLogModal(...args) {
+        try { return (await loadActivityLogView()).renderActivityLogModal(...args); }
+        catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
     }
     window.renderActivityLogModal = renderActivityLogModal;
-
-    function deleteActivityLog(id) {
-        if (!id) return;
-        promptWithPassword({ title: 'حذف من سجل العمليات', prompt: 'أدخل كلمة المرور لتأكيد حذف هذا السجل من سجل العمليات العام', buttonText: 'تأكيد الحذف' }, () => {
-            if (!Array.isArray(appState.activityLogs)) return;
-            appState.activityLogs = appState.activityLogs.filter(l => String(l && l.id) !== String(id));
-            if (window.deleteFirebaseSectionItem) {
-                window.deleteFirebaseSectionItem('activityLogs', id);
-            }
-            saveState();
-            showSuccessToast('تم حذف السجل من سجل العمليات بنجاح');
-            renderActivityLogModal();
-        });
+    async function deleteActivityLog(...args) {
+        try { return (await loadActivityLogView()).deleteActivityLog(...args); }
+        catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
     }
     window.deleteActivityLog = deleteActivityLog;
-
-    function clearAllActivityLogs() {
-        promptWithPassword({ title: 'إفراغ سجل العمليات', prompt: 'أدخل كلمة المرور لتأكيد إفراغ سجل العمليات بالكامل', buttonText: 'تأكيد الإفراغ' }, () => {
-            appState.activityLogs = [];
-            window.appState.activityLogs = [];
-            if (window.firebaseDB && window.firebaseRef && window.firebaseRemove) {
-                try {
-                    window.firebaseRemove(window.firebaseRef(window.firebaseDB, 'v2/activityLogs'));
-                } catch(e) {}
-            }
-            saveState();
-            showSuccessToast('تم إفراغ سجل العمليات بالكامل بنجاح');
-            renderActivityLogModal();
-        });
+    async function clearAllActivityLogs(...args) {
+        try { return (await loadActivityLogView()).clearAllActivityLogs(...args); }
+        catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
     }
     window.clearAllActivityLogs = clearAllActivityLogs;
-
+    async function toggleActivityLogDetail(...args) {
+        try { return (await loadActivityLogView()).toggleActivityLogDetail(...args); }
+        catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
+    }
+    window.toggleActivityLogDetail = toggleActivityLogDetail;
     setupGlobalInputSecurity(); render(); if (typeof window.runStartupFirebaseFetch === 'function') {
         window.runStartupFirebaseFetch(); } else if (typeof window.fetchAndLoadFirebaseData === 'function') {
         window.fetchAndLoadFirebaseData(); }
