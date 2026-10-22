@@ -1,5 +1,5 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v4';
+const CACHE_NAME = 'omega-gym-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -8,7 +8,8 @@ const STATIC_ASSETS = [
   '/icon-192.png',
   '/icon-512.png',
   '/icon.svg',
-  'https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap'
+  '/fonts/tajawal-arabic-400-normal.woff2',
+  '/fonts/tajawal-arabic-700-normal.woff2'
 ];
 
 self.addEventListener('install', (event) => {
