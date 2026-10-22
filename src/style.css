@@ -1,5 +1,48 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Tajawal — الخط مضمّن Base64 داخل index.html (بلوك <style id="omega-fonts">)
+   لتجنّب أي طلب شبكة للخط. لا تُضِف @font-face هنا وإلا سيتكرر التحميل.
+   لإعادة التوليد بعد تغيير ملفات public/fonts:  npm run fonts:embed
+   ========================================================================== */
+
+/* ==========================================================================
+   HEADER TYPOGRAPHY — Tajawal Bold, أوضح وأعرض في شريط التنقل العلوي فقط
+   (بقية الواجهة تبقى على Tajawal 400/500 كما هي)
+   * القواعد هنا خارج طبقات Tailwind لذلك تتقدّم على text-xs / text-slate-800،
+     وهذا مقصود: توحيد مقاس ووزن خط الهيدر.
+   * لا letter-spacing على العربية إطلاقاً: يكسر اتصال الحروف.
+   ========================================================================== */
+header {
+  font-family: 'Tajawal', 'Segoe UI', Tahoma, Arial, sans-serif;
+  font-synthesis: none;              /* لا وزن مُصطنع: يُستخدم ملف 700 المضمّن */
+  -webkit-text-size-adjust: 100%;
+}
+#topHeaderNav { scroll-padding-inline: 0.25rem; }
+#topHeaderNavInner > button {
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  padding-block: 0.45rem;
+  color: #0b1220;                    /* أغمق من slate-800 لمزيد من الحدّة */
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+#topHeaderNavInner > button:hover { color: #1d4ed8; }
+/* الأيقونات تكبر مع النص بدل مقاسات ثابتة */
+#topHeaderNavInner > button svg {
+  width: 1.05em;
+  height: 1.05em;
+  flex-shrink: 0;
+}
+@media (min-width: 640px) {
+  #topHeaderNavInner > button { font-size: 14.5px; }
+}
+@media (min-width: 1024px) {
+  #topHeaderNavInner > button { font-size: 15px; }
+}
+
 /* Custom Base Styles & Mobile Responsiveness */
 *, *::before, *::after { box-sizing: border-box; }
 html {

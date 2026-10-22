@@ -63,8 +63,37 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
   // Firebase Realtime Database Engine (Local Bundled Packages - No External CDNs)
-  import { initializeApp } from "firebase/app";
-  import { getDatabase, ref, set, update, push, remove, onValue, get, query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore, orderByKey, orderByChild, equalTo, off } from "firebase/database";
+  // ---------------------------------------------------------------------------
+  // The SDK (~232 KB raw / 51 KB gzip) is NOT part of the initial bundle anymore:
+  // it is loaded through a dynamic import, in its own chunk, in parallel with the
+  // first paint. This keeps the critical JS path small (better FCP/TBT/LCP).
+  // Same public names, so all existing code below keeps working unchanged.
+  // ---------------------------------------------------------------------------
+  let initializeApp, getDatabase, ref, set, update, push, remove, onValue, get,
+      query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore,
+      orderByKey, orderByChild, equalTo;
+  let firebaseSDKPromise = null;
+  function loadFirebaseSDK() {
+    if (!firebaseSDKPromise) {
+      firebaseSDKPromise = Promise.all([
+        import('firebase/app'),
+        import('firebase/database'),
+      ]).then(([appMod, dbMod]) => {
+        initializeApp = appMod.initializeApp;
+        ({
+          getDatabase, ref, set, update, push, remove, onValue, get, query,
+          limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore,
+          orderByKey, orderByChild, equalTo,
+        } = dbMod);
+        return true;
+      }).catch((err) => {
+        firebaseSDKPromise = null; // allow a later retry
+        throw err;
+      });
+    }
+    return firebaseSDKPromise;
+  }
+  window.loadFirebaseSDK = loadFirebaseSDK;
   import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
@@ -1976,7 +2005,10 @@ window.addEventListener('unhandledrejection', (event) => {
         if (cfgRes.ok) { const cfgJson = await cfgRes.json();
           if (cfgJson && cfgJson.apiKey) {
             firebaseConfig = { ...firebaseConfig, ...cfgJson };
-          } } } catch (e) {} const app = initializeApp(firebaseConfig);
+          } } } catch (e) {} 
+      // Pull the Firebase SDK chunk in parallel with the fetch above (see loadFirebaseSDK).
+      await loadFirebaseSDK();
+      const app = initializeApp(firebaseConfig);
       // Realtime Database High-Speed Sectional WebSocket Listeners & Bounded Queries
       try {
         const database = getDatabase(app);
