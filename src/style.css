@@ -1,10 +1,7 @@
 @import "tailwindcss";
 
-/* ==========================================================================
-   Tajawal — الخط مضمّن Base64 داخل index.html (بلوك <style id="omega-fonts">)
-   لتجنّب أي طلب شبكة للخط. لا تُضِف @font-face هنا وإلا سيتكرر التحميل.
-   لإعادة التوليد بعد تغيير ملفات public/fonts:  npm run fonts:embed
-   ========================================================================== */
+/* Tajawal font faces are declared in index.html and loaded from /fonts/.
+   Keep them there for early discovery; regenerate with npm run fonts:embed. */
 
 /* ==========================================================================
    HEADER TYPOGRAPHY — Tajawal Bold, أوضح وأعرض في شريط التنقل العلوي فقط
@@ -15,7 +12,7 @@
    ========================================================================== */
 header {
   font-family: 'Tajawal', 'Segoe UI', Tahoma, Arial, sans-serif;
-  font-synthesis: none;              /* لا وزن مُصطنع: يُستخدم ملف 700 المضمّن */
+  font-synthesis: none;              /* لا وزن مُصطنع: يُستخدم ملف 700 المحلي */
   -webkit-text-size-adjust: 100%;
 }
 #topHeaderNav { scroll-padding-inline: 0.25rem; }

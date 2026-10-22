@@ -1,42 +1,12 @@
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 
-/**
- * async-css (build only)
- * ----------------------------------------------------------------------------
- * 1. Turns every render-blocking <link rel="stylesheet"> injected by Vite into
- *      <link rel="preload" as="style" ...>          (high priority fetch, no block)
- *      <link rel="stylesheet" media="print" onload> (applied as soon as it arrives)
- *      <noscript><link rel="stylesheet"></noscript> (graceful no-JS fallback)
- * 2. The critical CSS lives inline in index.html, so the first screen paints
- *    immediately with the right font/layout even before the bundle lands.
- */
-function asyncCssPlugin() {
-  return {
-    name: 'omega-async-css',
-    apply: 'build',
-    enforce: 'post',
-    transformIndexHtml(html) {
-      return html.replace(
-        /<link\s+rel="stylesheet"([^>]*?)href="([^"]+)"([^>]*?)>/g,
-        (match, before, href, after) => {
-          if (/media=|onload=/.test(before + after)) return match; // already handled
-          const attrs = `${before}${after}`.replace(/\s+$/, '');
-          return [
-            `<link rel="preload" as="style" href="${href}"${attrs}>`,
-            `<link rel="stylesheet" href="${href}"${attrs} media="print" onload="this.media='all';this.onload=null">`,
-            `<noscript><link rel="stylesheet" href="${href}"${attrs}></noscript>`,
-          ].join('\n  ');
-        }
-      );
-    },
-  };
-}
+import { inlineSmallStylesheet } from './scripts/vite-inline-styles.js';
 
 export default defineConfig({
   plugins: [
     tailwindcss(),
-    asyncCssPlugin(),
+    inlineSmallStylesheet(),
   ],
   server: {
     host: '0.0.0.0',

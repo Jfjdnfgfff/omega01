@@ -1,16 +1,8 @@
 #!/usr/bin/env node
 /**
- * embed-fonts.js
- * ---------------------------------------------------------------------------
- * يحوّل ملفات الخطوط المحلية في public/fonts/*.woff2 إلى Base64 ويكتبها داخل
- * index.html بين العلامتين:
- *
- *      <!-- OMEGA_FONTS_START -->  ...  <!-- OMEGA_FONTS_END -->
- *
- * النتيجة: خط Tajawal أصبح جزءاً من الصفحة نفسها (data:font/woff2)، بلا أي طلب
- * شبكة، بلا Google Fonts، ويعمل حتى بدون اتصال بالإنترنت.
- *
- * الاستخدام:  npm run fonts:embed
+ * Generate cacheable local Tajawal font-face declarations in index.html.
+ * Kept as fonts:embed for compatibility; font binaries are no longer Base64.
+ * Run after updating public/fonts. No external font service is used.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -48,10 +40,9 @@ async function buildFontFaceCss() {
       const name = `tajawal-${subset}-${file}-normal.woff2`;
       const bin = await readFile(path.join(FONTS_DIR, name));
       totalBytes += bin.length;
-      const base64 = bin.toString('base64');
       blocks.push(
         `@font-face{font-family:'Tajawal';font-style:normal;font-weight:${css};` +
-          `font-display:swap;src:url(data:font/woff2;base64,${base64}) format('woff2');` +
+          `font-display:optional;src:url('/fonts/${name}') format('woff2');` +
           `unicode-range:${UNICODE_RANGE[subset]}}`
       );
     }
@@ -73,14 +64,14 @@ async function main() {
   }
 
   const block =
-    `${START}\n  <style id="omega-fonts">\n/* Tajawal — مضمّن Base64 (${(totalBytes / 1024).toFixed(1)} KB خام). ` +
+    `${START}\n  <link rel="preload" href="/fonts/tajawal-arabic-400-normal.woff2" as="font" type="font/woff2" crossorigin>\n  <link rel="preload" href="/fonts/tajawal-arabic-700-normal.woff2" as="font" type="font/woff2" crossorigin>\n  <style id="omega-fonts">\n/* Tajawal — local, independently cached WOFF2 files. ` +
     `مُولَّد آلياً بـ npm run fonts:embed */\n${css}\n  </style>\n  `;
 
   const next = html.slice(0, startIdx) + block + html.slice(endIdx);
   await writeFile(HTML_FILE, next, 'utf8');
 
   console.log(
-    `✓ تم تضمين ${subsets.length * WEIGHTS.length} ملف خط (${(totalBytes / 1024).toFixed(1)} KB) داخل index.html`
+    `✓ تم ربط ${subsets.length * WEIGHTS.length} ملفات خط محلية قابلة للتخزين المؤقت (${(totalBytes / 1024).toFixed(1)} KB)`
   );
 }
 
