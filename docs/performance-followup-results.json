@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-22",
+  "profile": "Local production build, Lighthouse 13.5.0, Chromium 133, default mobile simulated throttling; real Firebase inaccessible",
+  "runs": [
+    {
+      "score": 96,
+      "first-contentful-paint": 2158.346,
+      "largest-contentful-paint": 2414.0190000000002,
+      "total-blocking-time": 28,
+      "cumulative-layout-shift": 0,
+      "total-byte-weight": 309187,
+      "unminifiedJavaScriptScore": 1
+    },
+    {
+      "score": 96,
+      "first-contentful-paint": 2158.708,
+      "largest-contentful-paint": 2447.062,
+      "total-blocking-time": 46,
+      "cumulative-layout-shift": 0,
+      "total-byte-weight": 309187,
+      "unminifiedJavaScriptScore": 1
+    },
+    {
+      "score": 95,
+      "first-contentful-paint": 2157.402,
+      "largest-contentful-paint": 2447.103,
+      "total-blocking-time": 85,
+      "cumulative-layout-shift": 0,
+      "total-byte-weight": 309187,
+      "unminifiedJavaScriptScore": 1
+    }
+  ]
+}
