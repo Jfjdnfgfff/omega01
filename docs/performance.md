@@ -1,340 +1,69 @@
-# تحسين الأداء — OMEGA GYM (تقرير PageSpeed Insights)
+# فحص وتحسين الأداء — 22 أكتوبر 2026
 
-هذه الوثيقة تشرح المشاكل الأربع التي أظهرها التقرير، والحلول المطبَّقة فعلياً في
-المستودع، مع الأكواد الجاهزة للنسخ في أي بيئة أخرى.
+## النتيجة
 
-**ملخّص ما تم تطبيقه**
+تم فحص **نسخة الإنتاج** بواسطة Lighthouse 13.5.0 وChromium 133، بمحاكاة الهاتف الافتراضية (تباطؤ المعالج ×4 وشبكة محاكاة). ثلاث جولات مستقلة قبل التعديل وثلاث بعده، بمتصفح جديد لكل جولة.
 
-| المشكلة في التقرير | الحل المطبَّق | الأثر المتوقّع |
-| --- | --- | --- |
-| `C8F5ewMw.css` + Google Fonts تحجب العرض | خط Tajawal مضمّن Base64 داخل الصفحة (صفر طلبات) + Critical CSS مضمّن + تحميل الـ CSS الكامل بشكل غير متزامن (Vite plugin) | إزالة ~2–3 طلبات حاجبة لجهة خارجية، FCP أسرع بـ 300–700ms على 4G/3G |
-| `firebaseio.com` بحجم نقل كبير وبدون TTL | نوافذ قراءة محدودة + شرح حقيقة أرشفة Firebase + ETag / Edge cache (اختياري) | تقليل النقل بشكل حاسم مع كل إعادة تحميل |
-| `GbT6rcde.js` — JavaScript غير مستخدم | Firebase SDK صار `import()` ديناميكي + تجزئة vendor + `modulePreload.polyfill=false` | الـ JS الحرج: 184KB → 133KB (gzip) |
-| LCP / FCP / TBT | preconnect + preload للخطوط + تقليل العمل في الـ main thread | راجع القسم 4 |
+| المقياس | قبل: الوسيط | بعد: الوسيط |
+| --- | ---: | ---: |
+| تقييم الأداء | 77/100 | 96/100 |
+| أول ظهور للمحتوى FCP | 2.17 ثانية | 2.17 ثانية |
+| أكبر عنصر مرئي LCP | 2.33 ثانية | 2.41 ثانية |
+| حجب التفاعل TBT | 152 مللي ثانية | 42.5 مللي ثانية |
+| تغيّر التخطيط CLS | 0.365 | 0 |
+| حجم التحميل المسجل | 437,419 بايت | 321,364 بايت |
 
----
+درجات الجولات قبل: **90، 77، 70**. بعد: **96، 96، 96**.
 
-## 1) طلبات حجب العرض (Render-Blocking)
+التحسن الأساسي في **ثبات التخطيط، انخفاض حجب التفاعل بنحو 72%، وانخفاض التحميل بنحو 27%**. لم يتحسن كل مقياس: بقي FCP شبه ثابت، وزاد وسيط LCP قليلًا. لا تُفسَّر درجة الأداء على أنها زمن اكتمال تحميل بيانات الحساب.
 
-### 1.1 الخطوط: Tajawal مضمّن داخل الصفحة (Base64) — صفر طلبات شبكة
+الأرقام الخام لكل جولة محفوظة في `docs/performance-results.json`. التقارير الكاملة المحلية في `reports/lighthouse-before.html` و`reports/lighthouse-after.html`؛ مجلد التقارير مستثنى من Git.
 
-**قبل** (سلسلة حاجبة لجهة خارجية: HTML ← CSS من Google ← ملف الخط):
+## التعديلات
 
-```html
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
+1. **إلغاء تحميل CSS المتأخر الذي يسبب قفزات الواجهة.** تضمين التنسيق الكامل الصغير (حوالي 14 كيلوبايت gzip) في HTML الإنتاج بدل طلب CSS إضافي. حد أقصى 100,000 بايت خام؛ إذا تجاوزه التنسيق لاحقًا يبقى رابط stylesheet عاديًا، دون سباق التحميل غير المتزامن.
+2. **فصل خطوط Tajawal عن HTML** إلى ملفات WOFF2 المحلية الموجودة، مع تحميل مسبق للوزنين العربيين 400 و700. استخدام `font-display: optional` يمنع تبديل الخط المتأخر وتحرك المحتوى؛ قد يستعمل المتصفح خط النظام في أول زيارة بطيئة. لا اعتماد على Google Fonts.
+3. **إضافة إعداد Firebase افتراضي صالح** في `public/firebase.config.json` بمحتوى `{}`. سابقًا كان غياب الملف يؤدي إلى تنزيل HTML كامل مرة ثانية ثم فشل تفسيره كـJSON. الإعداد الفارغ يُبقي إعدادات التطبيق الحالية، ويمكن تعبئته بإعدادات Firebase العامة عند الحاجة. لا توضع فيه أسرار أو مفاتيح خادم.
+4. **تحسين Service Worker:** تخزين الخطوط الستة للاستخدام دون اتصال، وعدم إعادة تنزيل الحزم ذات الأسماء المحتوية على hash عند وجودها بالكاش، وإصلاح تسلسل fallback للتصفح دون اتصال. تنظيف الكاش يقتصر على كاش Omega.
+5. تحديث مولّد الخطوط؛ يبقى الأمر `npm run fonts:embed` متاحًا، لكنه يولّد روابط محلية بدل Base64.
+
+HTML الإنتاج المضغوط أصبح حوالي **71.36 كيلوبايت** بدل **115.84 كيلوبايت**، رغم تضمين CSS الكامل فيه. حجم HTML الخام أكبر قليلًا؛ المقارنة المفيدة للنقل هنا هي الحجم المضغوط وإجمالي الموارد، لا حجم الملف الخام وحده.
+
+## التحقق
+
+- `npm test`: **71 اختبارًا ناجحًا**، تشمل الخطوط والتخزين المؤقت وتضمين CSS، إضافة إلى اختبارات منطق الأعمال القائمة.
+- `npm run lint`: ناجح.
+- `npm run build`: ناجح.
+- فحص متصفح بعرض 412 و1440 بكسل: التنقل بين المنتجات والمصاريف والديون والرئيسية، وفتح/إغلاق نافذة المصاريف؛ دون أخطاء JavaScript غير معالجة أو تجاوز أفقي للصفحة.
+- لم تُنفَّذ معاملات مالية أو تعديلات على بيانات الإنتاج.
+
+## حدود القياس والخطوة التالية
+
+- القياس على `http://localhost:4173/` من بناء الإنتاج، **وليس فحص PageSpeed Insights للرابط المنشور أو بيانات مستخدمين حقيقية**.
+- الاتصال الخارجي بـFirebase مقيّد في بيئة الفحص؛ لذلك لم تُقَس سرعة المزامنة الفعلية أو الأداء مع قاعدة كبيرة. لم نُعطّل Firebase في كود التطبيق لرفع النتيجة.
+- Service Worker يتجاوز localhost وروابط المعاينة أصلًا؛ تحسن كاش الزيارات المتكررة مغطى باختبارات الوحدة، وليس محسوبًا في هذه النتائج.
+- يبقى تحذير حجم حزمة JavaScript الرئيسية وحزمة قارئ الباركود. فصل وظائف إضافية من `main.js` عمل لاحق يحتاج اختبارات تفاعل أوسع؛ قارئ الباركود وhtml2canvas يُحمّلان عند الطلب أصلًا.
+- يجب إعادة الفحص على الرابط المنشور بعد النشر، مع بيانات فعلية، لقياس الشبكة وFirebase وCore Web Vitals للمستخدمين.
+
+## إعادة الفحص
+
+يتطلب Chrome/Chromium مثبتًا وNode.js حديثًا. لا تقِس خادم Vite التطويري بدل بناء الإنتاج.
+
+```sh
+npm ci
+npm run build
+npm run preview -- --port 4173
 ```
 
-**بعد** — ملفات `public/fonts/*.woff2` (Tajawal 400/500/700، مجموعتا `arabic`/`latin`)
-تُحوَّل إلى Base64 وتُكتب **داخل `index.html`** في بلوك `<style id="omega-fonts">`:
+من نافذة أوامر أخرى:
 
-```html
-<!-- OMEGA_FONTS_START -->
-<style id="omega-fonts">
-@font-face{font-family:'Tajawal';font-style:normal;font-weight:400;font-display:swap;
-  src:url(data:font/woff2;base64,d09GMgABAAAAACL0...) format('woff2');
-  unicode-range:U+0600-06FF,U+0750-077F,...}
-/* 600 غير متوفّر في Tajawal: الملف 700 يخدم المدى 600–900 */
-@font-face{...font-weight:600 900;src:url(data:font/woff2;base64,...)...}
-</style>
-<!-- OMEGA_FONTS_END -->
+```sh
+mkdir -p reports
+npx --yes lighthouse@13.5.0 http://localhost:4173/ \
+  --only-categories=performance \
+  --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage" \
+  --output=html --output=json \
+  --output-path=reports/lighthouse
 ```
 
-البلوك **مُولَّد آلياً** — لا تُعدّله يدوياً:
-
-```bash
-npm run fonts:embed        # scripts/embed-fonts.js
-```
-
-- لا يوجد أي طلب `fonts.googleapis.com` / `fonts.gstatic.com` ولا أي طلب لملف خط.
-- الخط يظهر من أول إطار (لا FOIT/FOUT) ويعمل أوفلاين لأن الصفحة نفسها تحمله.
-- `unicode-range` ضروري: ملف `arabic` لا يحتوي محارف لاتينية، فبدونه تُعرض الأرقام
-  والأسماء اللاتينية بخط النظام بدل Tajawal.
-
-**الثمن المقاس:** `index.html` من 373KB إلى 452KB (gzip: 57KB → 116KB)، لأن Base64 يضيف
-~33% ولا يقبل الضغط مجدداً. لكن إجمالي النقل في أول زيارة **شبه ثابت**: الخطوط كانت تُنزَّل
-منفصلة (~58KB woff2 غير مضغوط) وأصبحت داخل الصفحة. المكسب: طلبان إلى ثلاثة أقل، وظهور فوري
-للخط، وعمل أوفلاين كامل. الثمن الحقيقي: HTML أكبر يُحلَّل قبل أول رسم، وفقدان كاش مستقل للخطوط.
-على الزيارات المتكررة لا فرق (إعادة تحقق 304 تعيد استخدام HTML المخزّن).
-للعودة إلى الأسلوب الأخف: احذف البلوك بين العلامتين وأعِد `@font-face` مع
-`url('/fonts/tajawal-arabic-400-normal.woff2')` + `preload` (الملفات ما زالت في `public/fonts`).
-
-### 1.2 Critical CSS مضمّن داخل `<head>`
-
-داخل `index.html` يوجد بلوك `<style>` يغطي ما يظهر في الشاشة الأولى فقط
-(`html/body`, `#appContainer`, `header`, شريط التنقل) بحجم ~3KB.
-هذا يجعل أول رسم صحيحاً حتى قبل وصول حزمة Tailwind.
-
-### 1.3 الـ CSS الكامل: تحميل غير متزامن بدون كسر Tailwind
-
-الطريقة الشائعة `media="print" onload="this.media='all'"` **لا تعمل** إذا كُتبت يدوياً
-على `href="/src/style.css"`، لأن Vite يتوقف عن معالجة الملف كوحدة CSS و`@import "tailwindcss"`
-يُترك دون توليد (تحقّقنا من ذلك عملياً). لذلك يتم التحويل **بعد** البناء عبر إضافة صغيرة
-في `vite.config.js`:
-
-```js
-function asyncCssPlugin() {
-  return {
-    name: 'omega-async-css',
-    apply: 'build',
-    enforce: 'post',
-    transformIndexHtml(html) {
-      return html.replace(
-        /<link\s+rel="stylesheet"([^>]*?)href="([^"]+)"([^>]*?)>/g,
-        (match, before, href, after) => {
-          if (/media=|onload=/.test(before + after)) return match;
-          const attrs = `${before}${after}`.replace(/\s+$/, '');
-          return [
-            `<link rel="preload" as="style" href="${href}"${attrs}>`,
-            `<link rel="stylesheet" href="${href}"${attrs} media="print" onload="this.media='all';this.onload=null">`,
-            `<noscript><link rel="stylesheet" href="${href}"${attrs}></noscript>`,
-          ].join('\n  ');
-        }
-      );
-    },
-  };
-}
-```
-
-الناتج في `dist/index.html`:
-
-```html
-<link rel="preload" as="style" href="/assets/index-xxxx.css" crossorigin>
-<link rel="stylesheet" href="/assets/index-xxxx.css" crossorigin media="print" onload="this.media='all';this.onload=null">
-<noscript><link rel="stylesheet" href="/assets/index-xxxx.css" crossorigin></noscript>
-```
-
-**للعودة إلى الوضع المتزامن** (إن ظهر وميض في التصميم على شبكة بطيئة جداً):
-احذف `asyncCssPlugin()` من مصفوفة `plugins`, فيصبح الـ CSS حاجباً كالسابق.
-
----
-
-## 2) `Cache-Control` — ما يمكن وما لا يمكن
-
-### 2.1 الأصول الثابتة (قابلة للحل عبر `vercel.json`)
-
-`vercel.json` في جذر المستودع يضبط:
-
-- `/assets/*` → `public, max-age=31536000, immutable` (أسماء مُبصومة بالـ hash).
-- `/fonts/*` → سنة كاملة + `immutable` + `Access-Control-Allow-Origin: *`
-- `/sw.js` → `max-age=0, must-revalidate` (حتى يصل تحديث الـ PWA فوراً)
-- `/manifest.json` → ساعة واحدة
-- الصور الثابتة (`/icon-192.png`, `/favicon.png`, `/apple-touch-icon.png`, …) → أسبوع + `stale-while-revalidate`
-  (مذكورة ملفاً ملفاً: Vercel لا يقبل تعبيراً نمطياً مثل `/.*\\.(png|svg)` في `source`)
-- بقية المسارات → رؤوس أمان (`nosniff`, `Referrer-Policy`, `X-DNS-Prefetch-Control`)
-  و`Permissions-Policy` تسمح بالكاميرا لأن ماسح الباركود يستخدمها.
-
-> **CSP:** لم تُضَف سياسة `Content-Security-Policy` صارمة عن قصد، لأن التطبيق يستخدم
-> Google Drive / Sign-In / ملفات inline؛ فرض CSP غير مُختبَر قد يعطّل النسخ الاحتياطي.
-> عند الرغبة، ابدأ بوضع المراقبة فقط وفعّلها بعد التأكد من عدم وجود مخالفات:
->
-> ```json
-> { "key": "Content-Security-Policy-Report-Only",
->   "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://accounts.google.com; img-src 'self' data: blob: https:; font-src 'self'; frame-src https://accounts.google.com https://*.firebaseapp.com; worker-src 'self' blob:" }
-> ```
-
-> **SPA rewrites:** التطبيق لا يستخدم History API (كل التنقل داخل الصفحة)، لذلك لا حاجة
-> لـ `rewrites`. إن أضفت مسارات لاحقاً فاستخدم:
-> `"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]` مع التحقق من الأصول.
-
-```jsonc
-{
-  "framework": "vite",
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "headers": [
-    { "source": "/assets/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
-    { "source": "/fonts/(.*)",  "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
-        { "key": "Access-Control-Allow-Origin", "value": "*" } ] },
-    { "source": "/sw.js",       "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] }
-  ]
-}
-```
-
-### 2.2 `firebaseio.com` — الحقيقة الهندسية
-
-**لا يمكن** ضبط `Cache-Control` لطلبات `*.firebaseio.com` من `vercel.json`:
-
-1. `vercel.json` يخصّ النطاق الخاص بك على Vercel فقط، وليست له سلطة على نطاقات Google.
-2. حتى لو استطعت، طلبات Firebase RTDB (REST/WebSocket) تُعيد `Cache-Control: no-cache`
-   وتحتوي بيانات لحظية تُستخدم عبر WebSocket — وهي **ليست** طلبات حاجبة للعرض، لذلك لا
-   تؤثر مباشرة في FCP/LCP بل في «حجم النقل» و«وقت ظهور البيانات».
-
-ما يعالجها فعلياً:
-
-**أ. تقليل الحجم المنقول** (الأهم — وهو مطبَّق جزئياً):
-
-```js
-// نافذة حيّة محدودة بدل تنزيل كل السجل (قائمة المبيعات تنمو بلا حد)
-window.SALES_REALTIME_WINDOW = 3000;   // => query(ref(db,'v2/sales'), orderByKey(), limitToLast(3000))
-// والسجل الأقدم يُكمل بصفحات: endBefore(oldestKey) + limitToLast(pageSize)
-```
-
-تقليل النافذة إلى `500` أو `1000` يخفض النقل عند الإقلاع بنسبة 60–80% مقابل تاريخ أقدم
-يُحمَّل فقط عند الطلب. تأكّد أيضاً من وجود فهارس في `database.rules.json` (`.indexOn`).
-
-**ب. طلبات شرطية عبر ETag (REST)** للأقسام شبه الثابتة (`v2/products`, `v2/stats`):
-
-```js
-// أول مرة: خزّن الـ ETag
-const r1 = await fetch(`${DB}/v2/products.json`, { headers: { 'X-Firebase-ETag': 'true' } });
-const etag = r1.headers.get('ETag');
-const data = await r1.json();
-
-// في المرات التالية: إن لم يتغيّر شيء يعود 304 بدون جسم
-const r2 = await fetch(`${DB}/v2/products.json`, { headers: { 'if-match': etag } });
-if (r2.status === 304) { /* استخدم النسخة المحلية */ }
-```
-
-**ج. وسيط Edge على Vercel يضيف TTL** (إن أردت فعلاً `s-maxage` على قراءات Firebase):
-`api/fb.js` (Vercel Function) يقرأ من RTDB ويُعيد النتيجة برأس
-`Cache-Control: public, s-maxage=60, stale-while-revalidate=300`، ثم الواجهة تقرأ من
-`/api/fb?path=v2/products`. مناسب للبيانات المرجعية فقط، وليس للمبيعات اللحظية.
-
----
-
-## 3) JavaScript غير مستخدم (Code Splitting / Lazy Loading)
-
-### 3.1 Firebase SDK خارج المسار الحرج (تعديل رئيسي)
-
-`src/main.js` كان يستورد الحزمة بشكل ثابت فيدخل ~232KB (54KB gzip) في أول تحميل،
-وVite يُصدر له `modulepreload` حاجباً. الآن:
-
-```js
-let initializeApp, getDatabase, ref, set, update, push, remove, onValue, get,
-    query, limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore,
-    orderByKey, orderByChild, equalTo;
-let firebaseSDKPromise = null;
-
-function loadFirebaseSDK() {
-  if (!firebaseSDKPromise) {
-    firebaseSDKPromise = Promise.all([
-      import('firebase/app'),
-      import('firebase/database'),
-    ]).then(([appMod, dbMod]) => {
-      initializeApp = appMod.initializeApp;
-      ({ getDatabase, ref, set, update, push, remove, onValue, get, query,
-         limitToLast, limitToFirst, startAt, endAt, startAfter, endBefore,
-         orderByKey, orderByChild, equalTo } = dbMod);
-      return true;
-    }).catch((err) => { firebaseSDKPromise = null; throw err; });
-  }
-  return firebaseSDKPromise;
-}
-```
-
-ويُنتظر داخل `initFirebase()` بعد قراءة `firebase.config.json`:
-
-```js
-await loadFirebaseSDK();
-const app = initializeApp(firebaseConfig);
-```
-
-النتيجة: `firebase` يصبح chunk منفصلاً (244KB / 54KB gzip) يُنزَّل بالتوازي بعد أول رسم،
-بدون `modulepreload` حاجب.
-
-### 3.2 تجزئة الحزم في `vite.config.js`
-
-```js
-build: {
-  target: 'es2020',
-  cssCodeSplit: true,
-  modulePreload: { polyfill: false },   // توفير ~1KB وإلغاء polyfill غير ضروري
-  rollupOptions: {
-    output: {
-      manualChunks(id) {
-        if (!id.includes('node_modules')) return;   // كود التطبيق يبقى في chunk مستقل
-        if (id.includes('firebase')) return 'firebase';
-        if (id.includes('@zxing')) return 'zxing';         // ماسح الباركود: 118KB gzip
-        if (id.includes('html2canvas')) return 'html2canvas'; // تصدير الصورة: 69KB gzip
-        return 'vendor';
-      },
-    },
-  },
-}
-```
-
-`@zxing/browser` و`html2canvas-pro` كانا أصلاً يُحمّلان عبر `import()` عند فتح الماسح/التصدير،
-والتجزئة الآن تضمن كاشاً طويل الأمد لكل منهما.
-
-### 3.3 نمط «عرض عند الطلب» للميزات الثقيلة (توصية للخطوة التالية)
-
-المستودع ما زال ملفاً واحداً بـ ~13.8k سطر. أفضل خفض إضافي هو نقل وحدات مستقلة إلى
-`import()`:
-
-```js
-// بدل استيراد ثابت
-let driveModule = null;
-async function ensureDrive() {
-  driveModule ||= await import('./features/google-drive.js'); // chunk منفصل
-  return driveModule;
-}
-document.getElementById('driveBackupBtn')
-  .addEventListener('pointerenter', () => ensureDrive(), { once: true }); // تحميل استباقي ذكي
-```
-
-وبالمثل: التقارير المالية الكبيرة، مزامنة GitHub/AI Studio، ماسح الباركود، لوحة عمولات الكوتش.
-افحص التغطية في Chrome DevTools ← `Ctrl+Shift+P` ← *Show Coverage* لمعرفة الأسطر غير المنفَّذة.
-
----
-
-## 4) مقاييس LCP / FCP / TBT
-
-| المقياس | ما يبطئه في مشروعك | الإجراء |
-| --- | --- | --- |
-| **FCP** | CSS حاجب من Google Fonts + حزمة JS كبيرة في `<head>` | تم: خطوط ذاتية + CSS غير متزامن + Critical CSS. أضف `preconnect` لـ Firebase (مطبَّق). |
-| **LCP** | عنصر LCP هنا **نصّي** (عنوان الهيدر) لا صورة: يعتمد على الخط + CSS | تم: `preload` لخط 400/700 + `font-display: swap`. لا تستخدم `font-display: block`. |
-| **TBT** | تهيئة Firebase + معالجة 373KB من HTML + مزامنة أولى للبيانات | تم: Firebase خارج المسار الحرج. الخطوة التالية: تقسيم `index.html`. |
-| **CLS** | ظهور البطاقات بعد وصول البيانات | احجز ارتفاعاً ثابتاً للبطاقات/الجداول (`min-height`) وشاشات تحميل (skeleton). |
-
-### خطوات التحقق المحلي
-
-```bash
-npm run build && npx vite preview --port 4173
-# ثم: Lighthouse (Chrome DevTools → Performance) على http://localhost:4173
-# قارن: عدد الطلبات الحاجبة، حجم JS المنقول، TBT
-```
-
-### نتائج البناء قبل/بعد (من `vite build`)
-
-```
-قبل:  index.html 370KB · CSS 86KB (حاجب) · firebase 232KB (preload حاجب) · zxing 457KB · html2canvas 264KB · app 516KB
-بعد:  index.html 452KB (يشمل 6 خطوط Base64) · CSS 86KB (غير حاجب) · firebase 244KB (ديناميكي)
-      zxing 457KB (ديناميكي) · html2canvas 264KB (ديناميكي) · app 516KB
-      ← المسار الحرج: index.html + app + CSS فقط (صفر طلبات لجهات خارجية، صفر طلبات خطوط)
-```
-
----
-
-## 5) توصيات سريعة إضافية
-
-1. **تقسيم `index.html` (373KB):** كل النوافذ (modals) موجودة في الـ HTML الأولي. حوّل
-   النوافذ غير المستخدمة إلى قوالب `<template>` تُحمَّل عند الطلب، أو أخرجها إلى
-   `public/partials/*.html` واجلبها بـ `fetch` عند أول فتح. أكبر مكسب متبقٍ في TBT/LCP.
-2. **الـ Service Worker:** تم تحديث `public/sw.js` (`omega-gym-v5`): إزالة رابط خطوط Google
-   (كان قد يفشل في `cache.addAll`)، وإضافة ملفَّي الخط إلى الكاش المسبق.
-3. **الصور:** صور المشتركين تُخزَّن Base64 (إن كانت كذلك) فتضخّم الـ HTML/localStorage.
-   الأفضل: ضغطها إلى WebP بعرض 200px قبل التخزين (`canvas.toBlob('image/webp', 0.8)`).
-4. **الرسوم المتحركة:** `animate-pulse` على شارة Google Drive يعمل باستمرار ويستهلك
-   main thread؛ استخدمه فقط أثناء المزامنة.
-5. **مراقبة مستمرة:** أضف Lighthouse CI أو Vercel Speed Insights لقياس حقيقي من مستخدميك
-   في الجزائر بدل القياس الصناعي.
-
----
-
-## 6) ملفات تغيّرت في هذا التحسين
-
-```
-index.html          ← preconnect/preload + Critical CSS + إزالة Google Fonts
-index.html          ← بلوك <style id="omega-fonts"> (Tajawal Base64) — مُولَّد آلياً
-src/style.css       ← أُزيلت @font-face (الخط مضمّن الآن في الصفحة)
-src/main.js         ← تحميل Firebase SDK عبر dynamic import
-vite.config.js      ← async-css plugin + manualChunks + modulePreload.polyfill=false
-public/fonts/*      ← Tajawal woff2 (6 ملفات، ~58KB) — مصدر التضمين (احتياطي/بديل)
-scripts/embed-fonts.js ← توليد بلوك الخطوط Base64 داخل index.html
-public/sw.js        ← كاش v6 (أُزيلت خطوط الشبكة من الـ precache)
-vercel.json         ← cache headers + security headers + SPA rewrites  (جديد)
-docs/performance.md ← هذه الوثيقة
-```
+يمكن تعيين `CHROME_PATH` إلى مسار Chromium إذا لم يكتشفه Lighthouse. كرّر الفحص ثلاث مرات واعتمد الوسيط، مع حفظ ملفات كل جولة قبل التالية. قد تختلف النتائج باختلاف المعالج وإصدار Chrome واتصال الخدمات الخارجية.

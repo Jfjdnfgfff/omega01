@@ -1,5 +1,5 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
-const CACHE_NAME = 'omega-gym-v6';
+const CACHE_NAME = 'omega-gym-v7';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -7,7 +7,11 @@ const STATIC_ASSETS = [
   '/apple-touch-icon.png',
   '/icon-192.png',
   '/icon-512.png',
-  '/icon.svg'
+  '/icon.svg',
+  // Local fonts must remain available after the first offline visit.
+  ...['arabic', 'latin'].flatMap((subset) =>
+    [400, 500, 700].map((weight) => `/fonts/tajawal-${subset}-${weight}-normal.woff2`)
+  )
 ];
 
 self.addEventListener('install', (event) => {
@@ -23,7 +27,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+        keys.filter((k) => k.startsWith('omega-gym-') && k !== CACHE_NAME).map((k) => caches.delete(k))
       );
     }).then(() => self.clients.claim())
   );
@@ -52,8 +56,24 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone));
         }
         return res;
-      }).catch(() => caches.match('/index.html') || caches.match('/'))
+      }).catch(async () => (await caches.match('/index.html')) || (await caches.match('/')) || Response.error())
     );
+    return;
+  }
+
+  // Content-hashed build assets cannot change at the same URL. Reuse them
+  // without a redundant network download on every navigation.
+  if (url.origin === self.location.origin && /^\/assets\/.+-[\w-]{8,}\.(js|css)$/.test(url.pathname)) {
+    event.respondWith((async () => {
+      const cached = await caches.match(req);
+      if (cached) return cached;
+      const response = await fetch(req);
+      if (response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(req, response.clone());
+      }
+      return response;
+    })());
     return;
   }
 

@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-22",
+  "tool": "Lighthouse 13.5.0",
+  "chrome": "133.0.6943.0",
+  "url": "http://localhost:4173/",
+  "profile": "Default mobile, simulated throttling, fresh browser per run",
+  "limitations": [
+    "Local production build, not deployed PageSpeed Insights or field data",
+    "Firebase endpoints are inaccessible in the sandbox; no real remote data was loaded",
+    "Service worker bypasses localhost; repeat-visit cache behavior is unit tested, not reflected in these metrics"
+  ],
+  "runs": {
+    "before": [
+      {
+        "score": 90,
+        "first-contentful-paint": 2175.304,
+        "largest-contentful-paint": 2325.304,
+        "speed-index": 2175.304,
+        "total-blocking-time": 298,
+        "cumulative-layout-shift": 0.0039947183490564525,
+        "interactive": 4692.956,
+        "total-byte-weight": 437419
+      },
+      {
+        "score": 77,
+        "first-contentful-paint": 2172.877,
+        "largest-contentful-paint": 2247.877,
+        "speed-index": 2172.877,
+        "total-blocking-time": 148,
+        "cumulative-layout-shift": 0.3648070132284096,
+        "interactive": 2602.377,
+        "total-byte-weight": 437419
+      },
+      {
+        "score": 70,
+        "first-contentful-paint": 2163.8559999999998,
+        "largest-contentful-paint": 3228.7839999999997,
+        "speed-index": 2163.8559999999998,
+        "total-blocking-time": 152,
+        "cumulative-layout-shift": 0.414900355783562,
+        "interactive": 3228.7839999999997,
+        "total-byte-weight": 437419
+      }
+    ],
+    "after": [
+      {
+        "score": 96,
+        "first-contentful-paint": 2165.132,
+        "largest-contentful-paint": 2410.6980000000003,
+        "speed-index": 2165.132,
+        "total-blocking-time": 26,
+        "cumulative-layout-shift": 0,
+        "interactive": 2486.6980000000003,
+        "total-byte-weight": 321364
+      },
+      {
+        "score": 96,
+        "first-contentful-paint": 2167.9359999999997,
+        "largest-contentful-paint": 2407.404,
+        "speed-index": 2167.9359999999997,
+        "total-blocking-time": 52.5,
+        "cumulative-layout-shift": 0,
+        "interactive": 3568.8113999999996,
+        "total-byte-weight": 321364
+      },
+      {
+        "score": 96,
+        "first-contentful-paint": 2161.8320000000003,
+        "largest-contentful-paint": 2410.248,
+        "speed-index": 2161.8320000000003,
+        "total-blocking-time": 42.5,
+        "cumulative-layout-shift": 0,
+        "interactive": 3538.5268000000005,
+        "total-byte-weight": 321364
+      }
+    ]
+  }
+}
