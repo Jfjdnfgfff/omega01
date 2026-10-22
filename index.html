@@ -72,6 +72,13 @@
     /* Keep the pre-bundle paint readable without shifting the layout once tailwind lands */
     #topHeaderNav{display:flex;align-items:center;overflow-x:auto;scroll-behavior:smooth;padding:.25rem}
     #topHeaderNavInner{display:flex;align-items:center;flex-wrap:nowrap;flex-shrink:0;min-width:max-content;gap:.375rem}
+    /* Header typography (matches src/style.css) so the first paint is the final look */
+    header{font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif;font-synthesis:none}
+    #topHeaderNavInner>button{font-family:inherit;font-weight:700;font-size:13px;line-height:1.4;
+      letter-spacing:0;padding-block:.45rem;color:#0b1220}
+    #topHeaderNavInner>button svg{width:1.05em;height:1.05em;flex-shrink:0}
+    @media (min-width:640px){#topHeaderNavInner>button{font-size:14.5px}}
+    @media (min-width:1024px){#topHeaderNavInner>button{font-size:15px}}
   </style>
 
   <!-- Full stylesheet. At build time the `async-css` Vite plugin converts this
