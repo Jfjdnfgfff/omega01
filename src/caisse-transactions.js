@@ -28,42 +28,110 @@ function movementTimestamp(value) {
     return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-/**
- * Build the daily caisse ledger from the financial sections.
- * Existing section records remain the source of truth; cash movement logs are
- * used for subscriptions because a renewal overwrites the customer's previous
- * subscription fields. Credit repayments are already stored in caisseLogs.
- */
-export function buildCaisseMovements(state = {}, targetDate, dateKey) {
-    const targetDateKey = typeof dateKey === 'function' ? dateKey(targetDate) : String(targetDate || '').slice(0, 10);
-    if (!targetDateKey) {
-        return {
-            transactions: [], totalIncome: 0, totalExpenses: 0, netCash: 0,
-            subIncome: 0, quickIncome: 0, salesIncome: 0, creditIncome: 0,
-            expenses: 0, staffPayouts: 0, supplierPayments: 0
-        };
-    }
+function zeroMovements() {
+    return {
+        transactions: [], totalIncome: 0, totalExpenses: 0, netCash: 0,
+        subIncome: 0, quickIncome: 0, salesIncome: 0, creditIncome: 0,
+        expenses: 0, staffPayouts: 0, supplierPayments: 0
+    };
+}
 
+// Sort one day's movements and fold them into the public totals shape.
+// This is the exact tail of the original single-day builder, shared by the
+// single-day and all-days entry points so both can never drift apart.
+function finalizeMovements(transactions) {
+    transactions.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
+    const totals = {
+        totalIncome: 0,
+        totalExpenses: 0,
+        subIncome: 0,
+        quickIncome: 0,
+        salesIncome: 0,
+        creditIncome: 0,
+        expenses: 0,
+        staffPayouts: 0,
+        supplierPayments: 0
+    };
+
+    transactions.forEach(transaction => {
+        const amount = transaction.amount;
+        if (transaction.direction === 'in') {
+            totals.totalIncome += amount;
+            if (transaction.source === 'subscription') totals.subIncome += amount;
+            else if (transaction.source === 'quickSession') totals.quickIncome += amount;
+            else if (transaction.source === 'sale') totals.salesIncome += amount;
+            else if (transaction.source === 'creditPayment') totals.creditIncome += amount;
+        } else {
+            totals.totalExpenses += amount;
+            if (transaction.source === 'expense') totals.expenses += amount;
+            else if (transaction.source === 'staffPayout') totals.staffPayouts += amount;
+            else if (transaction.source === 'supplier') totals.supplierPayments += amount;
+        }
+    });
+
+    return {
+        transactions,
+        ...totals,
+        netCash: totals.totalIncome - totals.totalExpenses
+    };
+}
+
+/**
+ * Single pass over every financial section, bucketing movements by calendar
+ * day. `onlyDateKey` (when given) keeps just that one day — the historical
+ * behaviour — while `null` keeps them all. Record iteration order, movement
+ * ids, de-duplication and sorting are identical either way, so
+ * indexCaisseMovementsByDate(state).get(day) always equals
+ * buildCaisseMovements(state, day).
+ */
+function collectCaisseMovementsByDate(state, dateKey, onlyDateKey) {
     const logs = asArray(state.caisseLogs);
     const fromGeneralFund = item => item && item.fundSource === 'general';
     const recordedSubscriptionIds = new Set(logs
         .filter(log => log && log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription')
         .map(log => String(log.sourceId || ''))
         .filter(Boolean));
-    const transactions = [];
-    const seenIds = new Set();
+
+    // subscriptionPaidForCaisse only ever inspects this customer's own
+    // credit_payment receipts; handing it the pre-grouped subset keeps its
+    // result identical without an O(customers x logs) scan per build.
+    const settlementsByCustomer = new Map();
+    logs.forEach(log => {
+        if (!log || log.type !== 'credit_payment') return;
+        const key = String(log.customerId);
+        let list = settlementsByCustomer.get(key);
+        if (!list) {
+            list = [];
+            settlementsByCustomer.set(key, list);
+        }
+        list.push(log);
+    });
+
+    const buckets = new Map(); // dateStr -> { transactions, seen }
+    const bucketFor = (dateStr) => {
+        if (!dateStr) return null;
+        if (onlyDateKey !== null && dateStr !== onlyDateKey) return null;
+        let bucket = buckets.get(dateStr);
+        if (!bucket) {
+            bucket = { transactions: [], seen: new Set() };
+            buckets.set(dateStr, bucket);
+        }
+        return bucket;
+    };
 
     const pushMovement = ({
         id, source, sourceId, direction, amount, date, title, detail, sourceLabel
     }) => {
         const value = asAmount(amount);
-        if (!value || typeof dateKey !== 'function' || dateKey(date) !== targetDateKey) return;
+        if (!value) return;
+        const bucket = bucketFor(dateKey(date));
+        if (!bucket) return;
 
-        const stableId = String(id || `${source || 'movement'}_${sourceId || date}_${transactions.length}`);
-        if (seenIds.has(stableId)) return;
-        seenIds.add(stableId);
+        const stableId = String(id || `${source || 'movement'}_${sourceId || date}_${bucket.transactions.length}`);
+        if (bucket.seen.has(stableId)) return;
+        bucket.seen.add(stableId);
         const time = movementTimestamp(date);
-        transactions.push({
+        bucket.transactions.push({
             id: stableId,
             source: source || 'other',
             sourceId: sourceId == null ? '' : String(sourceId),
@@ -117,12 +185,13 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
         const sourceId = String(customer.subscriptionCycleId || customer.id || customer._rtdbKey || index);
         if (recordedSubscriptionIds.has(sourceId)) return;
         const date = customer.paymentDate || customer.startDate;
-        if (typeof dateKey !== 'function' || dateKey(date) !== targetDateKey) return;
+        if (!bucketFor(dateKey(date))) return;
         const pkg = packageById.get(String(customer.packageId || ''));
         const price = customer.price !== undefined && customer.price !== null && customer.price !== ''
             ? Number(customer.price)
             : Number(pkg?.price || 0);
-        const amount = subscriptionPaidForCaisse(customer, price, logs, dateKey);
+        const amount = subscriptionPaidForCaisse(
+            customer, price, settlementsByCustomer.get(String(customer.id)) || [], dateKey);
         pushMovement({
             id: `subscription_${sourceId}`,
             source: 'subscription',
@@ -228,38 +297,39 @@ export function buildCaisseMovements(state = {}, targetDate, dateKey) {
         });
     });
 
-    transactions.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
-    const totals = {
-        totalIncome: 0,
-        totalExpenses: 0,
-        subIncome: 0,
-        quickIncome: 0,
-        salesIncome: 0,
-        creditIncome: 0,
-        expenses: 0,
-        staffPayouts: 0,
-        supplierPayments: 0
-    };
+    return buckets;
+}
 
-    transactions.forEach(transaction => {
-        const amount = transaction.amount;
-        if (transaction.direction === 'in') {
-            totals.totalIncome += amount;
-            if (transaction.source === 'subscription') totals.subIncome += amount;
-            else if (transaction.source === 'quickSession') totals.quickIncome += amount;
-            else if (transaction.source === 'sale') totals.salesIncome += amount;
-            else if (transaction.source === 'creditPayment') totals.creditIncome += amount;
-        } else {
-            totals.totalExpenses += amount;
-            if (transaction.source === 'expense') totals.expenses += amount;
-            else if (transaction.source === 'staffPayout') totals.staffPayouts += amount;
-            else if (transaction.source === 'supplier') totals.supplierPayments += amount;
-        }
-    });
+/**
+ * Build the daily caisse ledger from the financial sections.
+ * Existing section records remain the source of truth; cash movement logs are
+ * used for subscriptions because a renewal overwrites the customer's previous
+ * subscription fields. Credit repayments are already stored in caisseLogs.
+ */
+export function buildCaisseMovements(state = {}, targetDate, dateKey) {
+    const targetDateKey = typeof dateKey === 'function' ? dateKey(targetDate) : String(targetDate || '').slice(0, 10);
+    if (!targetDateKey || typeof dateKey !== 'function') {
+        return zeroMovements();
+    }
 
-    return {
-        transactions,
-        ...totals,
-        netCash: totals.totalIncome - totals.totalExpenses
-    };
+    const buckets = collectCaisseMovementsByDate(state, dateKey, targetDateKey);
+    const bucket = buckets.get(targetDateKey);
+    return bucket ? finalizeMovements(bucket.transactions) : zeroMovements();
+}
+
+/**
+ * The same ledger for EVERY day at once, from one pass over the sections:
+ * Map<"YYYY-MM-DD", movements> where each value is exactly what
+ * buildCaisseMovements(state, day, dateKey) returns for that day. Days with
+ * no movements are absent (their ledger is the zero shape). This turns
+ * "expected cash for each of N closings" from N full scans into one.
+ */
+export function indexCaisseMovementsByDate(state = {}, dateKey) {
+    const index = new Map();
+    if (typeof dateKey !== 'function') return index;
+    const buckets = collectCaisseMovementsByDate(state, dateKey, null);
+    for (const [dateStr, bucket] of buckets) {
+        index.set(dateStr, finalizeMovements(bucket.transactions));
+    }
+    return index;
 }

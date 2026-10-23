@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCaisseMovements } from '../src/caisse-transactions.js';
+import { buildCaisseMovements, indexCaisseMovementsByDate } from '../src/caisse-transactions.js';
 import { isCaisseClosing } from '../src/caisse-credit.js';
 
 const dateKey = input => {
@@ -163,4 +163,76 @@ test('supplier payments from the general fund are excluded from the daily till',
     }, today, dateKey);
     assert.equal(result.supplierPayments, 2000);
     assert.equal(result.netCash, -2000);
+});
+
+const ZERO_MOVEMENTS = {
+    transactions: [], totalIncome: 0, totalExpenses: 0, netCash: 0,
+    subIncome: 0, quickIncome: 0, salesIncome: 0, creditIncome: 0,
+    expenses: 0, staffPayouts: 0, supplierPayments: 0
+};
+
+test('indexCaisseMovementsByDate matches buildCaisseMovements for every day', () => {
+    const state = {
+        packages: [{ id: 'pkg-month', name: 'Monthly', price: 1500 }],
+        customers: [
+            { id: 'paid-member', name: 'Paid member', startDate: '2026-09-29T09:00:00', price: 1000, paymentStatus: 'paid' },
+            { id: 'credit-member', name: 'Credit member', startDate: '2026-09-29T10:00:00', price: 1000, paymentStatus: 'credit', debtAmount: 300 },
+            { id: 'renewed-member', name: 'Renewed member', subscriptionCycleId: 'renew-2', startDate: '2026-09-28T10:00:00', price: 900, paymentStatus: 'paid' },
+            { id: 'settled-member', name: 'Settled member', subscriptionCycleId: 'cycle-1', startDate: '2026-09-28', price: 1000, paymentStatus: 'paid' },
+            { id: 'package-member', name: 'Package member', packageId: 'pkg-month', paymentDate: '2026-09-30', paymentStatus: 'paid' },
+            { id: 'fully-unpaid', name: 'Unpaid member', startDate: '2026-09-30', price: 700, paymentStatus: 'credit', debtAmount: 700 }
+        ],
+        caisseLogs: [
+            { id: 'cash-sub', type: 'cash_movement', source: 'subscription', sourceId: 'renew-2', direction: 'in', amount: 500, date: '2026-09-29T11:00:00', title: 'Renewal' },
+            { id: 'repay', type: 'credit_payment', creditId: 'credit-1', creditName: 'Credit payment', amount: 50, date: '2026-09-29T12:00:00' },
+            { id: 'repay-general', type: 'credit_payment', creditId: 'credit-2', amount: 999, date: '2026-09-29', fundSource: 'general' },
+            { id: 'settlement', type: 'credit_payment', creditId: 'credit-3', customerId: 'settled-member', subscriptionDate: '2026-09-28', subscriptionCycleId: 'cycle-1', subscriptionPaidBeforeSettlement: 400, amount: 600, date: '2026-09-30' },
+            { id: 'closing-29', type: 'closing', date: '2026-09-29', actualAmount: 2465 }
+        ],
+        quickSessions: [
+            { id: 'session-1', date: '2026-09-29T13:00:00', price: 200, clientCount: 1, sessionCount: 1 },
+            { id: '1757000000000', price: 150, clientCount: 2, sessionCount: 1 }
+        ],
+        sales: [
+            { id: 'sale-1', date: '2026-09-29T14:00:00', prodName: 'Protein', total: 300, qty: 1 },
+            { id: 'sale-credit', date: '2026-09-28', prodName: 'Bar', total: 250, cashPaid: 0, paymentStatus: 'credit' },
+            { id: 'sale-2', date: '2026-09-30', prodName: 'Shaker', total: 450, cashPaid: 450 }
+        ],
+        expenses: [
+            { id: 'expense-1', date: '2026-09-29T15:00:00', desc: 'Cleaning', amount: 80 },
+            { id: 'expense-general', date: '2026-09-28', desc: 'Rent', amount: 5000, fundSource: 'general' }
+        ],
+        staffPayouts: [
+            { id: 'payout-1', date: '2026-09-29', name: 'Coach', amount: 120 },
+            { id: 'payout-2', createdAt: '2026-09-30', name: 'Cleaner', amount: 90 }
+        ],
+        supplierTransactions: [
+            { id: 'supplier-purchase', type: 'purchase', supplierName: 'Supplier', items: 'Goods', paidAmount: 60, remainingDebt: 140, date: '2026-09-29' },
+            { id: 'supplier-payment', type: 'payment', supplierName: 'Supplier', paidAmount: 25, date: '2026-09-28' }
+        ]
+    };
+
+    const index = indexCaisseMovementsByDate(state, dateKey);
+    for (const day of ['2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01']) {
+        assert.deepEqual(index.get(day) ?? ZERO_MOVEMENTS, buildCaisseMovements(state, day, dateKey), `day ${day}`);
+    }
+    // The settled member's subscription day kept only what entered the till
+    // before settlement; the remainder belongs to the settlement day.
+    assert.equal(index.get('2026-09-28').subIncome, 400);
+    assert.equal(index.get('2026-09-30').creditIncome, 600);
+});
+
+test('indexCaisseMovementsByDate counts legacy supplier cards like the single-day builder', () => {
+    const state = {
+        suppliers: [{ id: 'legacy-supplier', name: 'Legacy supplier', paid: 75, debt: 125, date: '2026-09-29' }]
+    };
+    const index = indexCaisseMovementsByDate(state, dateKey);
+    assert.deepEqual(index.get('2026-09-29') ?? ZERO_MOVEMENTS, buildCaisseMovements(state, '2026-09-29', dateKey));
+    assert.equal(index.get('2026-09-29').supplierPayments, 75);
+});
+
+test('indexCaisseMovementsByDate returns an empty map without a dateKey function', () => {
+    const index = indexCaisseMovementsByDate({ sales: [{ id: 's1', total: 10, date: '2026-09-29' }] });
+    assert.equal(index.size, 0);
+    assert.deepEqual(buildCaisseMovements({ sales: [{ id: 's1', total: 10, date: '2026-09-29' }] }, '2026-09-29'), ZERO_MOVEMENTS);
 });
