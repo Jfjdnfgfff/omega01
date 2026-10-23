@@ -2473,7 +2473,11 @@ window.addEventListener('unhandledrejection', (event) => {
             if (dv) { dv.classList.remove('hidden'); dv.classList.add('flex'); }
             window.scrollTo(0, 0);
         }
-        scheduleRender();
+        // Navigation should not wait for the global data-update debounce. The
+        // renderer already batches work into the next animation frame, so draw
+        // the newly visible view immediately while realtime updates remain
+        // debounced through scheduleRender().
+        if (typeof window.render === 'function') window.render();
     }
     window.toggleView = toggleView; function openBulkImportModal() {
         promptWithPassword({ title: 'استيراد بالباركود',
