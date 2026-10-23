@@ -183,13 +183,36 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             const canvas = await html2canvas(reportElem, {
                 scale, useCORS: true,
                 backgroundColor: '#ffffff',
-                windowWidth: 1280, width: TARGET_W,
+                windowWidth: 1280, windowHeight: Math.max(1280, estH + 128), width: TARGET_W,
                 scrollX: 0, scrollY: 0, logging: false, onclone: (clonedDoc) => {
                     const clonedReport = clonedDoc.getElementById('fullReportContent');
+                    const clonedModal = clonedDoc.getElementById('fullReportModal');
+                    const clonedModalContent = clonedReport?.closest('.modal-content');
+                    // The report normally sits inside a scrollable 92vh modal. Expand
+                    // its ancestors in the html2canvas clone so the export includes the
+                    // entire report, not just the currently visible viewport.
+                    if (clonedModal) {
+                        Object.assign(clonedModal.style, {
+                            display: 'block', position: 'static', inset: 'auto', zIndex: 'auto',
+                            padding: '0', margin: '0', overflow: 'visible', maxHeight: 'none',
+                            height: 'auto', opacity: '1', transform: 'none', backgroundColor: '#ffffff'
+                        });
+                    }
+                    if (clonedModalContent) {
+                        Object.assign(clonedModalContent.style, {
+                            width: `${TARGET_W}px`, maxWidth: 'none', minWidth: `${TARGET_W}px`,
+                            padding: '0', margin: '0', overflow: 'visible', overflowX: 'visible',
+                            overflowY: 'visible', maxHeight: 'none', height: 'auto', transform: 'none',
+                            boxSizing: 'border-box'
+                        });
+                    }
                     if (clonedReport) {
                         clonedReport.style.width = `${TARGET_W}px`;
                         clonedReport.style.maxWidth = `${TARGET_W}px`;
                         clonedReport.style.minWidth = `${TARGET_W}px`;
+                        clonedReport.style.maxHeight = 'none';
+                        clonedReport.style.height = 'auto';
+                        clonedReport.style.overflow = 'visible';
                         clonedReport.style.padding = '32px';
                         clonedReport.style.backgroundColor = '#ffffff';
                         clonedReport.style.boxSizing = 'border-box';

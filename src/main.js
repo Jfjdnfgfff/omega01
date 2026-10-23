@@ -299,48 +299,56 @@ window.addEventListener('unhandledrejection', (event) => {
 
   // Silent background pager: completes older sales history with cursor-based pagination
   // (orderByKey + endBefore) — no full-node re-downloads, no toasts, no blocked UI.
-  window.completeSalesHistorySilently = async function() {
-    if (window.salesHistoryLoading || window.salesHistoryComplete) return;
-    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return;
+  // Concurrent callers share one promise, so a full-report export can wait for
+  // the same background sales-history load instead of exporting a partial window.
+  let salesHistoryCompletionPromise = null;
+  window.completeSalesHistorySilently = function() {
+    if (window.salesHistoryComplete) return Promise.resolve(true);
+    if (salesHistoryCompletionPromise) return salesHistoryCompletionPromise;
+    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return Promise.resolve(false);
     window.salesHistoryLoading = true;
-    try {
-      const pageSize = window.SALES_REALTIME_WINDOW || 3000;
-      const keyLess = (a, b) => {
-        const na = Number(a); const nb = Number(b);
-        if (!isNaN(na) && !isNaN(nb) && a !== '' && b !== '') return na < nb;
-        return String(a) < String(b);
-      };
-      for (let guard = 0; guard < 60; guard++) {
-        const list = Array.isArray(window.appState.sales) ? window.appState.sales : [];
-        let oldestKey = null;
-        for (let i = 0; i < list.length; i++) {
-          const k = list[i] && (list[i]._rtdbKey || list[i].id);
-          if (k !== undefined && k !== null && k !== '' && (oldestKey === null || keyLess(String(k), String(oldestKey)))) {
-            oldestKey = String(k);
+    salesHistoryCompletionPromise = (async () => {
+      try {
+        const pageSize = window.SALES_REALTIME_WINDOW || 3000;
+        const keyLess = (a, b) => {
+          const na = Number(a); const nb = Number(b);
+          if (!isNaN(na) && !isNaN(nb) && a !== '' && b !== '') return na < nb;
+          return String(a) < String(b);
+        };
+        for (let guard = 0; guard < 60; guard++) {
+          const list = Array.isArray(window.appState.sales) ? window.appState.sales : [];
+          let oldestKey = null;
+          for (let i = 0; i < list.length; i++) {
+            const k = list[i] && (list[i]._rtdbKey || list[i].id);
+            if (k !== undefined && k !== null && k !== '' && (oldestKey === null || keyLess(String(k), String(oldestKey)))) {
+              oldestKey = String(k);
+            }
           }
+          let olderQ;
+          if (oldestKey) {
+            olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), endBefore(oldestKey), limitToLast(pageSize));
+          } else {
+            olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), limitToLast(pageSize));
+          }
+          const snap = await get(olderQ);
+          if (!snap || !snap.exists()) { window.salesHistoryComplete = true; break; }
+          const data = snap.val();
+          const keys = Object.keys(data);
+          const items = keys.map(k => ({ ...data[k], _rtdbKey: k }));
+          if (items.length === 0) { window.salesHistoryComplete = true; break; }
+          window.applyFirebaseSectionUpdate('sales', items, 'Silent Sales History Pager');
+          if (items.length < pageSize) { window.salesHistoryComplete = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
-        let olderQ;
-        if (oldestKey) {
-          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), endBefore(oldestKey), limitToLast(pageSize));
-        } else {
-          olderQ = query(ref(window.firebaseDB, 'v2/sales'), orderByKey(), limitToLast(pageSize));
-        }
-        let snap = await get(olderQ);
-        if (!snap || !snap.exists()) { window.salesHistoryComplete = true; break; }
-        const data = snap.val();
-        const keys = Object.keys(data);
-        const items = keys.map(k => ({ ...data[k], _rtdbKey: k }));
-        if (items.length === 0) { window.salesHistoryComplete = true; break; }
-        window.applyFirebaseSectionUpdate('sales', items, 'Silent Sales History Pager');
-        if (items.length < pageSize) { window.salesHistoryComplete = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 0));
+      } catch (e) {
+        console.warn('Silent sales history completion note:', e);
+      } finally {
+        window.salesHistoryLoading = false;
+        if (typeof window.scheduleRender === 'function') window.scheduleRender();
       }
-    } catch (e) {
-      console.warn('Silent sales history completion note:', e);
-    } finally {
-      window.salesHistoryLoading = false;
-      if (typeof window.scheduleRender === 'function') window.scheduleRender();
-    }
+      return Boolean(window.salesHistoryComplete);
+    })().finally(() => { salesHistoryCompletionPromise = null; });
+    return salesHistoryCompletionPromise;
   };
 
   const startupSections = ['stats', 'privacy', 'products', 'customers', 'sales',
@@ -7251,6 +7259,18 @@ window.addEventListener('unhandledrejection', (event) => {
             `; }).join(''); } window.renderSuppliersList = renderSuppliersList;
     let fullReportPromise = null;
     let fullReportApi = null;
+    const fullReportDataSections = ['customers', 'sales', 'expenses', 'suppliers', 'staffPayouts', 'packages'];
+    async function ensureFullReportDataLoaded() {
+        if (typeof window.lazyLoadSection === 'function') {
+            await Promise.all(fullReportDataSections.map(section => window.lazyLoadSection(section)));
+        }
+        if (window.firebaseDB && !window.salesHistoryComplete && typeof window.completeSalesHistorySilently === 'function') {
+            const complete = await window.completeSalesHistorySilently();
+            if (!complete && !window.salesHistoryComplete) {
+                throw new Error('Full sales history is not available yet');
+            }
+        }
+    }
     function loadFullReport() {
         if (!fullReportPromise) fullReportPromise = import('./full-report.js')
             .then(module => (fullReportApi = module.createFullReport({
@@ -7259,12 +7279,25 @@ window.addEventListener('unhandledrejection', (event) => {
         return fullReportPromise;
     }
     async function openFullReportModal() {
-        try { return (await loadFullReport()).openFullReportModal(); }
-        catch (error) { showErrorToast('تعذّر تحميل التقرير، أعد المحاولة'); }
+        try {
+            if (window.firebaseDB && !window.salesHistoryComplete) {
+                showInfoToast('جاري تحميل كامل بيانات التقرير قبل فتحه...');
+            }
+            await ensureFullReportDataLoaded();
+            return (await loadFullReport()).openFullReportModal();
+        } catch (error) {
+            console.error('Full report data load failed:', error);
+            showErrorToast('تعذّر تحميل جميع بيانات التقرير، أعد المحاولة');
+        }
     }
     async function renderFullReport() {
-        try { return (await loadFullReport()).renderFullReport(); }
-        catch (error) { showErrorToast('تعذّر تحميل التقرير، أعد المحاولة'); }
+        try {
+            await ensureFullReportDataLoaded();
+            return (await loadFullReport()).renderFullReport();
+        } catch (error) {
+            console.error('Full report data load failed:', error);
+            showErrorToast('تعذّر تحميل جميع بيانات التقرير، أعد المحاولة');
+        }
     }
     function updateFullReportSalesSection() {
         // Deleting a sale on the dashboard must not download an unopened report.
