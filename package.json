@@ -22,6 +22,7 @@
   "dependencies": {
     "@zxing/browser": "^0.2.1",
     "@zxing/library": "^0.23.0",
+    "fflate": "^0.8.3",
     "firebase": "^12.19.0",
     "html2canvas-pro": "^2.4.5"
   }

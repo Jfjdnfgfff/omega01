@@ -60,8 +60,38 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
         link.click();
         document.body.removeChild(link);
     }
-    function downloadReportPages(pages) {
-        (Array.isArray(pages) ? pages : []).forEach(downloadReportPage);
+    async function downloadReportPagesArchive(pages, button = null) {
+        const validPages = (Array.isArray(pages) ? pages : []).filter(page => page && page.url);
+        if (!validPages.length) return false;
+        const originalButtonContent = button ? button.innerHTML : '';
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'جاري تجهيز ملف ZIP...';
+        }
+        try {
+            const { createReportPagesArchive } = await import('./report-image-archive.js');
+            const archive = await createReportPagesArchive(validPages);
+            const url = URL.createObjectURL(archive);
+            const link = document.createElement('a');
+            link.download = `full-report-pages-${new Date().toISOString().slice(0, 10)}.zip`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) { /* noop */ } }, 60000);
+            return true;
+        } catch (error) {
+            console.error('Unable to download report PNG archive:', error);
+            if (typeof showErrorToast === 'function') {
+                showErrorToast('تعذر تنزيل ملف الصور. يمكنك تنزيل كل صفحة بصورة منفردة من المعاينة.');
+            }
+            return false;
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = originalButtonContent;
+            }
+        }
     }
     function showReportImagePreview(url, filename, blob) {
         const modal = document.getElementById('reportImageModal');
@@ -92,7 +122,7 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             pageTitle.textContent = `الصفحة ${index + 1} من ${pages.length}`;
 
             const imageFrame = document.createElement('div');
-            imageFrame.className = 'rounded-lg border border-slate-200 bg-slate-50 overflow-auto max-h-[42vh]';
+            imageFrame.className = 'rounded-lg border border-slate-200 bg-slate-50';
             const image = document.createElement('img');
             image.src = page.url;
             image.alt = `صفحة ${index + 1} من التقرير المالي والإداري`;
@@ -130,10 +160,10 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
         });
 
         if (title) title.textContent = `معاينة صور التقرير (${pages.length} ${pages.length === 1 ? 'صفحة' : 'صفحات'})`;
-        if (hint) hint.textContent = 'كل صفحة محفوظة كملف PNG مستقل. إذا منع المتصفح تنزيل جميع الملفات تلقائياً، استخدم زر التنزيل أسفل الصفحة المطلوبة.';
+        if (hint) hint.textContent = 'كل صفحة هي صورة PNG مستقلة. زر تنزيل الكل يحفظ جميع الصفحات داخل ملف ZIP واحد؛ ويمكن تنزيل أي صفحة وحدها من زرها.';
         if (downloadAllBtn) {
             downloadAllBtn.classList.toggle('hidden', pages.length < 2);
-            downloadAllBtn.onclick = () => downloadReportPages(pages);
+            downloadAllBtn.onclick = () => downloadReportPagesArchive(pages, downloadAllBtn);
         }
         openModal('reportImageModal');
     }
@@ -287,13 +317,13 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             canvas.width = 0;
             canvas.height = 0;
 
-            // Attempt a separate PNG download for every page. The preview gallery
-            // remains available if the browser blocks multiple automatic downloads.
-            downloadReportPages(pages);
+            // One ZIP download avoids browsers silently blocking a batch of files;
+            // each page remains a separately named PNG inside the archive/gallery.
             showReportImagePreview(pages);
+            const archiveDownloaded = await downloadReportPagesArchive(pages);
             generatedPageUrls.length = 0; // the preview gallery now owns these URLs
-            if (typeof showSuccessToast === 'function') {
-                showSuccessToast(`تم إنشاء ${pages.length} ${pages.length === 1 ? 'صورة' : 'صور'} منفصلة للتقرير. إن منع المتصفح بعض التنزيلات، استخدم أزرار الصفحات في المعاينة.`);
+            if (archiveDownloaded && typeof showSuccessToast === 'function') {
+                showSuccessToast(`تم تنزيل ملف ZIP يحتوي على ${pages.length} صور PNG منفصلة. يمكنك أيضاً تنزيل كل صفحة وحدها من المعاينة.`);
             }
             if (typeof logActivity === 'function') {
                 try { logActivity('system', 'تصدير التقرير المالي كصور', `تم إنشاء ${pages.length} ملفات PNG منفصلة للتقرير المالي والإداري الشامل`); } catch (e) { /* noop */ }
