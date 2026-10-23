@@ -3,12 +3,14 @@ import { minifyFirebase } from './scripts/vite-minify-firebase.js';
 import tailwindcss from '@tailwindcss/vite';
 
 import { inlineSmallStylesheet } from './scripts/vite-inline-styles.js';
+import { minifyOmegaHtml } from './scripts/vite-minify-html.js';
 
 export default defineConfig({
   plugins: [
     tailwindcss(),
     inlineSmallStylesheet(),
     minifyFirebase(),
+    minifyOmegaHtml(),
   ],
   server: {
     host: '0.0.0.0',

@@ -17,7 +17,11 @@ function setElemValue(id, val) {
 }
 function setElemHTML(id, html) {
     const el = getElem(id);
-    if (el) el.innerHTML = (html !== undefined && html !== null) ? html : "";
+    if (!el) return;
+    const val = (html !== undefined && html !== null) ? html : "";
+    // Skip identical writes: re-setting the same innerHTML still forces the
+    // browser to re-parse the fragment and re-layout the subtree.
+    if (el.innerHTML !== val) el.innerHTML = val;
 }
 function setElemText(id, txt) {
     const el = getElem(id);
@@ -98,7 +102,7 @@ window.addEventListener('unhandledrejection', (event) => {
   }
   window.loadFirebaseSDK = loadFirebaseSDK;
   import { isCaisseClosing, creditPaymentsOnDate, subscriptionCashPaidAtStart, linkedCustomerForCredit } from './caisse-credit.js';
-  import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
+  import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements, indexCaisseMovementsByDate } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
   import { resolvePaymentDate, paymentDateTimestamp } from './renewal-payment-date.js';
@@ -696,12 +700,17 @@ window.addEventListener('unhandledrejection', (event) => {
   const reconciledLocalSections = new Set();
   const hydratedLocalSections = new Set();
   window.__cloudSnapshotSeen = false;
+  // Monotonic counter bumped at every data-mutation funnel (cloud merges,
+  // saveState, section save/delete). Memoized aggregates key on it.
+  window.__omegaDataVersion = 0;
   window.__hydratingFromLocalCache = false;
 
   window.__localCacheMarkDirty = function(name) {
+    window.__omegaDataVersion = (window.__omegaDataVersion || 0) + 1;
     try { if (!window.__hydratingFromLocalCache) window.localCache.markDirty(name); } catch (e) {}
   };
   window.__localCacheMarkAllDirty = function() {
+    window.__omegaDataVersion = (window.__omegaDataVersion || 0) + 1;
     try { if (!window.__hydratingFromLocalCache) window.localCache.markAllDirty(); } catch (e) {}
   };
 
@@ -4722,7 +4731,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let filtered = [...appState.expenses];
         if (filterCat !== 'all') { filtered = filtered.filter(ex => getExpenseCategory(ex) === filterCat);
         } if (filtered.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد مصاريف مطابقة لهذا التصنيف</div>';
-            return; } const sorted = filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+            return; } const sorted = filtered.map(ex => { const __t = new Date(ex.date).getTime(); return [isNaN(__t) ? 0 : __t, ex]; }).sort((a, b) => b[0] - a[0]).map(__p => __p[1]);
         container.innerHTML = sorted.map(ex => {
             const d = new Date(ex.date); const dateFormatted = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
             const safeDesc = escapeHTML(ex.desc || 'مصروف');
@@ -5417,7 +5426,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     <div class="text-sm font-bold text-slate-700">لا توجد مصاريف مطابقة في هذا التصنيف</div>
                     <div class="text-xs text-slate-400 mt-0.5">يمكنك إضافة مصروف جديد أو تغيير خيارات البحث</div>
                 </div>
-            `; return; } const sorted = filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+            `; return; } const sorted = filtered.map(ex => { const __t = new Date(ex.date).getTime(); return [isNaN(__t) ? 0 : __t, ex]; }).sort((a, b) => b[0] - a[0]).map(__p => __p[1]);
         container.innerHTML = sorted.map(ex => {
             const d = new Date(ex.date); const dateFormatted = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
             const safeDesc = escapeHTML(ex.desc || 'مصروف');
@@ -8185,6 +8194,9 @@ window.addEventListener('unhandledrejection', (event) => {
     // MOCK / TEST DATA ENGINE (PERFORMANCE TESTING: 200 CUSTOMERS + 100 CREDITS)
     // ==========================================
     function updateMockDataUIState() {
+        // Runs on every render pass; only rescan when data actually changed.
+        if (window.__mockUIVersion !== undefined && window.__mockUIVersion === (window.__omegaDataVersion || 0)) return;
+        window.__mockUIVersion = window.__omegaDataVersion || 0;
         const hasMock = (Array.isArray(appState.customers) && appState.customers.some(c => c && (c.isMock || String(c.id).startsWith('mock_cust_')))) ||
                         (Array.isArray(appState.credits) && appState.credits.some(c => c && (c.isMock || String(c.id).startsWith('mock_cred_'))));
         const clearBtn = document.getElementById('clearMockBtn');
@@ -8616,9 +8628,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 </div>
             `; return; }
         // Sort descending
-        filtered.sort((a, b) => { const timeA = new Date(a.date || a.createdAt || 0).getTime() || 0;
-            const timeB = new Date(b.date || b.createdAt || 0).getTime() || 0;
-            return timeB - timeA; }); const typeColorMap = {
+        const __sortedStaffTx = filtered.map(item => { const __t = new Date(item.date || item.createdAt || 0).getTime() || 0; return [__t, item]; }).sort((a, b) => b[0] - a[0]);
+        __sortedStaffTx.forEach((__p, __i) => { filtered[__i] = __p[1]; }); const typeColorMap = {
             'راتب شهري': 'bg-emerald-50 text-emerald-700 border-emerald-200',
             'تسقيع / تسليف': 'bg-amber-50 text-amber-700 border-amber-200',
             'مكافأة / بونوس': 'bg-purple-50 text-purple-700 border-purple-200',
@@ -10359,7 +10370,7 @@ window.addEventListener('unhandledrejection', (event) => {
        const summaryElem = document.getElementById('salesListSummary');
        if (summaryElem) { summaryElem.textContent = `المجموع: ${totalAmt.toLocaleString()} دج (${filtered.length} عملية)`;
        } if (filtered.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-slate-100 font-medium">لا توجد مبيعات مسجلة بهذا التصنيف</div>';
-           return; } container.innerHTML = filtered.sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0, 50).map(s => {
+           return; } container.innerHTML = filtered.map(s => { const __t = new Date(s.date).getTime(); return [isNaN(__t) ? 0 : __t, s]; }).sort((a, b) => b[0] - a[0]).slice(0, 50).map(__p => __p[1]).map(s => {
            const d = s.date ? new Date(s.date) : null;
            const isValidDate = d && !isNaN(d.getTime());
            const dateStr = isValidDate ? `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}` : '';
@@ -10624,9 +10635,25 @@ window.addEventListener('unhandledrejection', (event) => {
         window.appState.customerPage = (window.appState.customerPage || 1) + 1;
         renderCustomers();
     };
-    function performFullRender() { const todayStr = new Date().toDateString();
+    // Fast current-month test for a sale: ISO-like dates ("YYYY-MM-DD...") are
+    // answered by string prefix; anything else falls back to parseSafeDate so
+    // exotic stored formats keep their exact previous attribution.
+    function isSaleInMonth(sale, monthKeyPrefix, currentMonth, currentYear) {
+        const v = sale && sale.date;
+        if (typeof v === 'string' && /^\d{4}-\d{2}/.test(v)) return v.substring(0, 7) === monthKeyPrefix;
+        const d = parseSafeDate(sale.date || sale.id || sale.createdAt);
+        return d ? (d.getMonth() === currentMonth && d.getFullYear() === currentYear) : true;
+    }
+    function performFullRender() { const nowMs = Date.now();
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
+        // Local calendar keys ("YYYY-MM-DD") replace per-record Date parsing
+        // + toDateString() in the stats loops below. Day attribution matches
+        // getLocalDateString — already the caisse standard.
+        const todayKey = getLocalDateString(new Date(nowMs));
+        const monthKeyPrefix = todayKey.substring(0, 7);
+        const yearKeyPrefix = todayKey.substring(0, 4);
+        const renderDataVersion = window.__omegaDataVersion || 0;
         let totalIncome = 0; let todaySubIncome = 0;
         let monthlySubIncome = 0; let yearlySubIncome = 0;
         let totalDebt = 0, activeCount = 0, nearExpiryCount = 0;
@@ -10641,8 +10668,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 totalIncome += p;
                 totalQuickSessionClients += clients;
                 totalQuickSessionsCount += sessions;
-                const qDate = new Date(qs.date || Number(qs.id) || Date.now());
-                if (qDate.getMonth() === currentMonth && qDate.getFullYear() === currentYear) {
+                const qKey = getLocalDateString(qs.date || (Number(qs.id) || nowMs));
+                const qInMonth = qKey.substring(0, 7) === monthKeyPrefix;
+                if (qInMonth) {
                     monthlyQuickSessionsCount += sessions;
                     const qsClients = Array.isArray(qs.clients) ? qs.clients : [];
                     qsClients.forEach(cl => {
@@ -10650,9 +10678,9 @@ window.addEventListener('unhandledrejection', (event) => {
                         else if (cl?.activity === 'musculation') monthlyMusculationCount++;
                     });
                 }
-                if (qDate.toDateString() === todayStr) {
-                    todaySubIncome += p; } if (qDate.getMonth() === currentMonth && qDate.getFullYear() === currentYear) {
-                    monthlySubIncome += p; } if (qDate.getFullYear() === currentYear) {
+                if (qKey === todayKey) {
+                    todaySubIncome += p; } if (qInMonth) {
+                    monthlySubIncome += p; } if (qKey.substring(0, 4) === yearKeyPrefix) {
                     yearlySubIncome += p; } });
         } // O(1) package lookup index (was packages.find inside the customers loop => O(n*m))
         const packagesArr = Array.isArray(appState.packages) ? appState.packages : [];
@@ -10667,33 +10695,45 @@ window.addEventListener('unhandledrejection', (event) => {
            else if (c.paymentStatus === 'credit') {
                const debt = parseInt(c.debtAmount) || 0;
                totalDebt += debt; paidAmount = Math.max(0, price - debt);
-           } totalIncome += paidAmount; const sDate = new Date(c.startDate);
-           if (sDate.toDateString() === todayStr) {
+           } totalIncome += paidAmount; const cKey = getLocalDateString(c.startDate);
+           if (cKey === todayKey) {
                todaySubIncome += paidAmount; }
-           if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) {
+           if (cKey.substring(0, 7) === monthKeyPrefix) {
                monthlySubIncome += paidAmount; }
-           if (sDate.getFullYear() === currentYear) {
+           if (cKey.substring(0, 4) === yearKeyPrefix) {
                yearlySubIncome += paidAmount; }
-           const status = calculateStatus(c); if (status === 'active' || status === 'near_expiry') {
+           const status = calculateStatus(c, nowMs); if (status === 'active' || status === 'near_expiry') {
                activeCount++; if (status === 'near_expiry') nearExpiryCount++;
            } }); const expensesArrForStats = Array.isArray(appState.expenses) ? appState.expenses : [];
-        let totalExpenses = expensesArrForStats.reduce((sum, e) => sum + (parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0), 0);
-        let monthlyExpenses = expensesArrForStats.filter(e => {
-            const dStr = e.date || ''; if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
-                const parts = dStr.split('-');
-                return parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
-            } const d = new Date(e.date); return !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-        }).reduce((sum, e) => sum + (parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0), 0);
-        const staffPayoutsArrForStats = Array.isArray(appState.staffPayouts) ? appState.staffPayouts : [];
-        let totalStaffPayouts = staffPayoutsArrForStats.reduce((sum, p) => sum + (parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0), 0);
-        let monthlyStaffPayouts = staffPayoutsArrForStats.filter(p => {
-            const dStr = p.date || p.createdAt || '';
+        // One pass for both totals (was reduce + filter + reduce).
+        let totalExpenses = 0;
+        let monthlyExpenses = 0;
+        expensesArrForStats.forEach(e => {
+            const amt = parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0;
+            totalExpenses += amt;
+            const dStr = e.date || ''; let inMonth = false;
             if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
                 const parts = dStr.split('-');
-                return parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
-            } const d = new Date(p.date || p.id);
-            return !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-        }).reduce((sum, p) => sum + (parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0), 0);
+                inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
+            } else { const d = new Date(e.date); inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
+            if (inMonth) monthlyExpenses += amt;
+        });
+        const staffPayoutsArrForStats = Array.isArray(appState.staffPayouts) ? appState.staffPayouts : [];
+        // One pass for both totals (was reduce + filter + reduce).
+        let totalStaffPayouts = 0;
+        let monthlyStaffPayouts = 0;
+        staffPayoutsArrForStats.forEach(p => {
+            const amt = parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0;
+            totalStaffPayouts += amt;
+            const dStr = p.date || p.createdAt || '';
+            let inMonth = false;
+            if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
+                const parts = dStr.split('-');
+                inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
+            } else { const d = new Date(p.date || p.id);
+                inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
+            if (inMonth) monthlyStaffPayouts += amt;
+        });
         const creditsArr = Array.isArray(appState.credits) ? appState.credits : [];
         let totalExternalCredits = creditsArr.reduce((sum, cr) => sum + (Number(cr && cr.amount) || 0), 0);
         let allTimeSales = 0; let todaySales = 0;
@@ -10718,12 +10758,12 @@ window.addEventListener('unhandledrejection', (event) => {
            if (!statsInterim) { allTimeSales += sTotal; }
            const sProfit = (Number(s.profit) || 0);
            if (!statsInterim) { allTimeProductProfit += sProfit; }
-           const sDate = new Date(s.date); if (sDate.toDateString() === todayStr) {
+           const sKey = getLocalDateString(s.date); if (sKey === todayKey) {
                todaySales += sTotal;
-               todaySalesCount++; } if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) {
+               todaySalesCount++; } if (sKey.substring(0, 7) === monthKeyPrefix) {
                monthlySales += sTotal;
                monthlyProductProfit += sProfit;
-           } if (sDate.getFullYear() === currentYear) {
+           } if (sKey.substring(0, 4) === yearKeyPrefix) {
                yearlySales += sTotal; } });
         // Use v2Stats for accelerated O(1) stats aggregation
         const nowIso = new Date().toISOString();
@@ -10862,8 +10902,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const allSalesList = Array.isArray(appState.sales) ? appState.sales : [];
         allSalesList.forEach(s => {
             if (!s) return;
-            const d = parseSafeDate(s.date || s.id || s.createdAt);
-            const isThisMonth = d ? (d.getMonth() === currentMonth && d.getFullYear() === currentYear) : true;
+            const isThisMonth = isSaleInMonth(s, monthKeyPrefix, currentMonth, currentYear);
             const cat = getProductCategory(s);
             const total = Number(s.total) || 0;
             const cost = Number(s.cost) || 0;
@@ -10977,20 +11016,25 @@ window.addEventListener('unhandledrejection', (event) => {
         } if (document.getElementById('subscribersStatsSection')) {
             setElemDisplay('subscribersStatsSection', 'block');
         } const eyeIcon = document.getElementById('eyeIcon');
-        if (eyeIcon) { if (appState.hideFinances) {
+        if (eyeIcon && window.__eyeIconState !== appState.hideFinances) { window.__eyeIconState = appState.hideFinances; if (appState.hideFinances) {
                 eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"></path>';
             } else { eyeIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>';
             } }
-        // Ensure session packages are removed
-        if (Array.isArray(appState.packages)) {
+        // Ensure session packages are removed (keep the array identity when
+        // nothing is removed so downstream package-index caches stay valid)
+        if (Array.isArray(appState.packages) && appState.packages.some(p => !p || p.type === 'session')) {
             appState.packages = appState.packages.filter(p => p && p.type !== 'session');
         } try { renderFilterTabs(); } catch (e) { console.warn('renderFilterTabs isolated error:', e); }
         const packageSelect = document.getElementById('packageIdView') || document.getElementById('packageId');
-        if (packageSelect) { packageSelect.innerHTML = (Array.isArray(appState.packages) ? appState.packages : []).map(p => {
+        if (packageSelect && window.__packageSelectVersion !== renderDataVersion) { window.__packageSelectVersion = renderDataVersion;
+            const __prevPkgVal = packageSelect.value;
+            packageSelect.innerHTML = (Array.isArray(appState.packages) ? appState.packages : []).map(p => {
                 const label = `${p.name} (${p.durationDays || p.duration || 30} يوم) - ${p.price} دج`;
                 return `<option value="${p.id}">${label}</option>`;
-            }).join(''); } const packagesContainer = document.getElementById('packagesList');
-        if (packagesContainer) { if (!appState.packages || appState.packages.length === 0) {
+            }).join('');
+            if (__prevPkgVal && [...packageSelect.options].some(o => o.value === __prevPkgVal)) packageSelect.value = __prevPkgVal;
+        } const packagesContainer = document.getElementById('packagesList');
+        if (packagesContainer && window.__packagesListVersion !== renderDataVersion) { window.__packagesListVersion = renderDataVersion; if (!appState.packages || appState.packages.length === 0) {
                 packagesContainer.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد باقات حالية</div>';
             } else {
                 // Count subscribers for each package
@@ -11017,7 +11061,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             </button>
                         </div>
                     `; }).join(''); } } const absencesListElem = document.getElementById('absencesList');
-        if (absencesListElem) { if (!appState.coachAbsences || appState.coachAbsences.length === 0) {
+        if (absencesListElem && window.__absencesListVersion !== renderDataVersion) { window.__absencesListVersion = renderDataVersion; if (!appState.coachAbsences || appState.coachAbsences.length === 0) {
                 absencesListElem.innerHTML = '<div class="text-xs text-slate-400 text-center py-4 font-medium">لا يوجد سجل غيابات مسجل</div>';
             } else { const sortedAbsences = [...appState.coachAbsences].sort((a, b) => {
                     const da = a.date ? new Date(a.date.replace(/\//g, '-')) : 0;
@@ -11128,11 +11172,96 @@ window.addEventListener('unhandledrejection', (event) => {
             stock2TypesCount, totalTypesCount
         };
     } window.calculateStockValuation = calculateStockValuation;
+    // ---------------------------------------------------------------
+    // Caisse by-date index (single pass, cached per data version).
+    // Rendering the caisse used to rebuild the whole ledger once per
+    // closing day — O(closings x all records). The index is built once
+    // per data change and every day entry is identical to what
+    // buildCaisseMovements returns for that day (see caisse-transactions.js).
+    // ---------------------------------------------------------------
+    const EMPTY_CAISSE_MOVEMENTS = { transactions: [], totalIncome: 0, totalExpenses: 0, netCash: 0, subIncome: 0, quickIncome: 0, salesIncome: 0, creditIncome: 0, expenses: 0, staffPayouts: 0, supplierPayments: 0 };
+    let caisseMovementsIndexCache = { signature: null, index: null };
+    function getCaisseMovementsIndex() {
+        const s = appState || {};
+        const lenOf = (v) => Array.isArray(v) ? v.length : 0;
+        const signature = `${window.__omegaDataVersion || 0}|${lenOf(s.caisseLogs)},${lenOf(s.customers)},${lenOf(s.packages)},${lenOf(s.quickSessions)},${lenOf(s.sales)},${lenOf(s.expenses)},${lenOf(s.staffPayouts)},${lenOf(s.suppliers)},${lenOf(s.supplierTransactions)}`;
+        if (caisseMovementsIndexCache.signature !== signature) {
+            caisseMovementsIndexCache = { signature, index: indexCaisseMovementsByDate(s, getLocalDateString) };
+        }
+        return caisseMovementsIndexCache.index;
+    }
+    function getCaisseMovementsForDate(targetDateStr) {
+        try {
+            const entry = getCaisseMovementsIndex().get(targetDateStr);
+            return entry ? { ...entry } : { ...EMPTY_CAISSE_MOVEMENTS };
+        } catch (err) {
+            console.warn('Caisse index fallback:', err);
+            return buildCaisseMovements(appState, targetDateStr, getLocalDateString);
+        }
+    }
+    // Per-date indexes over caisseLogs (credit repayments + closings), so
+    // calculateCaisseDetails — called once per history row when rendering
+    // the caisse — stops re-scanning every log for every row.
+    let caisseLogsIndexCache = { signature: null, creditPaymentsByDate: null, closingByDate: null };
+    function getCaisseLogsIndex() {
+        const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
+        const signature = `${window.__omegaDataVersion || 0}|${logs.length}`;
+        if (caisseLogsIndexCache.signature !== signature) {
+            const creditPaymentsByDate = new Map();
+            const closingByDate = new Map();
+            logs.forEach(log => {
+                if (!log) return;
+                if (log.type === 'credit_payment' && log.fundSource !== 'general') {
+                    const key = getLocalDateString(log.date);
+                    let list = creditPaymentsByDate.get(key);
+                    if (!list) { list = []; creditPaymentsByDate.set(key, list); }
+                    list.push(log);
+                }
+                if (isCaisseClosing(log)) {
+                    const key = getLocalDateString(log.date);
+                    if (!closingByDate.has(key)) closingByDate.set(key, log); // first match wins, like Array.find
+                }
+            });
+            caisseLogsIndexCache = { signature, creditPaymentsByDate, closingByDate };
+        }
+        return caisseLogsIndexCache;
+    }
+    function getCreditPaymentsForDate(targetDateStr, logs) {
+        try {
+            return getCaisseLogsIndex().creditPaymentsByDate.get(targetDateStr) || [];
+        } catch (err) {
+            return creditPaymentsOnDate(logs, targetDateStr, getLocalDateString);
+        }
+    }
+    function getCaisseClosingForDate(targetDateStr, logs) {
+        try {
+            return getCaisseLogsIndex().closingByDate.get(targetDateStr);
+        } catch (err) {
+            return logs.find(l => isCaisseClosing(l) && getLocalDateString(l.date) === targetDateStr);
+        }
+    }
+    function caisseNetCashForDate(targetDateStr) {
+        try {
+            const entry = getCaisseMovementsIndex().get(targetDateStr) || EMPTY_CAISSE_MOVEMENTS;
+            let salesIncome = entry.salesIncome;
+            // Same interim v2Stats adjustment calculateCaisseDetails applies.
+            if (window.salesHistoryLoading && !window.salesHistoryComplete &&
+                window.appState && window.appState.v2Stats && window.appState.v2Stats.daily &&
+                window.appState.v2Stats.daily[targetDateStr]) {
+                const dayStats = window.appState.v2Stats.daily[targetDateStr];
+                salesIncome = dayStats.cashIn !== undefined ? (Number(dayStats.cashIn) || 0) : (Number(dayStats.sales) || 0);
+            }
+            return (entry.totalIncome - entry.salesIncome + salesIncome) - entry.totalExpenses;
+        } catch (err) {
+            console.warn('Caisse net-cash fallback:', err);
+            return calculateCaisseDetails(targetDateStr).netCash;
+        }
+    }
     function calculateCaisseDetails(targetDateInput) {
         const targetDateStr = getLocalDateString(targetDateInput) || getLocalDateString(new Date());
         const logs = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
-        const movementTotals = buildCaisseMovements(appState, targetDateStr, getLocalDateString);
-        const creditPayments = creditPaymentsOnDate(logs, targetDateStr, getLocalDateString);
+        const movementTotals = getCaisseMovementsForDate(targetDateStr);
+        const creditPayments = getCreditPaymentsForDate(targetDateStr, logs);
         const subIncome = movementTotals.subIncome;
         const quickIncome = movementTotals.quickIncome;
         let salesIncome = movementTotals.salesIncome;
@@ -11152,7 +11281,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const netCash = totalIncome - totalExpenses;
 
         // Repayment receipts and movements are not clôture records.
-        const log = logs.find(l => isCaisseClosing(l) && getLocalDateString(l.date) === targetDateStr);
+        const log = getCaisseClosingForDate(targetDateStr, logs);
         const isClosed = Boolean(log);
         const actualAmount = isClosed ? Number(log.actualAmount || 0) : null;
         const difference = isClosed ? (actualAmount - netCash) : 0;
@@ -11181,10 +11310,10 @@ window.addEventListener('unhandledrejection', (event) => {
         let allTimeExcedent = 0; logs.forEach(log => {
             if (!isCaisseClosing(log) || !log.date) return; const d = new Date(log.date);
             if (isNaN(d.getTime())) return;
-            // Compute exact expected income for that log's date to ensure accuracy
-            const details = calculateCaisseDetails(log.date);
+            // Exact expected income for that log's date, from the shared
+            // by-date index (identical net cash to calculateCaisseDetails).
             const actual = Number(log.actualAmount || 0);
-            const diff = actual - details.netCash;
+            const diff = actual - caisseNetCashForDate(getLocalDateString(log.date));
             const isCurMonth = (d.getMonth() === curMonth && d.getFullYear() === curYear);
             const isCurYear = (d.getFullYear() === curYear);
             if (diff < 0) { const shortage = Math.abs(diff);
@@ -11488,7 +11617,7 @@ window.addEventListener('unhandledrejection', (event) => {
                             </div>
                         </td>
                     </tr>
-                `; } else { const sortedLogs = logs.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+                `; } else { const sortedLogs = logs.map(l => { const __t = new Date(l.date || 0).getTime(); return [isNaN(__t) ? 0 : __t, l]; }).sort((a, b) => b[0] - a[0]).map(__p => __p[1]);
                 historyBody.innerHTML = sortedLogs.map(l => {
                     const lDetails = calculateCaisseDetails(l.date);
                     const actualAmt = Number(l.actualAmount || 0);
