@@ -96,7 +96,7 @@ window.addEventListener('unhandledrejection', (event) => {
     return firebaseSDKPromise;
   }
   window.loadFirebaseSDK = loadFirebaseSDK;
-  import { isCaisseClosing, creditPaymentsOnDate, linkedCustomerForCredit } from './caisse-credit.js';
+  import { isCaisseClosing, creditPaymentsOnDate, subscriptionCashPaidAtStart, linkedCustomerForCredit } from './caisse-credit.js';
   import { CAISSE_MOVEMENT_TYPE, buildCaisseMovements } from './caisse-transactions.js';
   import { resolveSaleUnitPrice, parseWeightSpec, isDoseProduct, isKiloSaleProduct, isGramPricedProduct, resolveGramSale, resolveKiloStockDeduction, normalizeGramPrice, defaultGramSalePrice, defaultGramCostPrice, defaultDoseGrams, gramsPerUnit, deriveUnitPricesFromGrams, gramCostPriceOf, gramSalePriceOf, resolveUnitStockDeduction, stockUnitWord } from './product-pricing.js';
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
@@ -1058,6 +1058,9 @@ window.addEventListener('unhandledrejection', (event) => {
       log.source === source && String(log.sourceId) === normalizedSourceId);
     const existing = existingIdx >= 0 ? appState.caisseLogs[existingIdx] : null;
     const movement = {
+      // Keep renewal snapshots and any future event metadata when a receipt is
+      // updated (for example after correcting a subscriber's price).
+      ...(existing || {}),
       id: existing?.id || `cash_${cleanKey(source)}_${cleanKey(normalizedSourceId)}`,
       type: CAISSE_MOVEMENT_TYPE,
       source,
@@ -3610,6 +3613,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const oldPkgName = oldPkgObj ? oldPkgObj.name : 'بدون باقة';
         const oldPrice = Number(customer.price) || 0;
         const oldDebt = Number(customer.debtAmount) || 0;
+        const oldPaymentStatus = customer.paymentStatus || 'paid';
+        const oldPaymentDateKey = getLocalDateString(customer.paymentDate || customer.startDate);
         const oldSubType = customer.subscriptionType || 'time';
         const oldSessions = Number(customer.remainingSessions) || 0;
         const oldEndDateStr = customer.endDate ? (typeof getLocalDateString === 'function' ? getLocalDateString(new Date(customer.endDate)) : new Date(customer.endDate).toISOString().split('T')[0]) : '';
@@ -3672,6 +3677,51 @@ window.addEventListener('unhandledrejection', (event) => {
         customer.updatedAt = Date.now();
         customer._searchKey = `${customer.name || ''} ${(customer.phone || '').replace(/\D/g, '')}`.toLowerCase();
 
+        // Keep the subscription receipt in the caisse in sync with the edited
+        // price, payment status/debt, payment date, subscriber name or package.
+        const newPkgName = pkg ? pkg.name : 'بدون باقة';
+        const newPaymentDateKey = getLocalDateString(customer.paymentDate || customer.startDate) || getLocalDateString(new Date());
+        const paymentDateChanged = oldPaymentDateKey !== newPaymentDateKey;
+        const cashDetailsChanged = oldPrice !== Number(customer.price || 0) ||
+            oldDebt !== Number(customer.debtAmount || 0) ||
+            oldPaymentStatus !== customer.paymentStatus ||
+            paymentDateChanged || oldName !== customer.name || oldPkgName !== newPkgName;
+        let updatedCaisseDateKey = '';
+        if (cashDetailsChanged) {
+            if (!Array.isArray(appState.caisseLogs)) appState.caisseLogs = [];
+            const subscriptionSourceId = String(customer.subscriptionCycleId || customer.id || customer._rtdbKey || '');
+            const existingSubscriptionMovement = appState.caisseLogs.find(log => log &&
+                log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription' &&
+                String(log.sourceId || '') === subscriptionSourceId);
+            const movementDate = existingSubscriptionMovement && !paymentDateChanged
+                ? (existingSubscriptionMovement.date || paymentDateTimestamp(newPaymentDateKey, new Date()))
+                : paymentDateTimestamp(newPaymentDateKey, new Date());
+            const movementAmount = subscriptionCashPaidAtStart(
+                customer, customer.price, appState.caisseLogs, getLocalDateString
+            );
+            const isRenewalReceipt = String(existingSubscriptionMovement?.title || '').startsWith('تجديد');
+            recordCaisseMovement({
+                source: 'subscription', sourceId: subscriptionSourceId,
+                direction: 'in', amount: movementAmount, date: movementDate,
+                title: `${isRenewalReceipt ? 'تجديد اشتراك' : 'اشتراك'}: ${customer.name || 'مشترك'}`,
+                detail: pkg ? pkg.name : 'اشتراك', sourceLabel: 'الاشتراكات',
+                allowZero: true, metadata: { customerId: customer.id }
+            });
+
+            const caisseDateKey = getLocalDateString(movementDate);
+            if (caisseDateKey) {
+                updatedCaisseDateKey = caisseDateKey;
+                appState.selectedCaisseDate = caisseDateKey;
+                const caisseDateInput = document.getElementById('caisseInspectionDate');
+                if (caisseDateInput) caisseDateInput.value = caisseDateKey;
+                const clotureDateInput = document.getElementById('clotureFormDate');
+                if (clotureDateInput) clotureDateInput.value = caisseDateKey;
+                if (typeof window.renderCaisseView === 'function') {
+                    try { window.renderCaisseView(); } catch (err) { console.warn('caisse refresh note:', err); }
+                }
+            }
+        }
+
         // Sync with Credits section
         if (customer.debtAmount > 0) { if (!appState.credits) appState.credits = [];
             const autoId = 'cr_auto_' + customer.id;
@@ -3701,7 +3751,6 @@ window.addEventListener('unhandledrejection', (event) => {
             }
 
             // Calculate exact field modifications
-            const newPkgName = pkg ? pkg.name : 'بدون باقة';
             const newEndDateStr = customer.endDate ? (typeof getLocalDateString === 'function' ? getLocalDateString(new Date(customer.endDate)) : new Date(customer.endDate).toISOString().split('T')[0]) : '';
             const changes = [];
 
@@ -3730,7 +3779,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 logActivity('customer', 'تعديل بيانات مشترك', detailMsg, customer.price || 0);
             }
             saveState(); closeModal('editCustomerModal');
-        showSuccessToast('تم تعديل بيانات المشترك بنجاح');
+        showSuccessToast(updatedCaisseDateKey
+            ? `تم تعديل بيانات المشترك بنجاح وتحديث صندوق يوم ${updatedCaisseDateKey.split('-').reverse().join('/')}`
+            : 'تم تعديل بيانات المشترك بنجاح');
         if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
         render(); });
 

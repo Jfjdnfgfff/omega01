@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse, linkedCustomerForCredit } from '../src/caisse-credit.js';
+import { isCaisseClosing, creditPaymentsOnDate, subscriptionPaidForCaisse, subscriptionCashPaidAtStart, linkedCustomerForCredit } from '../src/caisse-credit.js';
 
 const dateKey = input => String(input || '').slice(0, 10);
 const subscriber = { id: 'member-1', startDate: '2026-09-24T09:00:00Z', price: 1000, paymentStatus: 'credit', debtAmount: 400 };
@@ -62,4 +62,29 @@ test('several partial repayments keep the amount paid on the subscription day', 
         { type: 'credit_payment', customerId: 'c1', subscriptionDate: '2026-09-01', subscriptionCycleId: 'cy1', subscriptionPaidBeforeSettlement: 2000, amount: 1000, date: '2026-09-10' }
     ];
     assert.equal(subscriptionPaidForCaisse(customer, 5000, logs, dateKey), 2000);
+});
+
+test('editing a paid subscription price updates the cash-at-start amount', () => {
+    const customer = { id: 'c-paid', paymentStatus: 'paid', debtAmount: 0, startDate: '2026-09-01', subscriptionCycleId: 'cycle-paid' };
+    assert.equal(subscriptionCashPaidAtStart(customer, 1500, [], dateKey), 1500);
+});
+
+test('editing a subscription with partial repayments avoids double-counting those receipts', () => {
+    const customer = { id: 'c-credit', paymentStatus: 'credit', debtAmount: 300, startDate: '2026-09-01', subscriptionCycleId: 'cycle-credit' };
+    const logs = [
+        { type: 'credit_payment', customerId: 'c-credit', subscriptionCycleId: 'cycle-credit', subscriptionDate: '2026-09-01', subscriptionPaidBeforeSettlement: 400, amount: 200 },
+        { type: 'credit_payment', customerId: 'other', subscriptionCycleId: 'another-cycle', subscriptionDate: '2026-09-01', subscriptionPaidBeforeSettlement: 50, amount: 400 },
+        { type: 'credit_payment', customerId: 'c-credit', subscriptionCycleId: 'old-cycle', subscriptionDate: '2026-09-01', subscriptionPaidBeforeSettlement: 400, amount: 300 }
+    ];
+    // Price 1200 - remaining debt 300 - settled 200 = 700 initially paid.
+    assert.equal(subscriptionCashPaidAtStart(customer, 1200, logs, dateKey), 700);
+});
+
+test('paid status after settling credit still subtracts that cycle’s earlier repayments', () => {
+    const customer = { id: 'c-settled', paymentStatus: 'paid', debtAmount: 0, startDate: '2026-09-01', subscriptionCycleId: 'cycle-settled' };
+    const logs = [{
+        type: 'credit_payment', customerId: 'c-settled', subscriptionCycleId: 'cycle-settled',
+        subscriptionDate: '2026-09-01', subscriptionPaidBeforeSettlement: 500, amount: 500
+    }];
+    assert.equal(subscriptionCashPaidAtStart(customer, 1200, logs, dateKey), 700);
 });
