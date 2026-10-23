@@ -1,4 +1,6 @@
 // Loaded only when the comprehensive report is requested.
+import { createReportPageRanges, REPORT_IMAGE_PAGE_HEIGHT_CSS } from './report-image-pagination.js';
+
 export function createFullReport({ getState, openModal, showToast, logActivity, showSuccessToast, showErrorToast, getPackageById, calculateStatus, getDisplayPhone, getUniqueCoaches, getLocalDateString }) {
     function openFullReportModal() {
         renderFullReport(); openModal('fullReportModal');
@@ -40,89 +42,154 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
         }
     }
     window.printFullReportSheet = printFullReportSheet;
-    // In-app preview of the generated PNG so it can be saved even where direct
-    // downloads are blocked (sandboxed preview iframes, some mobile browsers)
-    let _lastReportBlobUrl = null;
-    function releaseReportBlobUrl() {
-        if (_lastReportBlobUrl) {
-            try { URL.revokeObjectURL(_lastReportBlobUrl); } catch (e) { /* noop */ }
-            _lastReportBlobUrl = null;
-        }
+    // In-app gallery fallback: every report page stays an independent PNG so it
+    // can be downloaded/shared separately even when bulk downloads are blocked.
+    let _lastReportBlobUrls = [];
+    function releaseReportBlobUrls() {
+        _lastReportBlobUrls.forEach(url => {
+            try { URL.revokeObjectURL(url); } catch (e) { /* noop */ }
+        });
+        _lastReportBlobUrls = [];
+    }
+    function downloadReportPage(page) {
+        if (!page || !page.url) return;
+        const link = document.createElement('a');
+        link.download = page.filename || 'التقرير_الشامل_المالي_والإداري.png';
+        link.href = page.url;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+    function downloadReportPages(pages) {
+        (Array.isArray(pages) ? pages : []).forEach(downloadReportPage);
     }
     function showReportImagePreview(url, filename, blob) {
         const modal = document.getElementById('reportImageModal');
-        const img = document.getElementById('reportImagePreview');
-        const dlBtn = document.getElementById('reportImageDownloadBtn');
-        const shareBtn = document.getElementById('reportImageShareBtn');
-        if (!modal || !img) return;
-        releaseReportBlobUrl();
-        if (blob) _lastReportBlobUrl = url; // only blob: URLs need revoking
-        img.src = url;
-        const fname = filename || 'التقرير_الشامل_المالي_والإداري.png';
-        if (dlBtn) {
-            dlBtn.onclick = function () {
-                const a = document.createElement('a');
-                a.download = fname;
-                a.href = url;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            };
-        }
-        if (shareBtn) {
-            // Web Share lets mobile users save the PNG straight to Photos/Files,
-            // which works even when anchor downloads are blocked inside iframes
-            let shareFile = null;
-            try {
-                shareFile = blob ? new File([blob], fname, { type: 'image/png' }) : null;
-            } catch (e) { shareFile = null; }
-            const canShare = !!(shareFile && navigator.canShare && navigator.canShare({ files: [shareFile] }));
-            shareBtn.classList.toggle('hidden', !canShare);
-            if (canShare) {
-                shareBtn.onclick = function () {
-                    navigator.share({ files: [shareFile], title: 'التقرير المالي والإداري الشامل' })
-                        .catch(err => console.warn('Share dismissed/failed:', err));
-                };
+        const pagesContainer = document.getElementById('reportImagePages');
+        const title = document.getElementById('reportImageTitle');
+        const hint = document.getElementById('reportImageHint');
+        const downloadAllBtn = document.getElementById('reportImageDownloadAllBtn');
+        if (!modal || !pagesContainer) return;
+
+        const pages = (Array.isArray(url) ? url : [{ url, filename, blob }])
+            .filter(page => page && page.url)
+            .map((page, index) => ({
+                ...page,
+                filename: page.filename || `التقرير_الشامل_المالي_والإداري_صفحة_${index + 1}.png`
+            }));
+        releaseReportBlobUrls();
+        pages.forEach(page => {
+            if (page.blob && String(page.url).startsWith('blob:')) _lastReportBlobUrls.push(page.url);
+        });
+
+        pagesContainer.replaceChildren();
+        pages.forEach((page, index) => {
+            const card = document.createElement('section');
+            card.className = 'rounded-xl border border-slate-200 bg-white p-3 space-y-2';
+
+            const pageTitle = document.createElement('div');
+            pageTitle.className = 'text-sm font-extrabold text-slate-800';
+            pageTitle.textContent = `الصفحة ${index + 1} من ${pages.length}`;
+
+            const imageFrame = document.createElement('div');
+            imageFrame.className = 'rounded-lg border border-slate-200 bg-slate-50 overflow-auto max-h-[42vh]';
+            const image = document.createElement('img');
+            image.src = page.url;
+            image.alt = `صفحة ${index + 1} من التقرير المالي والإداري`;
+            image.className = 'w-full h-auto block';
+            imageFrame.appendChild(image);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex flex-col sm:flex-row gap-2';
+            const downloadButton = document.createElement('button');
+            downloadButton.type = 'button';
+            downloadButton.className = 'flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-200 transition-colors';
+            downloadButton.textContent = `تنزيل الصفحة ${index + 1} (PNG)`;
+            downloadButton.addEventListener('click', () => downloadReportPage(page));
+            actions.appendChild(downloadButton);
+
+            if (page.blob) {
+                let shareFile = null;
+                try { shareFile = new File([page.blob], page.filename, { type: 'image/png' }); } catch (e) { /* unsupported */ }
+                const canShare = !!(shareFile && navigator.share && navigator.canShare && navigator.canShare({ files: [shareFile] }));
+                if (canShare) {
+                    const shareButton = document.createElement('button');
+                    shareButton.type = 'button';
+                    shareButton.className = 'py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors';
+                    shareButton.textContent = `مشاركة الصفحة ${index + 1}`;
+                    shareButton.addEventListener('click', () => {
+                        navigator.share({ files: [shareFile], title: 'التقرير المالي والإداري الشامل' })
+                            .catch(err => console.warn('Share dismissed/failed:', err));
+                    });
+                    actions.appendChild(shareButton);
+                }
             }
+
+            card.append(pageTitle, imageFrame, actions);
+            pagesContainer.appendChild(card);
+        });
+
+        if (title) title.textContent = `معاينة صور التقرير (${pages.length} ${pages.length === 1 ? 'صفحة' : 'صفحات'})`;
+        if (hint) hint.textContent = 'كل صفحة محفوظة كملف PNG مستقل. إذا منع المتصفح تنزيل جميع الملفات تلقائياً، استخدم زر التنزيل أسفل الصفحة المطلوبة.';
+        if (downloadAllBtn) {
+            downloadAllBtn.classList.toggle('hidden', pages.length < 2);
+            downloadAllBtn.onclick = () => downloadReportPages(pages);
         }
         openModal('reportImageModal');
     }
     window.showReportImagePreview = showReportImagePreview;
+    async function canvasToPngResource(canvas) {
+        let blob = null;
+        try {
+            blob = await new Promise((resolve, reject) => {
+                if (typeof canvas.toBlob !== 'function') { reject(new Error('toBlob unsupported')); return; }
+                canvas.toBlob(value => value ? resolve(value) : reject(new Error('empty blob')), 'image/png');
+            });
+        } catch (e) { blob = null; }
+        if (blob) {
+            try { return { blob, url: URL.createObjectURL(blob) }; } catch (e) { /* use data URL below */ }
+        }
+        const url = canvas.toDataURL('image/png');
+        if (!url || url === 'data:,' || url.length < 128) throw new Error('تم توليد صورة فارغة');
+        return { blob: null, url };
+    }
     async function printFullReport() {
         const reportElem = document.getElementById('fullReportContent');
         const printBtn = document.getElementById('printReportBtn');
         if (!reportElem) return;
         const originalBtnContent = printBtn ? printBtn.innerHTML : '';
+        const generatedPageUrls = [];
         if (printBtn) {
             printBtn.disabled = true;
             printBtn.innerHTML = `
                 <svg class="w-4 h-4 animate-spin text-white inline-block" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-                <span>جاري حفظ الصورة...</span>
+                <span>جاري تجهيز صور التقرير...</span>
             `;
         }
         try {
             const html2canvas = await loadLocalHtml2Canvas();
             if (typeof html2canvas !== 'function') throw new Error('html2canvas-pro failed to load');
             // Adaptive scale: very long reports at scale 2 can exceed the mobile
-            // canvas pixel limit (~16.7M px on iOS) which makes export fail silently
+            // canvas pixel limit (~16.7M px on iOS) which makes export fail silently.
             const TARGET_W = 1050;
             const srcW = Math.max(1, reportElem.scrollWidth || TARGET_W);
             const estH = Math.max(1, Math.round((reportElem.scrollHeight || 1000) * (TARGET_W / srcW)));
-            const MAX_CANVAS_AREA = 16000000; // safe under iOS Safari's 16777216 px cap
+            const MAX_CANVAS_AREA = 16000000;
             let scale = 2;
             if (TARGET_W * estH * 4 > MAX_CANVAS_AREA) {
                 scale = Math.max(1, Math.sqrt(MAX_CANVAS_AREA / (TARGET_W * estH)));
             }
+            let pageBreakpoints = [];
             const canvas = await html2canvas(reportElem, {
                 scale, useCORS: true,
                 backgroundColor: '#ffffff',
-                windowWidth: 1280, width: 1050,
+                windowWidth: 1280, width: TARGET_W,
                 scrollX: 0, scrollY: 0, logging: false, onclone: (clonedDoc) => {
                     const clonedReport = clonedDoc.getElementById('fullReportContent');
                     if (clonedReport) {
-                        clonedReport.style.width = '1050px';
-                        clonedReport.style.maxWidth = '1050px';
-                        clonedReport.style.minWidth = '1050px';
+                        clonedReport.style.width = `${TARGET_W}px`;
+                        clonedReport.style.maxWidth = `${TARGET_W}px`;
+                        clonedReport.style.minWidth = `${TARGET_W}px`;
                         clonedReport.style.padding = '32px';
                         clonedReport.style.backgroundColor = '#ffffff';
                         clonedReport.style.boxSizing = 'border-box';
@@ -136,57 +203,82 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                         } const div = clonedDoc.createElement('div');
                         div.style.cssText = 'display: flex; align-items: center; justify-content: flex-start; height: 38px; min-height: 38px; padding: 4px 12px; font-size: 13px; font-weight: 800; color: #0f172a; background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 12px; line-height: 1.6; box-sizing: border-box; overflow: visible; font-family: "Tajawal", sans-serif;';
                         div.textContent = text;
-                        if (select.parentNode) {
-                            select.parentNode.replaceChild(div, select);
-                        } });
+                        if (select.parentNode) select.parentNode.replaceChild(div, select);
+                    });
                     // Convert all input elements into styled divs for html2canvas
                     const inputs = clonedDoc.querySelectorAll('#fullReportContent input');
-                    inputs.forEach(input => { if (input.type === 'hidden') return;
+                    inputs.forEach(input => {
+                        if (input.type === 'hidden') return;
                         const text = input.value || input.placeholder || '-';
                         const div = clonedDoc.createElement('div');
                         div.style.cssText = 'display: flex; align-items: center; justify-content: flex-start; height: 38px; min-height: 38px; padding: 4px 12px; font-size: 13px; font-weight: 800; color: #0f172a; background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 12px; line-height: 1.6; box-sizing: border-box; overflow: visible; font-family: "Tajawal", sans-serif;';
                         div.textContent = text;
-                        if (input.parentNode) {
-                            input.parentNode.replaceChild(div, input);
-                        } }); }
+                        if (input.parentNode) input.parentNode.replaceChild(div, input);
+                    });
+                    // Prefer boundaries between table rows and major report sections.
+                    if (clonedReport) {
+                        const rootTop = clonedReport.getBoundingClientRect().top;
+                        const candidates = [
+                            ...Array.from(clonedReport.children),
+                            ...Array.from(clonedReport.querySelectorAll('tr'))
+                        ];
+                        pageBreakpoints = candidates.map(node =>
+                            node.getBoundingClientRect().bottom - rootTop
+                        ).filter(value => Number.isFinite(value) && value > 0);
+                    }
+                }
             });
-            // Prefer toBlob (smaller memory footprint, no giant data-URL strings);
-            // fall back to toDataURL only if toBlob is unavailable or empty
+
             const now = new Date();
             const dateStr = now.toISOString().split('T')[0];
-            const filename = `التقرير_الشامل_المالي_والإداري_${dateStr}.png`;
-            let blob = null;
-            try {
-                blob = await new Promise((resolve, reject) => {
-                    if (typeof canvas.toBlob !== 'function') { reject(new Error('toBlob unsupported')); return; }
-                    canvas.toBlob(b => b ? resolve(b) : reject(new Error('empty blob')), 'image/png');
+            const baseFilename = `التقرير_الشامل_المالي_والإداري_${dateStr}`;
+            const outputScale = canvas.width / TARGET_W;
+            const pageHeight = Math.max(1, Math.round(REPORT_IMAGE_PAGE_HEIGHT_CSS * outputScale));
+            const pageRanges = createReportPageRanges(
+                canvas.height,
+                pageHeight,
+                pageBreakpoints.map(value => Math.round(value * outputScale))
+            );
+            if (!pageRanges.length) throw new Error('لم يتم إنشاء صفحات للتقرير');
+
+            const pages = [];
+            for (let index = 0; index < pageRanges.length; index++) {
+                const range = pageRanges[index];
+                const pageCanvas = document.createElement('canvas');
+                pageCanvas.width = canvas.width;
+                pageCanvas.height = range.height;
+                const context = pageCanvas.getContext('2d');
+                if (!context) throw new Error('تعذر تجهيز صفحة التقرير');
+                context.fillStyle = '#ffffff';
+                context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+                context.drawImage(canvas, 0, range.top, canvas.width, range.height, 0, 0, pageCanvas.width, pageCanvas.height);
+                const image = await canvasToPngResource(pageCanvas);
+                pageCanvas.width = 0;
+                pageCanvas.height = 0;
+                if (image.blob && String(image.url).startsWith('blob:')) generatedPageUrls.push(image.url);
+                pages.push({
+                    ...image,
+                    filename: `${baseFilename}_صفحة_${String(index + 1).padStart(2, '0')}.png`
                 });
-            } catch (blobErr) { blob = null; }
-            let href = null;
-            if (blob) {
-                href = URL.createObjectURL(blob);
-            } else {
-                href = canvas.toDataURL('image/png');
-                if (!href || href === 'data:,' || href.length < 128) throw new Error('تم توليد صورة فارغة');
             }
-            // 1) Direct download attempt
-            const link = document.createElement('a');
-            link.download = filename;
-            link.href = href;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            // 2) In-app preview fallback: lets the user save the image (long-press /
-            //    right-click, share button, or the download button) even if the direct
-            //    download was silently blocked by the browser or a sandboxed iframe
-            showReportImagePreview(href, filename, blob);
+            canvas.width = 0;
+            canvas.height = 0;
+
+            // Attempt a separate PNG download for every page. The preview gallery
+            // remains available if the browser blocks multiple automatic downloads.
+            downloadReportPages(pages);
+            showReportImagePreview(pages);
+            generatedPageUrls.length = 0; // the preview gallery now owns these URLs
             if (typeof showSuccessToast === 'function') {
-                showSuccessToast('تم إنشاء صورة التقرير! إن لم يبدأ التنزيل تلقائياً استخدم نافذة المعاينة');
+                showSuccessToast(`تم إنشاء ${pages.length} ${pages.length === 1 ? 'صورة' : 'صور'} منفصلة للتقرير. إن منع المتصفح بعض التنزيلات، استخدم أزرار الصفحات في المعاينة.`);
             }
             if (typeof logActivity === 'function') {
-                try { logActivity('system', 'تصدير التقرير المالي كصورة', 'تم إنشاء صورة PNG للتقرير المالي والإداري الشامل'); } catch (e) { /* noop */ }
+                try { logActivity('system', 'تصدير التقرير المالي كصور', `تم إنشاء ${pages.length} ملفات PNG منفصلة للتقرير المالي والإداري الشامل`); } catch (e) { /* noop */ }
             }
         } catch (err) {
+            generatedPageUrls.forEach(url => {
+                try { URL.revokeObjectURL(url); } catch (e) { /* noop */ }
+            });
             console.error('Error exporting image:', err);
             const detail = (err && err.message) ? ` (${String(err.message).slice(0, 80)})` : '';
             const msg = 'فشل إنشاء صورة التقرير، حاول مرة أخرى' + detail;
