@@ -1,4 +1,5 @@
 import { createRealtimeSections, readSectionWithLegacy } from './realtime-sections.js';
+import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABLE_SECTIONS, compareRtdbKeys, reconcileMode, idsToRemoveOnReconcile, shouldRestoreSalesHistoryComplete } from './local-db.js';
 
 // Safe DOM helpers to prevent null property errors
 function getElem(id) {
@@ -195,6 +196,7 @@ window.addEventListener('unhandledrejection', (event) => {
               }
           });
       }
+      if (window.localCache) { try { window.localCache.clearAll(); } catch (e) {} }
       showSuccessToast('تم مسح الكاش وإلغاء Service Worker بنجاح. جاري تحديث التطبيق...');
       setTimeout(() => {
           window.location.reload(true);
@@ -360,6 +362,7 @@ window.addEventListener('unhandledrejection', (event) => {
   let realtimeSections = null;
 
   function applySectionSnapshot(name, data) {
+    window.__cloudSnapshotSeen = true;
     if (name === 'privacy') {
       if (typeof data === 'boolean') {
         window.applyFirebaseSectionUpdate('appState', { hideFinances: data }, 'Realtime privacy');
@@ -369,14 +372,28 @@ window.addEventListener('unhandledrejection', (event) => {
       const payload = name === 'stats' ? data : Object.entries(data)
         .filter(([, item]) => item && typeof item === 'object')
         .map(([key, item]) => ({ ...item, id: item.id ?? key, _rtdbKey: key }));
+      // First authoritative cloud snapshot for a section: prune local-cache
+      // rows that were deleted in the cloud (from another device) so the
+      // IndexedDB head-start can never resurrect them. Pending local writes
+      // are protected inside the reconciler.
+      if (name !== 'stats' && window.__reconcileSectionWithSnapshot) {
+        window.__reconcileSectionWithSnapshot(name, payload);
+      }
       if (window.applyFirebaseSectionUpdate(name, payload, `Section ${name}`) === false) {
         throw new Error(`Unable to apply Firebase section: ${name}`);
       }
       if (name === 'sales' && payload.length < window.SALES_REALTIME_WINDOW) {
         window.salesHistoryComplete = true;
       }
-    } else if (name === 'sales') {
-      window.salesHistoryComplete = true;
+    } else {
+      // Authoritative empty node (v2 and legacy both empty): the cloud copy
+      // is truth, so cached rows for this section no longer exist.
+      if (window.__reconcileSectionWithSnapshot) {
+        window.__reconcileSectionWithSnapshot(name, []);
+      }
+      if (name === 'sales') {
+        window.salesHistoryComplete = true;
+      }
     }
     window.firebaseLoadedSections[name] = true;
   }
@@ -386,6 +403,9 @@ window.addEventListener('unhandledrejection', (event) => {
     // Await initialization itself, not an arbitrary 3-second race against the
     // network. Navigation and startup share the same listener/first snapshot.
     await window.__firebaseInitPromise;
+    // Instant local head-start for sections that were not hydrated at boot
+    // (e.g. activityLogs): render the IndexedDB copy now, cloud overlays next.
+    if (window.__hydrateSectionLazy) window.__hydrateSectionLazy(sectionName);
     if (realtimeSections) {
       await realtimeSections.load(sectionName);
       return window.appState[sectionName] || [];
@@ -534,6 +554,7 @@ window.addEventListener('unhandledrejection', (event) => {
     window.appState.quickSessions = mergedQuickSessions.length > 0 ? mergedQuickSessions : (window.appState.quickSessions || []);
     window.appState.activityLogs = mergedActivityLogs.length > 0 ? mergedActivityLogs : (window.appState.activityLogs || []);
     window.appState.lastUpdated = rawPayload.lastUpdated || new Date().toISOString();
+    if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
     scheduleRender();
     window.firebaseSyncState = window.firebaseSyncState || {};
     window.firebaseSyncState.rtdb = 'connected';
@@ -573,6 +594,7 @@ window.addEventListener('unhandledrejection', (event) => {
       if (sectionData.allTime) {
         window.appState.v2Stats.allTime = { ...(window.appState.v2Stats.allTime || {}), ...sectionData.allTime };
       }
+      if (window.__localCacheMarkDirty) window.__localCacheMarkDirty('stats');
       scheduleRender();
       return true;
     }
@@ -624,6 +646,7 @@ window.addEventListener('unhandledrejection', (event) => {
     }
 
     window.appState[sectionName] = merged;
+    if (window.__localCacheMarkDirty) window.__localCacheMarkDirty(sectionName);
     scheduleRender();
 
     window.firebaseSyncState = window.firebaseSyncState || {};
@@ -636,6 +659,285 @@ window.addEventListener('unhandledrejection', (event) => {
       return false;
     }
   };
+
+  // ============================================================
+  // LOCAL DATABASE (IndexedDB) — قاعدة بيانات محلية على الجهاز
+  // ------------------------------------------------------------
+  // Firebase stays the source of truth. The local IndexedDB mirror gives:
+  //   • Instant startup: sections render from the on-device copy while the
+  //     realtime listeners sync fresh cloud data in the background.
+  //   • Less cloud traffic: a locally-complete sales history is not
+  //     re-downloaded on every launch, and the app works fully offline.
+  //   • Durability backups for the offline write queue + tombstones.
+  // The first authoritative cloud snapshot per section reconciles the
+  // cached rows (cloud deletions win; pending local writes are protected).
+  // Any IndexedDB failure disables ONLY this layer. See src/local-db.js.
+  // ============================================================
+  const localCacheBootStorage = (() => {
+    try {
+      if (typeof indexedDB !== 'undefined' && indexedDB) {
+        const ns = String(getDbPrefix() || 'v2').replace(/[^\w-]/g, '_');
+        return { storage: createIndexedDBStorage({ indexedDB, dbName: `omega-gym-local-${ns}` }), persistent: true };
+      }
+    } catch (e) { /* fall through to in-memory storage */ }
+    return { storage: createMemoryStorage(), persistent: false };
+  })();
+  window.localCachePersistent = localCacheBootStorage.persistent;
+  window.localCache = createLocalCache({
+    storage: localCacheBootStorage.storage,
+    readSection: name => (window.appState && Array.isArray(window.appState[name])) ? window.appState[name] : [],
+    readStats: () => (window.appState && window.appState.v2Stats) || null,
+    readMeta: () => ({ salesHistoryComplete: !!window.salesHistoryComplete }),
+    onError: err => console.warn('[LocalDB] isolated error:', (err && (err.message || err)) || err),
+    onFlush: () => { if (window.refreshLocalCacheStatus) window.refreshLocalCacheStatus(); },
+  });
+
+  const preSnapshotCacheEntries = {}; // section -> [{id, key}] hydrated locally, awaiting first cloud snapshot
+  const reconciledLocalSections = new Set();
+  const hydratedLocalSections = new Set();
+  window.__cloudSnapshotSeen = false;
+  window.__hydratingFromLocalCache = false;
+
+  window.__localCacheMarkDirty = function(name) {
+    try { if (!window.__hydratingFromLocalCache) window.localCache.markDirty(name); } catch (e) {}
+  };
+  window.__localCacheMarkAllDirty = function() {
+    try { if (!window.__hydratingFromLocalCache) window.localCache.markAllDirty(); } catch (e) {}
+  };
+
+  // Ids that exist (or will exist) in the cloud thanks to local writes that
+  // are still in flight / queued offline. Reconciliation must never drop them.
+  function collectLocallyProtectedIds(sectionName) {
+    const protectedIds = new Set();
+    try {
+      const queue = Array.isArray(window.firebaseWriteQueue) ? window.firebaseWriteQueue : [];
+      for (const entry of queue) {
+        if (!entry || typeof entry !== 'object') continue;
+        const entrySection = entry.sectionPath || entry.section;
+        if (entrySection !== sectionName) continue;
+        const id = entry.id || entry.itemId || (entry.itemData && (entry.itemData.id || entry.itemData._rtdbKey));
+        if (id !== undefined && id !== null && id !== '') protectedIds.add(String(id));
+      }
+      if (window.pendingWrites && typeof window.pendingWrites.keys === 'function') {
+        for (const key of window.pendingWrites.keys()) {
+          const parts = String(key).split(':');
+          if (parts.length >= 3 && parts[1] === sectionName) protectedIds.add(parts.slice(2).join(':'));
+        }
+      }
+    } catch (e) {}
+    return protectedIds;
+  }
+
+  window.__reconcileSectionWithSnapshot = function(sectionName, snapshotItems) {
+    try {
+      if (!CACHEABLE_SECTIONS.includes(sectionName)) return;
+      if (reconciledLocalSections.has(sectionName)) return;
+      // An offline first event may not be authoritative yet — retry on the
+      // next snapshot instead of pruning against incomplete data.
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      reconciledLocalSections.add(sectionName);
+      const cachedEntries = preSnapshotCacheEntries[sectionName] || [];
+      delete preSnapshotCacheEntries[sectionName];
+      if (!cachedEntries.length) return;
+      const items = Array.isArray(snapshotItems) ? snapshotItems : [];
+      const snapshotIds = new Set();
+      let windowOldestKey = null;
+      for (const it of items) {
+        if (!it || typeof it !== 'object') continue;
+        if (it.id !== undefined && it.id !== null) snapshotIds.add(String(it.id));
+        if (it._rtdbKey !== undefined && it._rtdbKey !== null) snapshotIds.add(String(it._rtdbKey));
+        const k = String(it._rtdbKey ?? it.id ?? '');
+        if (k && (windowOldestKey === null || compareRtdbKeys(k, windowOldestKey) < 0)) windowOldestKey = k;
+      }
+      const mode = reconcileMode({
+        section: sectionName,
+        snapshotCount: items.length,
+        cachedCount: cachedEntries.length,
+        windowSize: window.SALES_REALTIME_WINDOW || 3000,
+      });
+      const removed = idsToRemoveOnReconcile({
+        cachedEntries, snapshotIds, mode, windowOldestKey,
+        protectedIds: collectLocallyProtectedIds(sectionName),
+      });
+      if (!removed.length) return;
+      const removedIds = new Set();
+      const removedKeys = new Set();
+      removed.forEach(({ id, key }) => { if (id) removedIds.add(id); if (key) removedKeys.add(key); });
+      const current = Array.isArray(window.appState[sectionName]) ? window.appState[sectionName] : [];
+      const kept = current.filter(it => {
+        if (!it || typeof it !== 'object') return false;
+        const id = it.id !== undefined && it.id !== null ? String(it.id) : null;
+        const rk = it._rtdbKey !== undefined && it._rtdbKey !== null ? String(it._rtdbKey) : null;
+        return !(id && removedIds.has(id)) && !(rk && removedKeys.has(rk));
+      });
+      if (kept.length !== current.length) {
+        window.appState[sectionName] = kept;
+        console.info(`[LocalDB] ${sectionName}: removed ${current.length - kept.length} cached record(s) deleted in the cloud.`);
+        window.__localCacheMarkDirty(sectionName);
+      }
+    } catch (e) {
+      console.warn('[LocalDB] reconcile isolated error:', e);
+    }
+  };
+
+  function hydrateSectionFromCache(sectionName, items) {
+    if (!Array.isArray(items) || !items.length) return 0;
+    if (window.firebaseLoadedSections && window.firebaseLoadedSections[sectionName]) return 0;
+    if (hydratedLocalSections.has(sectionName)) return 0;
+    hydratedLocalSections.add(sectionName);
+    preSnapshotCacheEntries[sectionName] = items
+      .filter(it => it && typeof it === 'object')
+      .map(it => ({ id: String(it.id ?? it._rtdbKey ?? ''), key: String(it._rtdbKey ?? it.id ?? '') }))
+      .filter(entry => entry.id !== '' || entry.key !== '');
+    window.__hydratingFromLocalCache = true;
+    try {
+      window.applyFirebaseSectionUpdate(sectionName, items, 'IndexedDB Local Cache');
+    } finally {
+      window.__hydratingFromLocalCache = false;
+    }
+    return items.length;
+  }
+
+  window.__hydrateSectionLazy = function(sectionName) {
+    try {
+      if (!CACHEABLE_SECTIONS.includes(sectionName)) return;
+      if (hydratedLocalSections.has(sectionName)) return;
+      if (window.firebaseLoadedSections && window.firebaseLoadedSections[sectionName]) return;
+      window.localCache.loadSection(sectionName).then(items => {
+        if (items && items.length) hydrateSectionFromCache(sectionName, items);
+      }).catch(() => {});
+    } catch (e) {}
+  };
+
+  window.refreshLocalCacheStatus = function() {
+    try {
+      const el = document.getElementById('localCacheStatus');
+      if (!el) return;
+      const s = window.localCache ? window.localCache.stats() : null;
+      let text;
+      if (!s || !s.available) {
+        text = 'الذاكرة المحلية (IndexedDB): غير متاحة في هذا المتصفح — العمل سحابياً فقط';
+      } else {
+        const time = s.lastFlushAt
+          ? new Date(s.lastFlushAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : '—';
+        text = `الذاكرة المحلية (IndexedDB): ${s.totalRecords} سجل على الجهاز — آخر حفظ: ${time}`;
+      }
+      if (el.textContent !== text) el.textContent = text;
+    } catch (e) {}
+  };
+
+  window.clearLocalCacheAndReload = async function() {
+    try {
+      if (!confirm('سيتم مسح قاعدة البيانات المحلية (IndexedDB) من هذا الجهاز وإعادة تحميل البيانات من السحابة. متابعة؟')) return;
+      await window.localCache.clearAll();
+      if (typeof showSuccessToast === 'function') showSuccessToast('تم مسح الذاكرة المحلية — جارٍ إعادة التحميل من السحابة…');
+      setTimeout(() => window.location.reload(), 600);
+    } catch (e) {
+      if (typeof showErrorToast === 'function') showErrorToast('تعذّر مسح الذاكرة المحلية: ' + (e.message || e));
+    }
+  };
+
+  // Boot hydration: runs in parallel with the Firebase SDK download, never
+  // blocks it. Cloud snapshots overlay/reconcile whatever was hydrated.
+  window.__localCacheReady = (async () => {
+    try {
+      const data = await window.localCache.loadAll();
+
+      // 1) Tombstones first, so hydration filters locally-deleted rows even
+      //    if the localStorage copy of the registry was wiped.
+      if (Array.isArray(data.tombstones) && data.tombstones.length) {
+        try {
+          if (!window._deletedItemIds) {
+            const saved = localStorage.getItem('sm_deleted_ids');
+            window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
+          }
+          let added = 0;
+          for (const key of data.tombstones) {
+            if (typeof key === 'string' && !window._deletedItemIds.has(key)) {
+              window._deletedItemIds.add(key);
+              added++;
+            }
+          }
+          if (added) {
+            localStorage.setItem('sm_deleted_ids', JSON.stringify(Array.from(window._deletedItemIds).slice(-3000)));
+          }
+        } catch (e) {}
+      }
+
+      // 2) Offline write-queue backup: revive writes whose localStorage
+      //    copy was lost (quota/private mode) — deduped against the live queue.
+      if (Array.isArray(data.writeQueue) && data.writeQueue.length) {
+        const current = Array.isArray(window.firebaseWriteQueue) ? window.firebaseWriteQueue : [];
+        const seen = new Set(current.map(entry => JSON.stringify(entry)));
+        let restored = 0;
+        for (const entry of data.writeQueue) {
+          if (!entry || typeof entry !== 'object') continue;
+          const sig = JSON.stringify(entry);
+          if (!seen.has(sig)) { current.push(entry); seen.add(sig); restored++; }
+        }
+        if (restored) {
+          window.firebaseWriteQueue = current;
+          if (typeof window.persistFirebaseWriteQueue === 'function') window.persistFirebaseWriteQueue();
+          console.warn(`[LocalDB] restored ${restored} pending write(s) from the IndexedDB backup.`);
+        }
+      }
+
+      // 3) Hydrate the startup sections (+ stats) for an instant first paint.
+      let hydratedRecords = 0;
+      for (const name of startupSections) {
+        if (name === 'stats') {
+          if (data.v2Stats && typeof data.v2Stats === 'object') {
+            window.__hydratingFromLocalCache = true;
+            try { window.applyFirebaseSectionUpdate('stats', data.v2Stats, 'IndexedDB Local Cache'); }
+            finally { window.__hydratingFromLocalCache = false; }
+          }
+          continue;
+        }
+        if (!CACHEABLE_SECTIONS.includes(name)) continue;
+        hydratedRecords += hydrateSectionFromCache(name, data.sections.get(name));
+      }
+
+      // 4) A locally-complete sales history (bigger than the realtime
+      //    window) does not need to be re-paged from the cloud.
+      const cachedSales = data.sections.get('sales');
+      if (shouldRestoreSalesHistoryComplete({
+        metaComplete: !!(data.meta && data.meta.salesHistoryComplete),
+        cachedSalesCount: Array.isArray(cachedSales) ? cachedSales.length : 0,
+        windowSize: window.SALES_REALTIME_WINDOW || 3000,
+      })) {
+        window.salesHistoryComplete = true;
+      }
+
+      if (hydratedRecords > 0) {
+        console.info(`[LocalDB] hydrated ${hydratedRecords} record(s) from IndexedDB — instant render, cloud sync continues in background.`);
+        if (!window.__cloudSnapshotSeen && typeof updateFirebaseUIBadge === 'function') {
+          if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            updateFirebaseUIBadge('error', 'وضع عدم الاتصال — عرض البيانات المحلية', 'سيتم حفظ التغييرات ومزامنتها تلقائياً فور عودة الشبكة');
+          } else {
+            updateFirebaseUIBadge('connecting', 'بيانات محلية — جارٍ المزامنة مع السحابة…');
+          }
+        }
+        if (typeof window.scheduleRender === 'function') window.scheduleRender();
+      }
+      if (window.refreshLocalCacheStatus) window.refreshLocalCacheStatus();
+      return true;
+    } catch (e) {
+      console.warn('[LocalDB] hydration isolated error:', e);
+      return false;
+    }
+  })();
+
+  // Best-effort flush when the tab is hidden/closed so the last edits of a
+  // session are on disk for the next launch.
+  window.addEventListener('beforeunload', () => {
+    try { window.localCache.flush(); } catch (e) {}
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { window.localCache.flush(); } catch (e) {}
+    }
+  });
 
   // Clean and sanitize payload to eliminate undefined fields
   function getCleanSyncPayload(sourceState) {
@@ -742,6 +1044,8 @@ window.addEventListener('unhandledrejection', (event) => {
     try {
       localStorage.setItem(WRITE_QUEUE_STORAGE_KEY, JSON.stringify(window.firebaseWriteQueue));
     } catch (e) { /* quota or private mode — queue stays in memory */ }
+    // IndexedDB backup: survives localStorage quota pressure / eviction.
+    try { if (window.localCache) window.localCache.setKV('writeQueue', window.firebaseWriteQueue); } catch (e) {}
   };
 
   // Hydrate any writes that failed before the last page reload
@@ -1103,6 +1407,7 @@ window.addEventListener('unhandledrejection', (event) => {
       window._deletedItemIds.add(key);
       const arr = Array.from(window._deletedItemIds).slice(-3000);
       localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
+      if (window.localCache) window.localCache.setKV('tombstones', arr);
     } catch(e) {}
   };
 
@@ -1117,6 +1422,7 @@ window.addEventListener('unhandledrejection', (event) => {
       window._deletedItemIds.delete(key);
       const arr = Array.from(window._deletedItemIds);
       localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
+      if (window.localCache) window.localCache.setKV('tombstones', arr);
     } catch(e) {}
   };
 
@@ -1314,6 +1620,7 @@ window.addEventListener('unhandledrejection', (event) => {
     const rawId = itemData.id || itemData._rtdbKey || itemData.barcode || Date.now().toString();
     const cleanId = cleanKey(rawId);
     if (!itemData.id) itemData.id = cleanId;
+    if (window.__localCacheMarkDirty) window.__localCacheMarkDirty(sectionPath);
 
     if (typeof window.unregisterDeletedItemId === 'function') {
       window.unregisterDeletedItemId(sectionPath, cleanId);
@@ -1511,6 +1818,7 @@ window.addEventListener('unhandledrejection', (event) => {
   window.deleteFirebaseSectionItem = async function(sectionPath, itemId, previousItem) {
     if (!itemId) return false;
     const cleanId = cleanKey(itemId);
+    if (window.__localCacheMarkDirty) window.__localCacheMarkDirty(sectionPath);
     const writeKey = `deleteSectionItem:${sectionPath}:${cleanId}`;
 
     if (typeof window.registerDeletedItemId === 'function') {
@@ -2217,7 +2525,7 @@ window.addEventListener('unhandledrejection', (event) => {
             window.appState.sales = []; window.appState.staffPayouts = [];
             window.appState.credits = []; window.appState.suppliers = [];
             window.appState.activityLogs = [];
-            saveState(); localStorage.clear();
+            saveState(); localStorage.clear(); if (window.localCache) window.localCache.clearAll();
             showSuccessToast("تم مسح جميع البيانات بنجاح");
         } } const defaultPackages = [];
     try {
@@ -2371,6 +2679,8 @@ window.addEventListener('unhandledrejection', (event) => {
       // Synchronous immediate local write + debounced safety
       saveLocalStorageImmediate();
       scheduleLocalStorageSave();
+      // Mirror the working set into the local IndexedDB cache (debounced)
+      if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
 
       if (window.__firebasePushTimer) clearTimeout(window.__firebasePushTimer);
       window.__firebasePushTimer = setTimeout(() => {
