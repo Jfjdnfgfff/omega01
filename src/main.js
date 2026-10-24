@@ -10292,6 +10292,18 @@ window.addEventListener('unhandledrejection', (event) => {
                ? `<strong class="text-red-600 font-black">0 ${stockWord} (منتهي)</strong>`
                : (isLowStock ? `<strong class="text-amber-800 font-black bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 inline-flex items-center gap-1"><span>⚠️</span><span>${currentStock} ${stockWord} فقط</span></strong>` : `<strong class="text-slate-800">${currentStock} ${stockWord}</strong>`);
 
+           // تكلفة الشراء والبيع تُحسب دائمًا بناءً على "سعر الغرام الواحد × المخزون بالغرام"
+           // للمنتجات gram-priced، بعيداً عن الدوزة أو سعر الوحدة الكاملة.
+           const stockNum = Number(currentStock) || 0;
+           const purchaseGramPrice = gramCostPriceOf(p) || 0;
+           const saleGramPrice = gramSalePriceOf(p) || 0;
+           const stockPurchaseValue = purchaseGramPrice > 0
+               ? stockNum * purchaseGramPrice
+               : stockNum * (parseFloat(p.cost) || 0);
+           const stockSaleValue = saleGramPrice > 0
+               ? stockNum * saleGramPrice
+               : stockNum * (parseFloat(p.price) || 0);
+
            return `
            <div id="product-card-${p.id}" data-product-id="${p.id}" data-barcode="${p.barcode || ''}" class="transition-all duration-300 flex justify-between items-center p-3.5 border ${cardClass} rounded-xl mb-2.5 shadow-sm relative overflow-hidden">
                ${cardIndicator}
@@ -10312,9 +10324,9 @@ window.addEventListener('unhandledrejection', (event) => {
                        <span>المخزون: ${stockQtyDisplay}</span>
                        <span class="text-slate-300">|</span>
                        <span class="inline-flex items-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-md" title="إجمالي قيمة مخزون هذا المنتج">
-                           <span>الشراء: <strong class="text-blue-950">${((Number(currentStock) || 0) * (parseFloat(p.cost) || 0)).toLocaleString()} دج</strong></span>
+                           <span>الشراء: <strong class="text-blue-950">${stockPurchaseValue.toLocaleString()} دج</strong></span>
                            <span class="text-blue-300">•</span>
-                           <span>البيع: <strong class="text-blue-700">${((Number(currentStock) || 0) * (parseFloat(p.price) || 0)).toLocaleString()} دج</strong></span>
+                           <span>البيع: <strong class="text-blue-700">${stockSaleValue.toLocaleString()} دج</strong></span>
                        </span>
                        ${p.barcode ? `<span class="text-slate-300">|</span><span class="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200" title="باركود"><svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 5v14M8 5v14M12 5v14M17 5v14M21 5v14"></path></svg>${p.barcode}</span>` : ''}
                        ${p.expiryDate ? `<span class="text-slate-300">|</span><span>الصلاحية: <strong class="${expInfo.isNearExpiry ? 'text-blue-700 font-bold' : 'text-slate-700'}">${p.expiryDate}</strong></span>` : ''}
