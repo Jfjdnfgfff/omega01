@@ -11249,17 +11249,22 @@ window.addEventListener('unhandledrejection', (event) => {
         prods.forEach(p => {
             if (!p) return;
             const qty = parseFloat(p.stock) || 0;
-            const cost = parseFloat(p.cost) || 0;
-            const price = parseFloat(p.price) || 0;
+            const purchaseGramPrice = gramCostPriceOf(p) || 0;
+            const saleGramPrice = gramSalePriceOf(p) || 0;
+            // تكلفة الشراء والقيمة السوقية تُحسب بناءً على "سعر الغرام الواحد × المخزون"
+            // بعيداً عن الدوزة أو سعر الوحدة الكاملة. إذا لم يكن gramPrice مضبوطاً،
+            // يعود إلى الحساب旧 باستخدام cost/price.
+            const costVal = purchaseGramPrice > 0 ? purchaseGramPrice : (parseFloat(p.cost) || 0);
+            const priceVal = saleGramPrice > 0 ? saleGramPrice : (parseFloat(p.price) || 0);
             const isStock2 = p.stockLocation === 'stock2';
             if (isStock2) {
-                stock2Cost += (qty * cost);
-                stock2Selling += (qty * price);
+                stock2Cost += (qty * costVal);
+                stock2Selling += (qty * priceVal);
                 stock2ItemsCount += qty;
                 stock2TypesCount++;
             } else {
-                stock1Cost += (qty * cost);
-                stock1Selling += (qty * price);
+                stock1Cost += (qty * costVal);
+                stock1Selling += (qty * priceVal);
                 stock1ItemsCount += qty;
                 stock1TypesCount++;
             }
