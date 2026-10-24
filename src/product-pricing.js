@@ -142,11 +142,11 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg, costPerGram } = {}
     const gramsSold = roundTo(qty * GRAMS_PER_KG, 3);
     const unitCost = Number(product?.cost || 0);
     const isDose = isDoseProduct(product, spec);
-    const gramCost = normalizeGramPrice(costPerGram);
-    // With a purchase price per gram the cost is the exact weight sold × that price.
-    // Otherwise fall back to the package purchase price: the sold fraction of the
-    // package (stock is grams, so `stockDeduction / gramsPerUnit`). For a dose product
-    // whose dose weight was never recorded, `cost × kg sold` is the previous rule.
+    // Purchase price per gram: prefer the passed costPerGram, otherwise fall
+    // back to the gram price saved on the product (product.gramPrice). This
+    // keeps the cost calculation always based on "price per gram × grams sold"
+    // regardless of doses/packages — the dose is just a weight quantity.
+    const gramCost = normalizeGramPrice(costPerGram) || normalizeGramPrice(product?.gramPrice);
     const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
@@ -202,17 +202,16 @@ export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose
     if (gramsPerDose === '' || gramsPerDose === null || gramsPerDose === undefined ||
         !Number.isFinite(grams) || grams <= 0) return { valid: false, error: 'invalid_grams' };
     const gramsSold = roundTo(grams * quantity, 3);
-    const gramCost = normalizeGramPrice(costPerGram);
+    const stockDeduction = gramsSold;
+    // Purchase price per gram: prefer the passed costPerGram, otherwise fall
+    // back to the gram price saved on the product (product.gramPrice). This
+    // keeps the cost calculation always based on "price per gram × grams sold"
+    // regardless of doses — the dose is just a weight quantity.
+    const gramCost = normalizeGramPrice(costPerGram) || normalizeGramPrice(product?.gramPrice);
     const total = roundTo(gramsSold * gramPrice, 2);
-    // With a purchase price per gram the cost is the exact weight sold × that price;
-    // otherwise fall back to the package cost saved on the product.
-    const spec = parseWeightSpec(product?.weight);
-    const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
-        : (packGrams > 0
-            ? roundTo(Number(product?.cost || 0) * (gramsSold / packGrams), 2)
-            : roundTo(Number(product?.cost || 0) * quantity, 2));
+        : roundTo(Number(product?.cost || 0) * quantity, 2);
     return {
         valid: true, error: '', priceBasis: 'gram', pricePerGram: gramPrice,
         gramsPerDose: grams, gramsSold,
