@@ -5885,6 +5885,7 @@ window.addEventListener('unhandledrejection', (event) => {
                         p.stock = parseFloat(getElemVal('prodStock')) || 0;
                     } if (p && window.saveFirebaseSectionItem) {
                         window.saveFirebaseSectionItem('products', p);
+                        if (typeof window.scheduleRender === 'function') window.scheduleRender();
                     } }
                 if (typeof logActivity === 'function') {
                     logActivity('sale', 'تعديل منتج في المخزون', `تعديل بيانات المنتج: ${prodName} (السعر: ${priceVal} دج)`);
