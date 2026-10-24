@@ -191,6 +191,7 @@ export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose
     if (!Number.isFinite(quantity) || quantity <= 0) return { valid: false, error: 'invalid_quantity' };
     if (pricePerGram === '' || pricePerGram === null || pricePerGram === undefined ||
         !Number.isFinite(gramPrice) || gramPrice <= 0) return { valid: false, error: 'invalid_price' };
+    const spec = parseWeightSpec(product?.weight);
     if (mode === 'kilo') {
         const kiloSale = resolveKiloSale({
             product, qtyKg: quantity, pricePerKg: gramPrice * GRAMS_PER_KG, costPerGram
@@ -209,9 +210,15 @@ export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose
     // regardless of doses — the dose is just a weight quantity.
     const gramCost = normalizeGramPrice(costPerGram) || normalizeGramPrice(product?.gramPrice);
     const total = roundTo(gramsSold * gramPrice, 2);
+    // When no gram price is set, derive it from the saved product cost
+    // (cost per package ÷ grams per package) so the cost stays based on
+    // "price per gram × grams sold" and never on the dose count directly.
+    const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
-        : roundTo(Number(product?.cost || 0) * quantity, 2);
+        : (packGrams > 0
+            ? roundTo(Number(product?.cost || 0) * (gramsSold / packGrams), 2)
+            : roundTo(Number(product?.cost || 0) * quantity, 2));
     return {
         valid: true, error: '', priceBasis: 'gram', pricePerGram: gramPrice,
         gramsPerDose: grams, gramsSold,
