@@ -357,7 +357,7 @@ window.addEventListener('unhandledrejection', (event) => {
     return salesHistoryCompletionPromise;
   };
 
-  const startupSections = ['stats', 'privacy', 'products', 'customers', 'sales',
+  const startupSections = ['stats', 'privacy', 'customers', 'sales',
     'quickSessions', 'expenses', 'credits', 'suppliers', 'supplierTransactions',
     'packages', 'staffPayouts', 'coachAbsences', 'caisseLogs'];
   const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
@@ -2081,6 +2081,90 @@ window.addEventListener('unhandledrejection', (event) => {
       }
     }
     return null;
+  };
+
+  // ============================================================================
+  // جلب مستند فردي من قاعدة البيانات — كل مشترك ومنتج مخزّن كمستند مستقل
+  // المسار: v2/customers/{id} و v2/products/{id}
+  // لا يُوضع أي بيان في مستند واحد شامل؛ البيانات مقسمة إلى مجموعات ومستندات
+  // ============================================================================
+
+  // جلب مشترك واحد بالمعرف مباشرة من قاعدة البيانات
+  window.getCustomerById = async function(customerId) {
+    if (!customerId) return null;
+    const cleanId = cleanKey(String(customerId));
+
+    //primaية: التحقق من الذاكرة المحلية أولًا
+    const found = (window.appState?.customers || []).find(c => String(c.id) === String(cleanId) || String(c._rtdbKey) === String(cleanId));
+    if (found) return found;
+
+    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return null;
+
+    try {
+      const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/customers/${cleanId}`));
+      if (snap.exists()) {
+        const cust = snap.val();
+        const enriched = { ...cust, id: cleanId, _rtdbKey: cleanId };
+        window.applyFirebaseSectionUpdate('customers', [enriched], 'getCustomerById');
+        return enriched;
+      }
+      // fallback على المسار الجذري (Legacy) إن لم يوجد في v2
+      const legSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `customers/${cleanId}`));
+      if (legSnap.exists()) {
+        const cust = legSnap.val();
+        const enriched = { ...cust, id: cleanId, _rtdbKey: cleanId };
+        window.applyFirebaseSectionUpdate('customers', [enriched], 'getCustomerById legacy');
+        return enriched;
+      }
+    } catch (e) {
+      console.warn('getCustomerById note:', e);
+    }
+    return null;
+  };
+
+  // جلب منتج واحد بالمعرف مباشرة من قاعدة البيانات
+  window.getProductById = async function(productId) {
+    if (!productId) return null;
+    const cleanId = cleanKey(String(productId));
+
+    const found = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(cleanId) || String(p._rtdbKey) === String(cleanId));
+    if (found) return found;
+
+    if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return null;
+
+    try {
+      const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/products/${cleanId}`));
+      if (snap.exists()) {
+        const prod = snap.val();
+        const enriched = { ...prod, id: cleanId, _rtdbKey: cleanId };
+        window.applyFirebaseSectionUpdate('products', [enriched], 'getProductById');
+        return enriched;
+      }
+      const legSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `products/${cleanId}`));
+      if (legSnap.exists()) {
+        const prod = legSnap.val();
+        const enriched = { ...prod, id: cleanId, _rtdbKey: cleanId };
+        window.applyFirebaseSectionUpdate('products', [enriched], 'getProductById legacy');
+        return enriched;
+      }
+    } catch (e) {
+      console.warn('getProductById note:', e);
+    }
+    return null;
+  };
+
+  // جلب دفعة من المشتركين بمعرفاتهم (يُرسل طلب واحد لكل معرف)
+  window.getCustomersByIds = async function(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const results = await Promise.allSettled(ids.map(id => window.getCustomerById(id)));
+    return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+  };
+
+  // جلب دفعة من المنتجات بمعرفاتها (يُرسل طلب واحد لكل معرف)
+  window.getProductsByIds = async function(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const results = await Promise.allSettled(ids.map(id => window.getProductById(id)));
+    return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
   };
 
   // Robust Data Sync with Firebase Realtime Database
