@@ -150,10 +150,10 @@ export function resolveKiloSale({ product, qtyKg, pricePerKg, costPerGram } = {}
     const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
-        : (isDose
-            ? roundTo(unitCost * qty, 2)
-            : (packGrams > 0
-                ? roundTo(unitCost * (stockDeduction / packGrams), 2)
+        : (packGrams > 0
+            ? roundTo(unitCost * (stockDeduction / packGrams), 2)
+            : (isDose
+                ? roundTo(unitCost * qty, 2)
                 : roundTo(unitCost * stockDeduction, 2)));
     const total = roundTo(price * qty, 2);
 
