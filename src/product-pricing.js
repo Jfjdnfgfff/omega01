@@ -206,9 +206,13 @@ export function resolveGramSale({ product, mode, qty, pricePerGram, gramsPerDose
     const total = roundTo(gramsSold * gramPrice, 2);
     // With a purchase price per gram the cost is the exact weight sold × that price;
     // otherwise fall back to the package cost saved on the product.
+    const spec = parseWeightSpec(product?.weight);
+    const packGrams = gramsPerUnit(product, spec);
     const cost = gramCost > 0
         ? roundTo(gramCost * gramsSold, 2)
-        : roundTo(Number(product?.cost || 0) * quantity, 2);
+        : (packGrams > 0
+            ? roundTo(Number(product?.cost || 0) * (gramsSold / packGrams), 2)
+            : roundTo(Number(product?.cost || 0) * quantity, 2));
     return {
         valid: true, error: '', priceBasis: 'gram', pricePerGram: gramPrice,
         gramsPerDose: grams, gramsSold,
