@@ -5884,8 +5884,20 @@ window.addEventListener('unhandledrejection', (event) => {
                         p.stockLocation = stockLocationVal;
                         p.stock = parseFloat(getElemVal('prodStock')) || 0;
                     } if (p && window.saveFirebaseSectionItem) {
-                        window.saveFirebaseSectionItem('products', p);
-                        if (typeof window.scheduleRender === 'function') window.scheduleRender();
+                        window.saveFirebaseSectionItem('products', p).then(() => {
+                            // تأكد من أن حالة المحلى تحتفظ بالتعديل حتى لو Firebase أرسل بيانات قديمة
+                            const p2 = (appState.products || []).find(pp => pp && String(pp.id) === String(p.id));
+                            if (p2) {
+                                p2.stock = p.stock;
+                                p2.stockLocation = p.stockLocation;
+                            }
+                            if (typeof window.saveState === 'function') window.saveState();
+                            if (typeof window.renderProductsList === 'function' &&
+                                (window.isVisible('productsView') || window.isVisible('dashboardView'))) {
+                                window.renderProductsList();
+                            }
+                            if (typeof window.scheduleRender === 'function') window.scheduleRender();
+                        });
                     } }
                 if (typeof logActivity === 'function') {
                     logActivity('sale', 'تعديل منتج في المخزون', `تعديل بيانات المنتج: ${prodName} (السعر: ${priceVal} دج)`);
