@@ -3235,7 +3235,18 @@ window.addEventListener('unhandledrejection', (event) => {
                 cardioBtn.className = "py-3 px-3 rounded-xl border-2 text-xs font-bold flex items-center justify-center gap-1.5 transition-all bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 cursor-pointer";
             } else { cardioBtn.className = "py-3 px-3 rounded-xl border-2 text-xs font-bold flex items-center justify-center gap-1.5 transition-all bg-blue-600 text-white border-blue-600 shadow-sm cursor-pointer";
                 muscBtn.className = "py-3 px-3 rounded-xl border-2 text-xs font-bold flex items-center justify-center gap-1.5 transition-all bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 cursor-pointer";
-            } } }; window.quickSessClientsData = [{ activity: 'musculation', price: '' }];
+            } } };
+    // Default gender for a new quick-session client (male matches the subscribers default)
+    window.quickSessDefaultGender = 'male';
+    window.quickSessNewClient = function(client) {
+        const source = client || {};
+        return {
+            activity: source.activity === 'cardio' ? 'cardio' : 'musculation',
+            price: source.price !== undefined && source.price !== null ? source.price : '',
+            gender: source.gender === 'female' ? 'female' : 'male'
+        };
+    };
+    window.quickSessClientsData = [window.quickSessNewClient()];
     window.setQuickSessType = function(type) {
         if (window.quickSessClientsData && window.quickSessClientsData.length > 0) {
             window.quickSessClientsData[0].activity = type;
@@ -3245,7 +3256,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (countInput) countInput.value = '1';
         const sessInput = document.getElementById('quickSessCount');
         if (sessInput) sessInput.value = '1';
-        window.quickSessClientsData = [{ activity: 'musculation', price: '' }];
+        window.quickSessClientsData = [window.quickSessNewClient()];
         const paymentDateInput = document.getElementById('quickSessPaymentDate');
         const todayKey = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().slice(0, 10);
         if (paymentDateInput) { paymentDateInput.value = todayKey; paymentDateInput.max = todayKey; }
@@ -3254,15 +3265,17 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof window.openModal === 'function') window.openModal('quickSessionModal');
     }; window.onQuickSessClientCountChange = function(val) {
         if (!Array.isArray(window.quickSessClientsData)) {
-            window.quickSessClientsData = [{ activity: 'musculation', price: '' }];
+            window.quickSessClientsData = [window.quickSessNewClient()];
         } if (val === '' || val === null || val === undefined) {
             return; // Allow user to erase '1' and type a new number smoothly
         } let count = parseInt(val); if (isNaN(count) || count < 1) count = 1;
         if (count > 100) count = 100; const currentLen = window.quickSessClientsData.length;
         if (count > currentLen) { for (let i = currentLen; i < count; i++) {
-                const lastActivity = window.quickSessClientsData[i-1]?.activity || 'musculation';
-                const lastPrice = window.quickSessClientsData[i-1]?.price || '';
-                window.quickSessClientsData.push({ activity: lastActivity, price: lastPrice });
+                const previous = window.quickSessClientsData[i-1] || {};
+                const lastActivity = previous.activity || 'musculation';
+                const lastPrice = previous.price || '';
+                const lastGender = previous.gender === 'female' ? 'female' : 'male';
+                window.quickSessClientsData.push({ activity: lastActivity, price: lastPrice, gender: lastGender });
             } } else if (count < currentLen) {
             window.quickSessClientsData = window.quickSessClientsData.slice(0, count);
         } window.renderQuickSessClientsUI(); };
@@ -3273,6 +3286,10 @@ window.addEventListener('unhandledrejection', (event) => {
     }; window.setQuickSessClientActivity = function(index, activity) {
         if (window.quickSessClientsData[index]) {
             window.quickSessClientsData[index].activity = activity;
+            window.renderQuickSessClientsUI(); }
+    }; window.setQuickSessClientGender = function(index, gender) {
+        if (window.quickSessClientsData[index]) {
+            window.quickSessClientsData[index].gender = gender === 'female' ? 'female' : 'male';
             window.renderQuickSessClientsUI(); }
     }; window.updateQuickSessClientPrice = function(index, val) {
         if (window.quickSessClientsData[index]) {
@@ -3287,17 +3304,33 @@ window.addEventListener('unhandledrejection', (event) => {
         if (priceInput) { priceInput.value = hasAnyPrice ? total : (priceInput.value || '');
         } }; window.renderQuickSessClientsUI = function() {
         const container = document.getElementById('quickSessClientsListContainer');
-        if (!container) return; const data = window.quickSessClientsData || [{ activity: 'musculation', price: '' }];
+        if (!container) return; const data = window.quickSessClientsData || [window.quickSessNewClient()];
         let html = ''; data.forEach((c, idx) => {
             const isMusc = c.activity === 'musculation';
             const isCardio = c.activity === 'cardio';
+            const isFemale = c.gender === 'female';
+            const isMale = !isFemale;
             html += `
               <div class="bg-white border border-slate-200 p-3.5 rounded-xl shadow-2xs space-y-2.5">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-bold text-slate-900 flex items-center gap-2">
-                    <span class="w-5 h-5 rounded-md bg-blue-600 text-white text-[11px] font-bold inline-flex items-center justify-center">${idx + 1}</span>
+                    <span class="w-5 h-5 rounded-md ${isFemale ? 'bg-pink-500' : 'bg-blue-600'} text-white text-[11px] font-bold inline-flex items-center justify-center">${idx + 1}</span>
                     <span>الزبون #${idx + 1}</span>
                   </span>
+                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${isFemale ? 'bg-pink-50 text-pink-700 border-pink-200' : 'bg-blue-50 text-blue-700 border-blue-200'}">${isFemale ? 'أنثى' : 'ذكر'}</span>
+                </div>
+                <div>
+                  <label class="block text-[11px] font-bold text-slate-800 mb-1">الجنس*</label>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button type="button" onclick="setQuickSessClientGender(${idx}, 'male')" class="py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${isMale ? 'bg-blue-600 text-white border-blue-600 shadow-xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">
+                      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="10" cy="14" r="5"/><path d="M19 5h-5m5 0v5m0-5-6 6"/></svg>
+                      <span>ذكر</span>
+                    </button>
+                    <button type="button" onclick="setQuickSessClientGender(${idx}, 'female')" class="py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${isFemale ? 'bg-pink-500 text-white border-pink-500 shadow-xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">
+                      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="9" r="5"/><path d="M12 14v7m-3-3h6"/></svg>
+                      <span>أنثى</span>
+                    </button>
+                  </div>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                   <button type="button" onclick="setQuickSessClientActivity(${idx}, 'musculation')" class="py-2.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${isMusc ? 'bg-blue-600 text-white border-blue-600 shadow-xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">
@@ -3337,17 +3370,18 @@ window.addEventListener('unhandledrejection', (event) => {
                 date: paymentDateTimestamp(paymentDateCheck.dateKey, new Date()),
                 clientCount: clientCount,
                 sessionCount: sessionCount,
-                price: price, clients: clientsData.map(c => ({ activity: c.activity, price: Number(c.price || 0) }))
+                price: price, clients: clientsData.map(c => ({ activity: c.activity, price: Number(c.price || 0), gender: c.gender === 'female' ? 'female' : 'male' }))
             }; appState.quickSessions.unshift(newQuickSession);
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('quickSessions', newQuickSession);
             }
             if (typeof logActivity === 'function') {
-                logActivity('customer', 'تسجيل حصة سريعة', `حصة سريعة (${sessionCount} حصص، ${clientCount} زبائن) - المبلغ: ${price} دج`, price);
+                logActivity('customer', 'تسجيل حصة سريعة', `حصة سريعة (${sessionCount} حصص، ${clientCount} زبائن - ذكور: ${clientsData.filter(c => c.gender !== 'female').length}، إناث: ${clientsData.filter(c => c.gender === 'female').length}) - المبلغ: ${price} دج`, price);
             }
             if (Array.isArray(appState.customers)) {
                 appState.customers = appState.customers.filter(c => c && c.subscriptionType !== 'session' && !c.name?.startsWith('حصة '));
             } if (typeof saveState === 'function') saveState();
+            if (typeof window.renderQuickSessionHistory === 'function') window.renderQuickSessionHistory();
             if (typeof closeModal === 'function') closeModal('quickSessionModal');
             if (typeof playBeep === 'function') playBeep();
             if (typeof showSuccessToast === 'function') {
@@ -3365,19 +3399,24 @@ window.addEventListener('unhandledrejection', (event) => {
             (Array.isArray(session.clients) ? session.clients : []).forEach(client => {
                 if (client?.activity === 'cardio') result.cardio++;
                 else if (client?.activity === 'musculation') result.musculation++;
+                if (client?.gender === 'female') result.female++;
+                else result.male++;
             });
             return result;
-        }, { musculation: 0, cardio: 0 });
+        }, { musculation: 0, cardio: 0, male: 0, female: 0 });
         const totalsContainer = document.getElementById('quickSessionActivityTotals');
-        if (totalsContainer) totalsContainer.innerHTML = `<div class="rounded-lg bg-blue-50 border border-blue-100 px-2 py-1.5 text-center text-[10px] font-bold text-blue-800">Musculation: ${totals.musculation} شخص</div><div class="rounded-lg bg-violet-50 border border-violet-100 px-2 py-1.5 text-center text-[10px] font-bold text-violet-800">Cardio: ${totals.cardio} شخص</div>`;
+        if (totalsContainer) totalsContainer.innerHTML = `<div class="rounded-lg bg-blue-50 border border-blue-100 px-2 py-1.5 text-center text-[10px] font-bold text-blue-800">Musculation: ${totals.musculation} شخص</div><div class="rounded-lg bg-violet-50 border border-violet-100 px-2 py-1.5 text-center text-[10px] font-bold text-violet-800">Cardio: ${totals.cardio} شخص</div><div class="rounded-lg bg-sky-50 border border-sky-100 px-2 py-1.5 text-center text-[10px] font-bold text-sky-800">ذكور: ${totals.male} شخص</div><div class="rounded-lg bg-pink-50 border border-pink-100 px-2 py-1.5 text-center text-[10px] font-bold text-pink-800">إناث: ${totals.female} شخص</div>`;
         container.innerHTML = sessions.length ? sessions.map(session => {
             const id = String(session.id || '');
             const date = getLocalDateString(session.date) || '—';
             const clients = Array.isArray(session.clients) ? session.clients : [];
             const musculationCount = clients.filter(client => client?.activity === 'musculation').length;
             const cardioCount = clients.filter(client => client?.activity === 'cardio').length;
+            const maleCount = clients.filter(client => client?.gender !== 'female').length;
+            const femaleCount = clients.filter(client => client?.gender === 'female').length;
             return `<div class="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div class="min-w-0"><div class="text-[11px] font-bold text-slate-800">Musculation: ${musculationCount} · Cardio: ${cardioCount} · ${Number(session.sessionCount || 0)} حصص</div>
+                <div class="text-[10px] font-bold text-slate-600">ذكر: ${maleCount} · أنثى: ${femaleCount}</div>
                 <div class="text-[10px] text-slate-500">${date} · ${Number(session.price || 0).toLocaleString()} دج</div></div>
                 <button type="button" onclick="deleteQuickSession('${id}')" class="shrink-0 rounded-lg bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-600 hover:bg-red-600 hover:text-white">حذف</button>
             </div>`;
@@ -10768,6 +10807,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let totalDebt = 0, activeCount = 0, nearExpiryCount = 0;
         let totalQuickSessionClients = 0; let totalQuickSessionsCount = 0;
         let monthlyQuickSessionsCount = 0; let monthlyCardioCount = 0; let monthlyMusculationCount = 0;
+        let monthlyMaleClientsCount = 0; let monthlyFemaleClientsCount = 0;
         // Count and income from quick sessions
         if (Array.isArray(appState.quickSessions)) {
             appState.quickSessions.forEach(qs => {
@@ -10785,6 +10825,8 @@ window.addEventListener('unhandledrejection', (event) => {
                     qsClients.forEach(cl => {
                         if (cl?.activity === 'cardio') monthlyCardioCount++;
                         else if (cl?.activity === 'musculation') monthlyMusculationCount++;
+                        if (cl?.gender === 'female') monthlyFemaleClientsCount++;
+                        else monthlyMaleClientsCount++;
                     });
                 }
                 if (qKey === todayKey) {
@@ -10938,6 +10980,12 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         if (document.getElementById('monthlyMusculationCount')) {
             setElemText('monthlyMusculationCount', monthlyMusculationCount);
+        }
+        if (document.getElementById('monthlyMaleClientsCount')) {
+            setElemText('monthlyMaleClientsCount', monthlyMaleClientsCount);
+        }
+        if (document.getElementById('monthlyFemaleClientsCount')) {
+            setElemText('monthlyFemaleClientsCount', monthlyFemaleClientsCount);
         }
         // Update new dashboard metrics
         if (document.getElementById('todaySubIncome')) {
