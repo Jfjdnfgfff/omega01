@@ -5,6 +5,31 @@ import tailwindcss from '@tailwindcss/vite';
 import { inlineSmallStylesheet } from './scripts/vite-inline-styles.js';
 import { minifyOmegaHtml } from './scripts/vite-minify-html.js';
 
+// ---------------------------------------------------------------------------
+// Chunk strategy (Lighthouse: "Reduce unused JavaScript")
+//
+// | chunk          | when it loads          | why                                    |
+// |----------------|------------------------|----------------------------------------|
+// | index          | first paint            | app shell + render engine               |
+// | firebase       | dynamic import at boot | modular SDK, terser-compressed, alone   |
+// | zxing          | only when scanning     | 456 kB never on the critical path       |
+// | html2canvas    | only when exporting    | only for the report screenshot          |
+// | full-report    | opening the report     | ~38 kB of report/layout code            |
+// | activity-log-* | opening the log modal  | view-only code                          |
+//
+// The rule of thumb: a dependency that is not needed for the first screen must
+// be reachable *only* through `import()`, so Rollup emits it as its own chunk
+// and the browser never downloads it at startup. `manualChunks` then pins
+// long-lived vendor code in cacheable files that outlive app deploys.
+// ---------------------------------------------------------------------------
+function manualChunks(id) {
+  if (!id.includes('node_modules')) return undefined;
+  if (id.includes('firebase') || id.includes('@firebase')) return 'firebase';
+  if (id.includes('@zxing')) return 'zxing';
+  if (id.includes('html2canvas')) return 'html2canvas';
+  return 'vendor';
+}
+
 export default defineConfig({
   plugins: [
     tailwindcss(),
@@ -12,6 +37,16 @@ export default defineConfig({
     minifyFirebase(),
     minifyOmegaHtml(),
   ],
+  // Prebundling the dynamically-imported Firebase entry points in dev avoids a
+  // second dependency-optimization pass (and a full page reload) on first use.
+  optimizeDeps: {
+    include: ['firebase/app', 'firebase/database'],
+  },
+  // `debugger` statements are pure dead weight in production and abort the
+  // debugger when a devtools profiler is attached.
+  esbuild: {
+    drop: ['debugger'],
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,
@@ -28,16 +63,7 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     rollupOptions: {
       output: {
-        // Long-term cacheable vendor chunks: they change far less often than app code.
-        // firebase / zxing / html2canvas are loaded through dynamic import() in
-        // src/main.js, so they are NOT part of the initial critical path.
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return;
-          if (id.includes('firebase')) return 'firebase';
-          if (id.includes('@zxing')) return 'zxing';
-          if (id.includes('html2canvas')) return 'html2canvas';
-          return 'vendor';
-        },
+        manualChunks,
       },
     },
   },

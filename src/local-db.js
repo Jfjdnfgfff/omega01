@@ -62,11 +62,14 @@ export function compareRtdbKeys(a, b) {
 //   'window' — the snapshot is only the realtime tail (sales limitToLast):
 //              cached rows older than the window cannot be judged and are
 //              kept as history.
-// A windowed sales snapshot still counts as 'full' when the cache holds no
-// more than one window of rows: there is no beyond-window history to
-// protect, and the background pager re-completes anything still missing.
-export function reconcileMode({ section, snapshotCount = 0, cachedCount = 0, windowSize = 3000 } = {}) {
-  if (section !== 'sales') return 'full';
+// A windowed snapshot still counts as 'full' when the cache holds no more
+// than one window of rows: there is no beyond-window history to protect, and
+// the background pager re-completes anything still missing.
+export function reconcileMode({ section, snapshotCount = 0, cachedCount = 0, windowSize = 3000, windowed } = {}) {
+  // `windowed` lets any section that is subscribed with limitToLast (not just
+  // sales) keep its older cached rows instead of pruning them as deletions.
+  const isWindowed = windowed !== undefined ? Boolean(windowed) : section === 'sales';
+  if (!isWindowed) return 'full';
   if (snapshotCount < windowSize) return 'full';
   if (cachedCount <= windowSize) return 'full';
   return 'window';

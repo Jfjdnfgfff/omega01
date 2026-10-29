@@ -1,5 +1,8 @@
 import { createRealtimeSections, readSectionWithLegacy } from './realtime-sections.js';
 import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABLE_SECTIONS, compareRtdbKeys, reconcileMode, idsToRemoveOnReconcile, shouldRestoreSalesHistoryComplete } from './local-db.js';
+import { createListenerRegistry } from './listener-registry.js';
+import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
+import { createTimeSliceRunner, afterNextPaint, whenIdle } from './main-thread-scheduler.js';
 
 // Safe DOM helpers to prevent null property errors
 function getElem(id) {
@@ -278,6 +281,73 @@ window.addEventListener('unhandledrejection', (event) => {
     }, 120);
   }
   window.scheduleRender = scheduleRender;
+
+  // ---------------------------------------------------------------------------
+  // Long-task budget control (Lighthouse: "Avoid long main thread tasks")
+  // ---------------------------------------------------------------------------
+  // `performFullRender()` used to rebuild every visible list inside the very
+  // same task as the KPI numbers, producing 100–300 ms tasks on mid-range
+  // phones. The list rebuilds are now queued here and executed in 6 ms slices,
+  // one yield apart, so the browser can paint between them.
+  // Set `window.OMEGA_DEFER_LIST_RENDER = false` (before boot) to fall back to
+  // the old fully synchronous behaviour for debugging.
+  const listRenderRunner = createTimeSliceRunner({ budgetMs: 6 });
+  let pendingListRenders = null;
+  let listRenderScheduled = false;
+  window.__omegaDeferredRenderPasses = 0;
+
+  window.__omegaListRenderSteps = 0;
+  function runRenderPartSafely(label, fn) {
+    try {
+      if (typeof fn === 'function') { window.__omegaListRenderSteps += 1; fn(); }
+    } catch (err) {
+      console.warn(`Render section isolated error (${label}):`, err);
+    }
+  }
+
+  // Queue the DOM-heavy parts of a render pass. Only the newest queue survives
+  // (a newer render supersedes stale list content), and the slice runner keeps
+  // passes serialized so two passes can never interleave.
+  function scheduleListRenders(parts) {
+    const list = Array.isArray(parts) ? parts.filter(part => part && typeof part[1] === 'function') : [];
+    if (!list.length) return;
+    if (window.OMEGA_DEFER_LIST_RENDER === false) {
+      list.forEach(([label, fn]) => runRenderPartSafely(label, fn));
+      return;
+    }
+    pendingListRenders = list;
+    if (listRenderScheduled) return;
+    listRenderScheduled = true;
+    afterNextPaint(() => {
+      listRenderScheduled = false;
+      const batch = pendingListRenders;
+      pendingListRenders = null;
+      if (!batch) return;
+      window.__omegaDeferredRenderPasses = (window.__omegaDeferredRenderPasses || 0) + 1;
+      listRenderRunner.run(batch.map(([label, fn]) => () => runRenderPartSafely(label, fn)));
+    });
+  }
+  window.scheduleListRenders = scheduleListRenders;
+
+  // Instrumentation: keep the last 100 tasks above 50 ms so a regression is
+  // visible in the console (`window.__omegaLongTasks`) instead of guesswork.
+  window.__omegaLongTasks = [];
+  try {
+    if (typeof PerformanceObserver === 'function') {
+      const longTaskObserver = new PerformanceObserver((entryList) => {
+        for (const entry of entryList.getEntries()) {
+          if (entry.duration < 50) continue;
+          window.__omegaLongTasks.push({
+            start: Math.round(entry.startTime),
+            duration: Math.round(entry.duration),
+            attribution: (entry.attribution && entry.attribution[0] && (entry.attribution[0].name || entry.attribution[0].containerName)) || '',
+          });
+          if (window.__omegaLongTasks.length > 100) window.__omegaLongTasks.shift();
+        }
+      });
+      longTaskObserver.observe({ type: 'longtask', buffered: true });
+    }
+  } catch (e) { /* longtask unsupported (Safari/Firefox): ignore */ }
 
   // Realtime Cursors and Lazy Loaded Section Registry
   window.firebaseCursors = window.firebaseCursors || {
@@ -758,11 +828,17 @@ window.addEventListener('unhandledrejection', (event) => {
         const k = String(it._rtdbKey ?? it.id ?? '');
         if (k && (windowOldestKey === null || compareRtdbKeys(k, windowOldestKey) < 0)) windowOldestKey = k;
       }
+      // A section subscribed with limitToLast only carries its newest window,
+      // so older cached rows must never be judged as deleted.
+      const windowSize = sectionName === 'sales'
+        ? (window.SALES_REALTIME_WINDOW || 3000)
+        : (SECTION_WINDOW_LIMITS[sectionName] || 0);
       const mode = reconcileMode({
         section: sectionName,
         snapshotCount: items.length,
         cachedCount: cachedEntries.length,
-        windowSize: window.SALES_REALTIME_WINDOW || 3000,
+        windowSize: windowSize || 3000,
+        windowed: windowSize > 0,
       });
       const removed = idsToRemoveOnReconcile({
         cachedEntries, snapshotIds, mode, windowOldestKey,
@@ -2248,8 +2324,12 @@ window.addEventListener('unhandledrejection', (event) => {
         const items = await window.lazyLoadSection(name, force);
         // Only sales readiness gates its history. A failed unrelated section
         // must not leave financial reports permanently on the bounded window.
+        // The pager walks a potentially large history; starting it in an idle
+        // slot (instead of while the first screen is still painting) keeps the
+        // startup task budget for rendering. The timeout guarantees it still
+        // runs on browsers where idle callbacks are starved.
         if (name === 'sales' && window.firebaseDB && !window.salesHistoryComplete) {
-          window.completeSalesHistorySilently();
+          whenIdle(() => window.completeSalesHistorySilently(), { timeout: 2000 });
         }
         return items;
       }));
@@ -2324,12 +2404,54 @@ window.addEventListener('unhandledrejection', (event) => {
         };
 
         let firebaseReadyDispatched = false;
+        // One owner for every realtime subscription: de-duplicates, tracks
+        // activity, and lets the page lifecycle pause/resume/dispose them
+        // (`off()` is always called, no orphan long-poll streams).
+        const firebaseListeners = createListenerRegistry();
+        window.firebaseListeners = firebaseListeners;
+
+        // Build the *bounded* query for a section. Append-only collections get
+        // `limitToLast(window)` (newest N children) instead of the whole node;
+        // small authoritative nodes (stats, privacy, packages...) stay unbounded.
+        function sectionTarget(name) {
+          const path = sectionPath(name);
+          const spec = describeSectionWindow(name, {
+            path,
+            limit: name === 'sales' ? (window.SALES_REALTIME_WINDOW || 3000) : undefined,
+          });
+          if (!spec) return ref(database, path);
+          return buildWindowQuery({
+            ref, query, orderByKey, limitToLast, limitToFirst,
+            startAfter, endBefore, startAt, endAt,
+          }, database, spec);
+        }
+        window.__buildSectionWindowQuery = sectionTarget;
+
+        // Older history for a windowed section, one page at a time.
+        // `endBefore(cursor)` + `limitToLast(pageSize)` never re-downloads the
+        // tail that is already in memory.
+        window.fetchOlderPage = async function fetchOlderPage(sectionName, { pageSize = 500, oldestKey = null } = {}) {
+          if (!window.firebaseDB) return [];
+          const spec = olderPageSpec(sectionPath(sectionName), { pageSize, oldestKey });
+          const snapshot = await get(buildWindowQuery({
+            ref, query, orderByKey, limitToLast, limitToFirst,
+            startAfter, endBefore, startAt, endAt,
+          }, database, spec));
+          if (!snapshot || !snapshot.exists()) return [];
+          const data = snapshot.val() || {};
+          return Object.entries(data).map(([key, value]) => ({ ...value, _rtdbKey: key }));
+        };
+
         realtimeSections = createRealtimeSections({
           subscribe(name, onData, onError) {
-            const target = name === 'sales'
-              ? query(ref(database, sectionPath(name)), orderByKey(), limitToLast(window.SALES_REALTIME_WINDOW))
-              : ref(database, sectionPath(name));
-            return onValue(target, snapshot => onData(snapshot.val()), onError);
+            // attach() de-duplicates by name: a second call for the same section
+            // never opens a second listener/long-poll stream.
+            firebaseListeners.attach(name, () => onValue(
+              sectionTarget(name),
+              snapshot => { firebaseListeners.touch(name); onData(snapshot.val()); },
+              onError,
+            ));
+            return () => firebaseListeners.release(name);
           },
           async readLegacy(name) {
             const path = legacyPath(name);
@@ -2353,6 +2475,38 @@ window.addEventListener('unhandledrejection', (event) => {
             updateFirebaseUIBadge('error', 'Firebase: تعذّر مزامنة البيانات', error?.message);
           },
         });
+
+        // -------------------------------------------------------------------
+        // Page lifecycle: a hidden tab must not keep 13 long-poll streams alive.
+        // `pauseAll()` calls every `off()`; `resumeAll()` re-subscribes and
+        // Firebase immediately delivers the latest snapshot from its cache.
+        // Skipped until the page has been visible once and a snapshot arrived,
+        // so a headless/background first load still receives its data.
+        // -------------------------------------------------------------------
+        window.__omegaFirebaseHasBeenVisible = false;
+        window.pauseFirebaseListeners = () => firebaseListeners.pauseAll();
+        window.resumeFirebaseListeners = () => firebaseListeners.resumeAll();
+        window.disposeFirebaseListeners = () => firebaseListeners.releaseAll();
+
+        if (!window.__omegaFirebaseLifecycleBound) {
+          window.__omegaFirebaseLifecycleBound = true;
+          const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+              window.__omegaFirebaseHasBeenVisible = true;
+              if (firebaseListeners.stats().paused > 0) firebaseListeners.resumeAll();
+              return;
+            }
+            if (!window.__omegaFirebaseHasBeenVisible) return;
+            if (!window.__cloudSnapshotSeen) return;
+            firebaseListeners.pauseAll();
+          };
+          document.addEventListener('visibilitychange', onVisibilityChange);
+          // pagehide (not unload) is the bfcache-safe teardown point.
+          window.addEventListener('pagehide', () => firebaseListeners.pauseAll());
+          window.addEventListener('pageshow', (event) => {
+            if (event.persisted) firebaseListeners.resumeAll();
+          });
+        }
 
         // Ultra-Fast Cursor-Based Pagination: Loads older historical records using orderByKey() & endBefore() without scanning/sorting in memory
         window.loadOlderHistoricalData = async function(sectionName = 'sales', limitCount = 50) {
@@ -11250,25 +11404,26 @@ window.addEventListener('unhandledrejection', (event) => {
 
         // Per-section render isolation: if ONE list fails to render, all the
         // other lists/views still update — the site never goes down entirely.
-        const safeRenderPart = (label, fn) => {
-            try { if (typeof fn === 'function') fn(); }
-            catch (err) { console.warn(`Render section isolated error (${label}):`, err); }
-        };
-        if (isModalOpen('expensesModal')) safeRenderPart('expensesModal', renderExpensesListModal);
-        if (isVisible('expensesView')) safeRenderPart('expensesView', renderExpensesListView);
+        // The list rebuilds are DOM-heavy (hundreds of rows of markup), so they
+        // are collected first and then executed in short time slices instead of
+        // one long blocking task (see scheduleListRenders).
+        const listRenderQueue = [];
+        if (isModalOpen('expensesModal')) listRenderQueue.push(['expensesModal', renderExpensesListModal]);
+        if (isVisible('expensesView')) listRenderQueue.push(['expensesView', renderExpensesListView]);
         if (isModalOpen('staffPayoutsModal')) {
             const suppliersTabContent = document.getElementById('suppliersTabContent');
             if (suppliersTabContent && !suppliersTabContent.classList.contains('hidden')) {
-                safeRenderPart('suppliersList', renderSuppliersList);
+                listRenderQueue.push(['suppliersList', renderSuppliersList]);
             } else {
-                safeRenderPart('staffPayouts', renderStaffPayouts);
+                listRenderQueue.push(['staffPayouts', renderStaffPayouts]);
             }
         }
-        if (isVisible('productsView') || isVisible('dashboardView')) safeRenderPart('productsList', renderProductsList);
-        if (isVisible('dashboardView') || isVisible('productsView')) safeRenderPart('salesList', renderSalesList);
-        if (isVisible('customersView') || isVisible('dashboardView')) safeRenderPart('customers', renderCustomers);
-        if (isVisible('caisseView') || isModalOpen('caisseModal')) safeRenderPart('caisse', renderCaisseView);
-        safeRenderPart('mockDataUI', updateMockDataUIState);
+        if (isVisible('productsView') || isVisible('dashboardView')) listRenderQueue.push(['productsList', renderProductsList]);
+        if (isVisible('dashboardView') || isVisible('productsView')) listRenderQueue.push(['salesList', renderSalesList]);
+        if (isVisible('customersView') || isVisible('dashboardView')) listRenderQueue.push(['customers', renderCustomers]);
+        if (isVisible('caisseView') || isModalOpen('caisseModal')) listRenderQueue.push(['caisse', renderCaisseView]);
+        listRenderQueue.push(['mockDataUI', updateMockDataUIState]);
+        scheduleListRenders(listRenderQueue);
     }
     function render() {
         if (window.renderScheduled) return;
@@ -13489,7 +13644,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, openFemaleCoachModal, renderFemaleCoachModal, submitFemaleCoachPayout, payFemaleCoachShare, printFemaleCoachReport].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }

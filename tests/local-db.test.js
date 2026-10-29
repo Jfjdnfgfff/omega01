@@ -358,3 +358,12 @@ test('end-to-end over the fake IndexedDB: persist in one session, hydrate in the
   const data = await sessionB.loadAll();
   assert.deepEqual(data.sections.get('customers'), [{ id: 'c1', name: 'أحمد' }]);
 });
+
+test('reconcileMode: any section subscribed with limitToLast protects beyond-window cache rows', () => {
+  // activityLogs is now windowed too (SECTION_WINDOW_LIMITS.activityLogs), so a
+  // 400-row snapshot must not delete the 900 older cached log rows.
+  assert.equal(reconcileMode({ section: 'activityLogs', snapshotCount: 400, cachedCount: 1200, windowSize: 400, windowed: true }), 'window');
+  assert.equal(reconcileMode({ section: 'activityLogs', snapshotCount: 400, cachedCount: 200, windowSize: 400, windowed: true }), 'full');
+  // Explicitly unwindowed sections keep the strict full-node rule.
+  assert.equal(reconcileMode({ section: 'customers', snapshotCount: 10, cachedCount: 900, windowSize: 400, windowed: false }), 'full');
+});
