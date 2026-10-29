@@ -1,5 +1,7 @@
 # متابعة ملاحظات PageSpeed في الصور
 
+> جولة 29 أكتوبر 2026 (نوافذ استعلام Firebase، سجل مستمعين، تقطيع المهام، تقسيم الحزم): [performance-lighthouse-2026-10-29.md](./performance-lighthouse-2026-10-29.md).
+
 > جولة تسريع لاحقة (فهرس الصندوق اليومي، مفاتيح التواريخ النصية، تصغير HTML): [performance-speed-2026-10-23.md](./performance-speed-2026-10-23.md).
 
 الفرع: `arena/6f87d0ab-omega01` — 22 أكتوبر 2026.
