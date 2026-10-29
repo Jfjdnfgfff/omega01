@@ -3,6 +3,7 @@ import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABL
 import { createListenerRegistry } from './listener-registry.js';
 import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
 import { createTimeSliceRunner, afterNextPaint, whenIdle } from './main-thread-scheduler.js';
+import { collectFemaleSessionIncome, sessionActivityLabel } from './female-income.js';
 
 // Safe DOM helpers to prevent null property errors
 function getElem(id) {
@@ -3607,7 +3608,9 @@ window.addEventListener('unhandledrejection', (event) => {
             const modal = document.getElementById('femaleCoachModal');
             if (modal) modal.classList.add('active');
         }
-        renderFemaleCoachModal();
+        // Guarded call: this handler is also reachable from inline HTML and from
+        // environments where the module scope is not the global object.
+        if (typeof window.renderFemaleCoachModal === 'function') window.renderFemaleCoachModal();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
     };
     window.openFemaleCommissionModal = window.openFemaleCoachModal;
@@ -3660,6 +3663,7 @@ window.addEventListener('unhandledrejection', (event) => {
         let totalFullPrice = 0;
         let totalPaidRevenue = 0;
         let totalCoachCommission = 0;
+        let subscriptionPaidRevenue = 0;
 
         femaleSubs.forEach(c => {
             const pkg = getPackageById(c.packageId);
@@ -3670,8 +3674,31 @@ window.addEventListener('unhandledrejection', (event) => {
 
             totalFullPrice += fullPrice;
             totalPaidRevenue += paidAmount;
+            subscriptionPaidRevenue += paidAmount;
             totalCoachCommission += comm;
         });
+
+        // Quick sessions for women (اشتراك بالحصة) are income of the female
+        // section too: they are paid in cash when recorded, so they enter
+        // "المداخيل المقبوضة (الإناث)" and the coach's percentage exactly like
+        // a subscription. The money is attributed per female client as a share
+        // of the session total (see src/female-income.js).
+        const femaleSessions = collectFemaleSessionIncome(appState.quickSessions, {
+            period,
+            paymentFilter,
+            search: searchQuery,
+            todayKey: getLocalDateString(new Date()),
+            dateKeyOf: date => getLocalDateString(date),
+        });
+        const sessionRevenue = femaleSessions.femaleRevenue;
+        // Per-row rounding stays identical to the subscription rows, so the
+        // table always adds up to the card (no dinar appears or disappears).
+        let sessionCommission = 0;
+        femaleSessions.rows.forEach(row => { row.commission = Math.round(row.femaleRevenue * (rate / 100)); sessionCommission += row.commission; });
+        totalPaidRevenue += sessionRevenue;
+        totalFullPrice += sessionRevenue;
+        totalCoachCommission += sessionCommission;
+        const femaleClientCount = femaleSubs.length + femaleSessions.femaleClients;
 
         // Disbursed Payouts to Female Coach
         const femalePayouts = appState.staffPayouts.filter(p => {
@@ -3697,21 +3724,21 @@ window.addEventListener('unhandledrejection', (event) => {
 
         // Render Count Badge
         const countBadge = document.getElementById('femaleCommSubCountBadge');
-        if (countBadge) countBadge.textContent = femaleSubs.length;
+        if (countBadge) countBadge.textContent = femaleClientCount;
 
         // Render Metric Cards
         const cardsContainer = document.getElementById('femaleCommStatsCards');
         if (cardsContainer) {
             cardsContainer.innerHTML = `
                 <div class="bg-white border border-slate-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
-                    <span class="text-slate-500 text-[10px] sm:text-xs font-bold block">عدد المشتركات الإناث</span>
-                    <span class="text-lg sm:text-xl font-black text-purple-700 block">${femaleSubs.length} <span class="text-xs font-normal text-slate-500">مشتركة</span></span>
-                    <span class="text-[10px] text-slate-400 font-medium block">في هذه الفترة المختارة</span>
+                    <span class="text-slate-500 text-[10px] sm:text-xs font-bold block">عدد المشتركات والزبونات (إناث)</span>
+                    <span class="text-lg sm:text-xl font-black text-purple-700 block">${femaleClientCount} <span class="text-xs font-normal text-slate-500">أنثى</span></span>
+                    <span class="text-[10px] text-slate-400 font-medium block">${femaleSubs.length} مشتركة · ${femaleSessions.femaleClients} زبونة حصص (${femaleSessions.sessionCount} حصة)</span>
                 </div>
                 <div class="bg-white border border-slate-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
                     <span class="text-slate-500 text-[10px] sm:text-xs font-bold block">المداخيل المقبوضة (الإناث)</span>
                     <span class="text-lg sm:text-xl font-black text-slate-800 block">${totalPaidRevenue.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span></span>
-                    <span class="text-[10px] text-slate-400 font-medium block">إجمالي الاشتراكات: ${totalFullPrice.toLocaleString()} دج</span>
+                    <span class="text-[10px] text-slate-400 font-medium block">اشتراكات: ${subscriptionPaidRevenue.toLocaleString()} دج · حصص: ${sessionRevenue.toLocaleString()} دج</span>
                 </div>
                 <div class="bg-purple-50 border border-purple-200 p-3.5 rounded-2xl shadow-2xs space-y-1">
                     <span class="text-purple-900 text-[10px] sm:text-xs font-bold block">مستحقات المدربة (${rate}%)</span>
@@ -3733,14 +3760,14 @@ window.addEventListener('unhandledrejection', (event) => {
             payoutInput.dataset.autoFilled = 'true';
         }
 
-        // Render Table Rows
+        // Render Table Rows (female subscriptions + female quick-session clients)
         const tbody = document.getElementById('femaleCommSubscribersTable');
         if (tbody) {
-            if (femaleSubs.length === 0) {
+            if (femaleSubs.length === 0 && femaleSessions.rows.length === 0) {
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="6" class="p-8 text-center text-slate-400 font-bold text-xs bg-slate-50/50">
-                            لا توجد مشتركات إناث مسجلة في هذه الفترة أو تطابق شروط البحث
+                            لا توجد مشتركات إناث أو حصص إناث مسجلة في هذه الفترة أو تطابق شروط البحث
                         </td>
                     </tr>
                 `;
@@ -3775,7 +3802,29 @@ window.addEventListener('unhandledrejection', (event) => {
                             <td class="p-3 text-slate-500 text-[11px] font-mono">${dateStr}</td>
                         </tr>
                     `;
-                }).join('');
+                }).join('') + femaleSessions.rows.map(row => `
+                        <tr class="hover:bg-purple-50/30 transition-colors bg-purple-50/20">
+                            <td class="p-3 font-bold text-slate-900 flex items-center gap-2">
+                                <div class="w-7 h-7 rounded-full bg-pink-100 text-pink-700 font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                                    ح
+                                </div>
+                                <span>زبونات حصص — ${row.femaleClients} أنثى</span>
+                            </td>
+                            <td class="p-3 font-semibold text-slate-700">
+                                <span class="inline-block bg-pink-50 text-pink-700 border border-pink-200 px-2 py-0.5 rounded-md font-bold text-[10px]">اشتراك بالحصة</span>
+                                <span class="text-slate-500 text-[11px] font-medium">${safeStr(sessionActivityLabel(row.activities))}</span>
+                            </td>
+                            <td class="p-3 font-bold text-slate-800">
+                                ${row.femaleRevenue.toLocaleString()} دج
+                                <span class="block text-[10px] text-slate-400 font-medium">من أصل حصة ${row.totalRevenue.toLocaleString()} دج</span>
+                            </td>
+                            <td class="p-3">
+                                <span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md font-bold text-[10px]">مسدد نقداً (${row.femaleRevenue.toLocaleString()} دج)</span>
+                            </td>
+                            <td class="p-3 font-black text-purple-700 bg-purple-50/50">${row.commission.toLocaleString()} دج</td>
+                            <td class="p-3 text-slate-500 text-[11px] font-mono">${safeStr(row.dateKey || 'غير محدد')}</td>
+                        </tr>
+                    `).join('');
             }
         }
 
@@ -3893,12 +3942,12 @@ window.addEventListener('unhandledrejection', (event) => {
             </head>
             <body>
                 <h1>تقرير مستحقات مدربة الإناث (33%)</h1>
-                <div class="sub">الفترة: ${periodText} | عدد المشتركات: ${subCount} | تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-DZ')}</div>
-                <h3>قائمة المشتركات وحساب النسبة:</h3>
+                <div class="sub">الفترة: ${periodText} | عدد الإناث (مشتركات + زبونات حصص): ${subCount} | تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-DZ')}</div>
+                <h3>قائمة المشتركات والزبونات وحساب النسبة:</h3>
                 <table>
                     <thead>
                         <tr>
-                            <th>المشتركة</th>
+                            <th>المشتركة / الزبونة</th>
                             <th>الباقة / نوع الاشتراك</th>
                             <th>سعر الاشتراك</th>
                             <th>المبلغ المدفوع</th>
