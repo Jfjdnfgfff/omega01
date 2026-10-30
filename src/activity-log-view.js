@@ -1,5 +1,23 @@
+import { createActivityLogIndexer, queryActivityLogPage } from './activity-log-index.js';
+
+// Cards are heavy markup, so a page of 100 keeps a 500-row log responsive on a
+// phone while search-as-you-type re-renders only one page. The rest is one tap
+// away ("عرض المزيد") and needs no extra work: the index is already built.
+const ACTIVITY_LOG_PAGE_SIZE = 100;
+
 // Activity logging remains eager; only its viewer and controls are deferred.
 export function createActivityLogView({ getState, ensureSeedActivityLogs, escapeHTML, promptWithPassword, saveState, showSuccessToast }) {
+    // One index per view: cached across renders, rebuilt only on data change.
+    const logIndexer = createActivityLogIndexer();
+    let renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
+    let lastFilterKey = null;
+
+    function showMoreActivityLogs() {
+        renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+        renderActivityLogModal();
+    }
+    window.showMoreActivityLogs = showMoreActivityLogs;
+
     async function openActivityLogModal() {
         ensureSeedActivityLogs();
         const modal = document.getElementById('activityLogModal');
@@ -167,32 +185,32 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
         const countElem = document.getElementById('activityLogTotalCount');
         if (!container) return;
 
-        let logs = Array.isArray(getState().activityLogs) ? [...getState().activityLogs] : [];
+        const state = getState() || {};
+        // O(1) when nothing changed: no copy, no lower-casing, no re-sort.
+        const logIndex = logIndexer.get(state.activityLogs);
 
         const searchInput = document.getElementById('activityLogSearchInput');
-        const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
-        if (q) {
-            logs = logs.filter(l => {
-                if (!l) return false;
-                const t = (l.title || '').toLowerCase();
-                const d = (l.details || '').toLowerCase();
-                return t.includes(q) || d.includes(q);
-            });
-        }
+        const q = searchInput ? searchInput.value : '';
 
         const catFilter = document.getElementById('activityLogCategoryFilter');
         const cat = catFilter ? catFilter.value : 'all';
-        if (cat !== 'all') {
-            logs = logs.filter(l => l && l.type === cat);
+
+        // A different search/filter means a fresh first page; "عرض المزيد"
+        // only ever grows the page for the filter the user is looking at.
+        const filterKey = `${cat}\u0000${q}`;
+        if (filterKey !== lastFilterKey) {
+            lastFilterKey = filterKey;
+            renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
         }
 
-        logs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+        const page = queryActivityLogPage(logIndex, { query: q, type: cat, limit: renderedPageLimit });
+        const logs = page.items;
 
         if (countElem) {
-            countElem.textContent = `${logs.length} عملية`;
+            countElem.textContent = `${page.matched} عملية`;
         }
 
-        if (logs.length === 0) {
+        if (page.matched === 0) {
             container.innerHTML = `
                 <div class="text-center py-12 bg-slate-50 border border-slate-100 rounded-2xl">
                     <div class="w-12 h-12 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center mx-auto mb-3">
@@ -261,6 +279,15 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             </div>
             `;
         }).join('');
+
+        if (page.hasMore) {
+            const remaining = page.matched - logs.length;
+            container.innerHTML += `
+                <button type="button" onclick="window.showMoreActivityLogs && window.showMoreActivityLogs()" class="w-full py-2.5 px-3 rounded-2xl bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 text-xs font-black transition-colors shadow-2xs cursor-pointer">
+                    عرض المزيد (${remaining.toLocaleString()} عملية متبقية)
+                </button>
+            `;
+        }
     }
     window.renderActivityLogModal = renderActivityLogModal;
 
@@ -296,5 +323,5 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
     window.clearAllActivityLogs = clearAllActivityLogs;
 
 
-return { openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail };
+return { openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail, showMoreActivityLogs };
 }
