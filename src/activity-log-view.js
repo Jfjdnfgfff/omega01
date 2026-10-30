@@ -1,4 +1,12 @@
 import { createActivityLogIndexer, queryActivityLogPage, oldestActivityLogKey, advanceActivityLogCursor } from './activity-log-index.js';
+import {
+    activityLogCardFingerprint,
+    createActivityLogCardCache,
+    createActivityLogQueryCache,
+    buildActivityLogCursorMeta,
+    isActivityLogCompletionValid,
+    ACTIVITY_LOG_CURSOR_KEY,
+} from './activity-log-cache.js';
 
 // Cards are heavy markup, so a page of 100 keeps a 500-row log responsive on a
 // phone while search-as-you-type re-renders only one page. The rest is one tap
@@ -19,11 +27,16 @@ const ACTIVITY_LOG_MAX_RENDERED = 1000;
 export function createActivityLogView({ getState, ensureSeedActivityLogs, escapeHTML, promptWithPassword, saveState, showSuccessToast }) {
     // One index per view: cached across renders, rebuilt only on data change.
     const logIndexer = createActivityLogIndexer();
+    // Built cards and filtered pages, each invalidated by its own change rule.
+    const cardCache = createActivityLogCardCache();
+    const queryCache = createActivityLogQueryCache();
     let renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
     let lastFilterKey = null;
     let loadingOlder = false;
     let initialLoading = false;
     let cloudComplete = false;
+    // Last HTML written to #activityLogList, so identical renders are no-ops.
+    let lastRenderedHtml = null;
 
     function readFilters() {
         const searchInput = document.getElementById('activityLogSearchInput');
@@ -54,6 +67,47 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
         cursors.activityLogs = next;
     }
 
+    let cursorRestored = false;
+
+    function activityLogsInState() {
+        const state = getState() || {};
+        return Array.isArray(state.activityLogs) ? state.activityLogs : [];
+    }
+
+    // "Everything older is already loaded" is the one fact the rows cannot
+    // tell us, so it is persisted through the local IndexedDB cache.
+    function persistCursorState() {
+        try {
+            const cache = window.localCache;
+            if (!cache || typeof cache.setKV !== 'function') return;
+            const cursor = (window.firebaseCursors && window.firebaseCursors.activityLogs) || null;
+            cache.setKV(ACTIVITY_LOG_CURSOR_KEY, buildActivityLogCursorMeta({ cursor, items: activityLogsInState() }));
+        } catch (err) {
+            console.warn('activity log cursor cache failed:', err);
+        }
+    }
+
+    async function restoreCursorState() {
+        if (cursorRestored || cloudComplete) return;
+        try {
+            const cache = window.localCache;
+            if (!cache || typeof cache.getKV !== 'function') { cursorRestored = true; return; }
+            const meta = await cache.getKV(ACTIVITY_LOG_CURSOR_KEY);
+            if (!meta || typeof meta !== 'object' || meta.hasMore !== false) {
+                cursorRestored = true;
+                return;
+            }
+            // Only believed while the oldest record it points at is loaded.
+            if (!isActivityLogCompletionValid(meta, activityLogsInState())) return;
+            cloudComplete = true;
+            cursorRestored = true;
+            setCursor({ oldestKey: meta.oldestKey, hasMore: false });
+        } catch (err) {
+            console.warn('activity log cursor restore failed:', err);
+            cursorRestored = true;
+        }
+    }
+
     // Fetch exactly one page of rows older than the oldest one in memory and
     // merge it into appState. Returns how many rows arrived.
     async function fetchOlderActivityLogs(pageSize = ACTIVITY_LOG_CLOUD_PAGE) {
@@ -68,6 +122,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             // No cloud key to page from: nothing older can be addressed.
             setCursor({ oldestKey: null, hasMore: false });
             cloudComplete = true;
+            persistCursorState();
             return 0;
         }
         let items = [];
@@ -81,6 +136,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
         const nextCursor = advanceActivityLogCursor({ items: fetched, pageSize, cursor });
         setCursor(nextCursor);
         if (nextCursor.hasMore === false) cloudComplete = true;
+        persistCursorState();
         if (!fetched.length) return 0;
         // Merge locally instead of going through applyFirebaseSectionUpdate():
         // older history is log-only data, so a full application render per page
@@ -163,6 +219,14 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
     }
     window.loadFullActivityLog = loadFullActivityLog;
 
+    // Diagnostics (same `window.__omega*` style as the render instrument):
+    // lets a browser check assert that renders really are served from cache.
+    window.__activityLogCacheStats = () => ({
+        cards: cardCache.stats(),
+        queries: queryCache.stats(),
+        cloudComplete,
+    });
+
     function isModalOpen() {
         const modal = document.getElementById('activityLogModal');
         return Boolean(modal && modal.classList.contains('active'));
@@ -213,6 +277,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             } finally {
                 if (timer) clearTimeout(timer);
                 initialLoading = false;
+                await restoreCursorState();
                 renderActivityLogModal();
                 if (timedOut) console.info('activityLogs: first snapshot is slow, showing cached rows.');
             }
@@ -389,7 +454,14 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
         }
 
-        const page = queryActivityLogPage(logIndex, { query: q, type: cat, limit: renderedPageLimit });
+        // Cached per (data snapshot, filter, page size): re-opening the log or
+        // retyping the same search never rescans the collection.
+        const dataSignature = logIndexer.stats().signature;
+        const page = queryCache.get(
+            dataSignature,
+            `${cat}\u0000${q}\u0000${renderedPageLimit}`,
+            () => queryActivityLogPage(logIndex, { query: q, type: cat, limit: renderedPageLimit }),
+        );
         const logs = page.items;
 
         if (countElem) {
@@ -429,7 +501,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             system: { label: 'النظام', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' }
         };
 
-        container.innerHTML = logs.map(item => {
+        const buildCard = item => {
             const safeId = escapeHTML(item.id || '');
             const cfg = typeConfig[item.type] || typeConfig.system;
             const dateObj = new Date(item.timestamp || Date.now());
@@ -473,9 +545,21 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
                 </div>
             </div>
             `;
-        }).join('');
+        };
 
-        container.innerHTML += renderListFooter(page);
+        // Cards are remembered by record fingerprint: an edited row rebuilds
+        // its own card, every untouched row is reused as-is.
+        const html = logs.map(item =>
+            cardCache.get(item.id, activityLogCardFingerprint(item), () => buildCard(item))
+        ).join('') + renderListFooter(page);
+
+        // Writing the same list back into the DOM costs more than everything
+        // else in this function (and would reset expanded details), so an
+        // unchanged result is skipped entirely.
+        if (html !== lastRenderedHtml) {
+            container.innerHTML = html;
+            lastRenderedHtml = html;
+        }
     }
 
     function footerStatusHtml(text, spinning = false) {
@@ -546,6 +630,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             // The cloud node was removed too: start paging from scratch.
             setCursor({ oldestKey: null, hasMore: true });
             cloudComplete = false;
+            persistCursorState();
             saveState();
             showSuccessToast('تم إفراغ سجل العمليات بالكامل بنجاح');
             renderActivityLogModal();

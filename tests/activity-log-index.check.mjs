@@ -213,6 +213,44 @@ await check('once the whole history is loaded the footer says so and offers noth
     assert.equal(window.firebaseCursors.activityLogs.hasMore, false);
 });
 
+await check('the finished history is remembered in the local cache', async () => {
+    assert.ok(window.localCache && typeof window.localCache.getKV === 'function', 'local cache is available');
+    const meta = await window.localCache.getKV('activityLogCursor');
+    assert.ok(meta && typeof meta === 'object', 'paging state must be persisted');
+    assert.equal(meta.hasMore, false);
+    assert.equal(meta.oldestKey, 'old_1');
+});
+
+await check('renders are served from the card/query caches until a record changes', async () => {
+    const before = window.__activityLogCacheStats();
+    await window.renderActivityLogModal();
+    await window.renderActivityLogModal();
+    const after = window.__activityLogCacheStats();
+    assert.ok(after.queries.hits > before.queries.hits, 'repeated renders must reuse the cached page');
+    assert.ok(after.cards.hits > before.cards.hits, 'unchanged cards must be reused');
+
+    // In-place edit: the collection signature does not change, but the card
+    // fingerprint does — exactly the change the cache has to notice.
+    const target = window.appState.activityLogs.find(l => l.id === 'act_1');
+    target.title = 'سجل معدّل بعد الكاش';
+    await window.renderActivityLogModal();
+    assert.match($('activityLogList').innerHTML, /سجل معدّل بعد الكاش/);
+    assert.ok(window.__activityLogCacheStats().cards.stale >= 1, 'the edited card must be rebuilt');
+});
+
+await check('an unchanged render never rewrites the list DOM', async () => {
+    $('activityLogSearchInput').value = '';
+    $('activityLogCategoryFilter').value = 'all';
+    await window.renderActivityLogModal();
+    const list = $('activityLogList');
+    const firstCard = list.firstElementChild;
+    assert.ok(firstCard, 'there are cards to compare');
+    await window.renderActivityLogModal();
+    await window.renderActivityLogModal();
+    assert.equal(list.firstElementChild, firstCard,
+        'identical HTML must leave the existing nodes (and expanded details) untouched');
+});
+
 await check('opening the log shows a loading note, then refreshes itself when the snapshot lands', async () => {
     // Pretend Firebase is configured but its first snapshot is not in yet.
     window.firebaseDB = window.firebaseDB || {};
