@@ -156,6 +156,123 @@ await check('a new row prepended by logActivity() shows up first', async () => {
         'the freshly logged row must be the first card');
 });
 
+// ---------------------------------------------------------------------------
+// Cloud paging: the realtime listener only carries the newest window, so the
+// log must be able to pull older rows one page at a time.
+// ---------------------------------------------------------------------------
+window.appState.activityLogs = Array.from({ length: 20 }, (_, i) => ({
+    id: `act_${i}`,
+    _rtdbKey: `act_${i}`,
+    timestamp: new Date(Date.UTC(2026, 9, 1, 8, 0, 0) - i * 60_000).toISOString(),
+    type: 'system',
+    title: `سجل ${i}`,
+    details: '',
+    dateStr: '2026-10-01'
+}));
+window.firebaseCursors = window.firebaseCursors || {};
+window.firebaseCursors.activityLogs = { oldestKey: null, hasMore: true };
+
+const fetchCalls = [];
+const olderPage = [
+    { id: 'old_1', _rtdbKey: 'old_1', timestamp: new Date(Date.UTC(2026, 8, 30)).toISOString(), type: 'system', title: 'سجل قديم 1', details: '' },
+    { id: 'old_2', _rtdbKey: 'old_2', timestamp: new Date(Date.UTC(2026, 8, 29)).toISOString(), type: 'system', title: 'سجل قديم 2', details: '' },
+    { id: 'old_3', _rtdbKey: 'old_3', timestamp: new Date(Date.UTC(2026, 8, 28)).toISOString(), type: 'system', title: 'سجل قديم 3', details: '' },
+];
+let olderPagesLeft = [olderPage];
+window.fetchOlderPage = async (section, options) => {
+    fetchCalls.push({ section, options });
+    return olderPagesLeft.shift() || [];
+};
+
+await check('the log offers a cloud page when the in-memory window is exhausted', async () => {
+    $('activityLogSearchInput').value = '';
+    $('activityLogCategoryFilter').value = 'all';
+    await window.renderActivityLogModal();
+    const html = $('activityLogList').innerHTML;
+    assert.equal(cards(), 20);
+    assert.match(html, /تحميل المزيد من السجل/);
+    assert.match(html, /تحميل كامل السجل/);
+    assert.doesNotMatch(html, /عرض المزيد \(/);
+});
+
+await check('"تحميل كامل السجل" fetches only the next older page and then stops', async () => {
+    await window.loadFullActivityLog();
+    assert.equal(fetchCalls.length, 1, 'a short page must end the paging loop');
+    assert.equal(fetchCalls[0].section, 'activityLogs');
+    assert.equal(fetchCalls[0].options.pageSize, 100);
+    assert.equal(fetchCalls[0].options.oldestKey, 'act_0', 'cursor must be the oldest key in memory');
+    assert.equal($('activityLogTotalCount').textContent, '23 عملية');
+    assert.equal(cards(), 23, 'the older rows are merged into the visible list');
+    assert.match($('activityLogList').innerHTML, /سجل قديم 3/);
+});
+
+await check('once the whole history is loaded the footer says so and offers nothing else', async () => {
+    const html = $('activityLogList').innerHTML;
+    assert.match(html, /تم تحميل كل السجل/);
+    assert.doesNotMatch(html, /تحميل المزيد من السجل/);
+    assert.equal(window.firebaseCursors.activityLogs.hasMore, false);
+});
+
+await check('the finished history is remembered in the local cache', async () => {
+    assert.ok(window.localCache && typeof window.localCache.getKV === 'function', 'local cache is available');
+    const meta = await window.localCache.getKV('activityLogCursor');
+    assert.ok(meta && typeof meta === 'object', 'paging state must be persisted');
+    assert.equal(meta.hasMore, false);
+    assert.equal(meta.oldestKey, 'old_1');
+});
+
+await check('renders are served from the card/query caches until a record changes', async () => {
+    const before = window.__activityLogCacheStats();
+    await window.renderActivityLogModal();
+    await window.renderActivityLogModal();
+    const after = window.__activityLogCacheStats();
+    assert.ok(after.queries.hits > before.queries.hits, 'repeated renders must reuse the cached page');
+    assert.ok(after.cards.hits > before.cards.hits, 'unchanged cards must be reused');
+
+    // In-place edit: the collection signature does not change, but the card
+    // fingerprint does — exactly the change the cache has to notice.
+    const target = window.appState.activityLogs.find(l => l.id === 'act_1');
+    target.title = 'سجل معدّل بعد الكاش';
+    await window.renderActivityLogModal();
+    assert.match($('activityLogList').innerHTML, /سجل معدّل بعد الكاش/);
+    assert.ok(window.__activityLogCacheStats().cards.stale >= 1, 'the edited card must be rebuilt');
+});
+
+await check('an unchanged render never rewrites the list DOM', async () => {
+    $('activityLogSearchInput').value = '';
+    $('activityLogCategoryFilter').value = 'all';
+    await window.renderActivityLogModal();
+    const list = $('activityLogList');
+    const firstCard = list.firstElementChild;
+    assert.ok(firstCard, 'there are cards to compare');
+    await window.renderActivityLogModal();
+    await window.renderActivityLogModal();
+    assert.equal(list.firstElementChild, firstCard,
+        'identical HTML must leave the existing nodes (and expanded details) untouched');
+});
+
+await check('opening the log shows a loading note, then refreshes itself when the snapshot lands', async () => {
+    // Pretend Firebase is configured but its first snapshot is not in yet.
+    window.firebaseDB = window.firebaseDB || {};
+    window.firebaseLoadedSections = window.firebaseLoadedSections || {};
+    delete window.firebaseLoadedSections.activityLogs;
+    window.lazyLoadSection = async () => [];
+
+    const opening = window.openActivityLogModal();
+    assert.match($('activityLogList').innerHTML, /جاري تحميل السجل/,
+        'the cached rows must be labelled as still loading, not presented as the whole log');
+    await opening;
+    assert.doesNotMatch($('activityLogList').innerHTML, /جاري تحميل السجل/);
+
+    const before = cards();
+    window.applyFirebaseSectionUpdate('activityLogs', [{
+        id: 'act_live', _rtdbKey: 'act_live', timestamp: new Date().toISOString(),
+        type: 'system', title: 'سجل وصل من السحابة', details: ''
+    }], 'test');
+    assert.equal(cards(), before + 1, 'an open log must show rows that arrive without a click');
+    assert.match($('activityLogList').innerHTML, /سجل وصل من السحابة/);
+});
+
 await check('an empty log shows the empty state, not a broken index', async () => {
     window.appState.activityLogs = [];
     await window.renderActivityLogModal();

@@ -1,33 +1,288 @@
-import { createActivityLogIndexer, queryActivityLogPage } from './activity-log-index.js';
+import { createActivityLogIndexer, queryActivityLogPage, oldestActivityLogKey, advanceActivityLogCursor } from './activity-log-index.js';
+import {
+    activityLogCardFingerprint,
+    createActivityLogCardCache,
+    createActivityLogQueryCache,
+    buildActivityLogCursorMeta,
+    isActivityLogCompletionValid,
+    ACTIVITY_LOG_CURSOR_KEY,
+} from './activity-log-cache.js';
 
 // Cards are heavy markup, so a page of 100 keeps a 500-row log responsive on a
 // phone while search-as-you-type re-renders only one page. The rest is one tap
 // away ("عرض المزيد") and needs no extra work: the index is already built.
 const ACTIVITY_LOG_PAGE_SIZE = 100;
 
+// The realtime listener only subscribes to the newest window
+// (SECTION_WINDOW_LIMITS.activityLogs), so anything older has to be paged in
+// with endBefore(oldestKey). One page at a time is what keeps "المزيد" cheap:
+// it fetches 100 older rows, never the whole node again.
+const ACTIVITY_LOG_CLOUD_PAGE = 100;
+
+// DOM guard for "تحميل كامل السجل": past this many rendered cards the rest is
+// loaded into the index (searchable) but revealed page by page.
+const ACTIVITY_LOG_MAX_RENDERED = 1000;
+
 // Activity logging remains eager; only its viewer and controls are deferred.
 export function createActivityLogView({ getState, ensureSeedActivityLogs, escapeHTML, promptWithPassword, saveState, showSuccessToast }) {
     // One index per view: cached across renders, rebuilt only on data change.
     const logIndexer = createActivityLogIndexer();
+    // Built cards and filtered pages, each invalidated by its own change rule.
+    const cardCache = createActivityLogCardCache();
+    const queryCache = createActivityLogQueryCache();
     let renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
     let lastFilterKey = null;
+    let loadingOlder = false;
+    let initialLoading = false;
+    let cloudComplete = false;
+    // Last HTML written to #activityLogList, so identical renders are no-ops.
+    let lastRenderedHtml = null;
 
-    function showMoreActivityLogs() {
-        renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+    function readFilters() {
+        const searchInput = document.getElementById('activityLogSearchInput');
+        const catFilter = document.getElementById('activityLogCategoryFilter');
+        return {
+            query: searchInput ? searchInput.value : '',
+            type: catFilter ? catFilter.value : 'all',
+        };
+    }
+
+    // True while the first cloud snapshot for the section is still on its way:
+    // the few rows from the local cache must not look like the whole log.
+    function isCloudPending() {
+        if (!window.firebaseDB) return false;
+        const loaded = window.firebaseLoadedSections && window.firebaseLoadedSections.activityLogs;
+        return !loaded;
+    }
+
+    function cloudHasMore() {
+        if (cloudComplete) return false;
+        if (typeof window.fetchOlderPage !== 'function') return false;
+        const cursor = window.firebaseCursors && window.firebaseCursors.activityLogs;
+        return !(cursor && cursor.hasMore === false);
+    }
+
+    function setCursor(next) {
+        const cursors = window.firebaseCursors || (window.firebaseCursors = {});
+        cursors.activityLogs = next;
+    }
+
+    let cursorRestored = false;
+
+    function activityLogsInState() {
+        const state = getState() || {};
+        return Array.isArray(state.activityLogs) ? state.activityLogs : [];
+    }
+
+    // "Everything older is already loaded" is the one fact the rows cannot
+    // tell us, so it is persisted through the local IndexedDB cache.
+    function persistCursorState() {
+        try {
+            const cache = window.localCache;
+            if (!cache || typeof cache.setKV !== 'function') return;
+            const cursor = (window.firebaseCursors && window.firebaseCursors.activityLogs) || null;
+            cache.setKV(ACTIVITY_LOG_CURSOR_KEY, buildActivityLogCursorMeta({ cursor, items: activityLogsInState() }));
+        } catch (err) {
+            console.warn('activity log cursor cache failed:', err);
+        }
+    }
+
+    async function restoreCursorState() {
+        if (cursorRestored || cloudComplete) return;
+        try {
+            const cache = window.localCache;
+            if (!cache || typeof cache.getKV !== 'function') { cursorRestored = true; return; }
+            const meta = await cache.getKV(ACTIVITY_LOG_CURSOR_KEY);
+            if (!meta || typeof meta !== 'object' || meta.hasMore !== false) {
+                cursorRestored = true;
+                return;
+            }
+            // Only believed while the oldest record it points at is loaded.
+            if (!isActivityLogCompletionValid(meta, activityLogsInState())) return;
+            cloudComplete = true;
+            cursorRestored = true;
+            setCursor({ oldestKey: meta.oldestKey, hasMore: false });
+        } catch (err) {
+            console.warn('activity log cursor restore failed:', err);
+            cursorRestored = true;
+        }
+    }
+
+    // Fetch exactly one page of rows older than the oldest one in memory and
+    // merge it into appState. Returns how many rows arrived.
+    async function fetchOlderActivityLogs(pageSize = ACTIVITY_LOG_CLOUD_PAGE) {
+        if (typeof window.fetchOlderPage !== 'function') { cloudComplete = true; return 0; }
+        const cursors = window.firebaseCursors || (window.firebaseCursors = {});
+        const cursor = cursors.activityLogs || { oldestKey: null, hasMore: true };
+        if (cursor.hasMore === false) { cloudComplete = true; return 0; }
+        const state = getState() || {};
+        const list = Array.isArray(state.activityLogs) ? state.activityLogs : [];
+        const oldestKey = cursor.oldestKey || oldestActivityLogKey(list);
+        if (!oldestKey) {
+            // No cloud key to page from: nothing older can be addressed.
+            setCursor({ oldestKey: null, hasMore: false });
+            cloudComplete = true;
+            persistCursorState();
+            return 0;
+        }
+        let items = [];
+        try {
+            items = await window.fetchOlderPage('activityLogs', { pageSize, oldestKey });
+        } catch (err) {
+            console.warn('activityLogs older page failed:', err);
+            return 0;
+        }
+        const fetched = Array.isArray(items) ? items : [];
+        const nextCursor = advanceActivityLogCursor({ items: fetched, pageSize, cursor });
+        setCursor(nextCursor);
+        if (nextCursor.hasMore === false) cloudComplete = true;
+        persistCursorState();
+        if (!fetched.length) return 0;
+        // Merge locally instead of going through applyFirebaseSectionUpdate():
+        // older history is log-only data, so a full application render per page
+        // (which that funnel triggers) would make "تحميل كامل السجل" crawl.
+        const seen = new Set();
+        for (const item of list) {
+            if (!item) continue;
+            const key = String(item.id ?? item._rtdbKey ?? '');
+            if (key) seen.add(key);
+        }
+        const merged = list.slice();
+        let added = 0;
+        for (const item of fetched) {
+            if (!item || typeof item !== 'object') continue;
+            const key = String(item._rtdbKey ?? item.id ?? '');
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            merged.push(item.id ? item : { ...item, id: key });
+            added += 1;
+        }
+        state.activityLogs = merged;
+        if (added > 0 && typeof window.__localCacheMarkDirty === 'function') {
+            window.__localCacheMarkDirty('activityLogs');
+        }
+        return added;
+    }
+
+    // "عرض المزيد": reveal the next in-memory page instantly, and only when the
+    // local window is exhausted ask Firebase for the next older chunk.
+    async function showMoreActivityLogs() {
+        if (loadingOlder) return;
+        const filters = readFilters();
+        const page = queryActivityLogPage(logIndexer.get((getState() || {}).activityLogs), {
+            query: filters.query, type: filters.type, limit: renderedPageLimit,
+        });
+        if (page.hasMore) {
+            renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+            renderActivityLogModal();
+            return;
+        }
+        if (!cloudHasMore()) return;
+        loadingOlder = true;
         renderActivityLogModal();
+        try {
+            const added = await fetchOlderActivityLogs();
+            if (added > 0) renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+        } finally {
+            loadingOlder = false;
+            renderActivityLogModal();
+        }
     }
     window.showMoreActivityLogs = showMoreActivityLogs;
 
+    // Pull the whole older history in, one page at a time, revealing pages as
+    // they arrive. The header keeps counting what is already searchable.
+    async function loadFullActivityLog() {
+        if (loadingOlder) return;
+        loadingOlder = true;
+        renderActivityLogModal();
+        let added = 0;
+        try {
+            for (let guard = 0; guard < 200 && cloudHasMore(); guard += 1) {
+                const count = await fetchOlderActivityLogs(ACTIVITY_LOG_CLOUD_PAGE);
+                if (count <= 0) break;
+                added += count;
+                if (renderedPageLimit < ACTIVITY_LOG_MAX_RENDERED) {
+                    renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+                    renderActivityLogModal();
+                }
+            }
+        } finally {
+            loadingOlder = false;
+            if (!cloudHasMore()) cloudComplete = true;
+            if (added > 0 && renderedPageLimit < ACTIVITY_LOG_MAX_RENDERED) renderedPageLimit += ACTIVITY_LOG_PAGE_SIZE;
+            renderActivityLogModal();
+            if (added > 0 && typeof showSuccessToast === 'function') {
+                showSuccessToast(`تم تحميل ${added.toLocaleString()} سجل أقدم من السجل`);
+            }
+        }
+    }
+    window.loadFullActivityLog = loadFullActivityLog;
+
+    // Diagnostics (same `window.__omega*` style as the render instrument):
+    // lets a browser check assert that renders really are served from cache.
+    window.__activityLogCacheStats = () => ({
+        cards: cardCache.stats(),
+        queries: queryCache.stats(),
+        cloudComplete,
+    });
+
+    function isModalOpen() {
+        const modal = document.getElementById('activityLogModal');
+        return Boolean(modal && modal.classList.contains('active'));
+    }
+
+    // While the log is open, refresh it the moment new rows reach appState —
+    // the cloud snapshot (or anything else funneled through
+    // applyFirebaseSectionUpdate) then appears on its own instead of only
+    // after a manual click.
+    function watchLogUpdates() {
+        if (window.__activityLogViewWatched) return;
+        const original = window.applyFirebaseSectionUpdate;
+        if (typeof original !== 'function') return;
+        window.__activityLogViewWatched = true;
+        window.applyFirebaseSectionUpdate = function (sectionName, ...rest) {
+            const result = original.call(this, sectionName, ...rest);
+            if (sectionName === 'activityLogs' && isModalOpen()) {
+                try { renderActivityLogModal(); } catch (err) { console.warn('activity log refresh failed:', err); }
+            }
+            return result;
+        };
+    }
+
     async function openActivityLogModal() {
         ensureSeedActivityLogs();
+        watchLogUpdates();
         const modal = document.getElementById('activityLogModal');
+        initialLoading = isCloudPending();
         if (modal) {
             modal.classList.add('active');
             renderActivityLogModal();
         }
         if (window.lazyLoadSection) {
-            await window.lazyLoadSection('activityLogs');
-            renderActivityLogModal();
+            // Never spin forever: a slow or offline listener falls back to the
+            // cached rows after the timeout, and watchLogUpdates() refreshes
+            // the list whenever the snapshot finally lands.
+            let timedOut = false;
+            let timer = null;
+            try {
+                await Promise.race([
+                    Promise.resolve(window.lazyLoadSection('activityLogs')).catch(err => {
+                        console.warn('activityLogs load failed:', err);
+                    }),
+                    new Promise(resolve => {
+                        timer = setTimeout(() => { timedOut = true; resolve(); }, 3000);
+                    }),
+                ]);
+            } finally {
+                if (timer) clearTimeout(timer);
+                initialLoading = false;
+                await restoreCursorState();
+                renderActivityLogModal();
+                if (timedOut) console.info('activityLogs: first snapshot is slow, showing cached rows.');
+            }
+        } else {
+            initialLoading = false;
         }
     }
     window.openActivityLogModal = openActivityLogModal;
@@ -189,11 +444,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
         // O(1) when nothing changed: no copy, no lower-casing, no re-sort.
         const logIndex = logIndexer.get(state.activityLogs);
 
-        const searchInput = document.getElementById('activityLogSearchInput');
-        const q = searchInput ? searchInput.value : '';
-
-        const catFilter = document.getElementById('activityLogCategoryFilter');
-        const cat = catFilter ? catFilter.value : 'all';
+        const { query: q, type: cat } = readFilters();
 
         // A different search/filter means a fresh first page; "عرض المزيد"
         // only ever grows the page for the filter the user is looking at.
@@ -203,11 +454,27 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             renderedPageLimit = ACTIVITY_LOG_PAGE_SIZE;
         }
 
-        const page = queryActivityLogPage(logIndex, { query: q, type: cat, limit: renderedPageLimit });
+        // Cached per (data snapshot, filter, page size): re-opening the log or
+        // retyping the same search never rescans the collection.
+        const dataSignature = logIndexer.stats().signature;
+        const page = queryCache.get(
+            dataSignature,
+            `${cat}\u0000${q}\u0000${renderedPageLimit}`,
+            () => queryActivityLogPage(logIndex, { query: q, type: cat, limit: renderedPageLimit }),
+        );
         const logs = page.items;
 
         if (countElem) {
-            countElem.textContent = `${page.matched} عملية`;
+            countElem.textContent = initialLoading
+                ? `${page.matched} عملية …`
+                : `${page.matched.toLocaleString()} عملية`;
+        }
+
+        // The first snapshot is still in flight: say so instead of presenting
+        // the handfull of cached rows as if it were the whole log.
+        if (page.matched === 0 && initialLoading) {
+            container.innerHTML = footerStatusHtml('⏳ جاري تحميل السجل من السحابة…', true);
+            return;
         }
 
         if (page.matched === 0) {
@@ -234,7 +501,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             system: { label: 'النظام', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' }
         };
 
-        container.innerHTML = logs.map(item => {
+        const buildCard = item => {
             const safeId = escapeHTML(item.id || '');
             const cfg = typeConfig[item.type] || typeConfig.system;
             const dateObj = new Date(item.timestamp || Date.now());
@@ -278,16 +545,61 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
                 </div>
             </div>
             `;
-        }).join('');
+        };
 
+        // Cards are remembered by record fingerprint: an edited row rebuilds
+        // its own card, every untouched row is reused as-is.
+        const html = logs.map(item =>
+            cardCache.get(item.id, activityLogCardFingerprint(item), () => buildCard(item))
+        ).join('') + renderListFooter(page);
+
+        // Writing the same list back into the DOM costs more than everything
+        // else in this function (and would reset expanded details), so an
+        // unchanged result is skipped entirely.
+        if (html !== lastRenderedHtml) {
+            container.innerHTML = html;
+            lastRenderedHtml = html;
+        }
+    }
+
+    function footerStatusHtml(text, spinning = false) {
+        return `
+            <div class="w-full flex items-center justify-center gap-2 py-3 px-3 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] font-bold text-slate-500">
+                ${spinning ? '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>' : ''}
+                <span>${text}</span>
+            </div>
+        `;
+    }
+
+    // Footer = the one place that answers "is there more?":
+    //   • still loading a page      → spinner
+    //   • more rows already in RAM  → reveal the next page (instant)
+    //   • window exhausted, cloud may have history → fetch one older page
+    //   • nothing left              → explicit "whole log loaded" note
+    function renderListFooter(page) {
+        if (initialLoading) return footerStatusHtml('⏳ جاري تحميل السجل من السحابة…', true);
+        if (loadingOlder) return footerStatusHtml(`⏳ جاري تحميل سجلات أقدم… (${page.matched.toLocaleString()} محمّلة)`, true);
         if (page.hasMore) {
-            const remaining = page.matched - logs.length;
-            container.innerHTML += `
+            const remaining = page.matched - page.items.length;
+            return `
                 <button type="button" onclick="window.showMoreActivityLogs && window.showMoreActivityLogs()" class="w-full py-2.5 px-3 rounded-2xl bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 text-xs font-black transition-colors shadow-2xs cursor-pointer">
                     عرض المزيد (${remaining.toLocaleString()} عملية متبقية)
                 </button>
             `;
         }
+        if (cloudHasMore()) {
+            return `
+                <div class="space-y-2">
+                    <button type="button" onclick="window.showMoreActivityLogs && window.showMoreActivityLogs()" class="w-full py-2.5 px-3 rounded-2xl bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 text-xs font-black transition-colors shadow-2xs cursor-pointer">
+                        ☁️ تحميل المزيد من السجل (دفعة أقدم من السحابة)
+                    </button>
+                    <button type="button" onclick="window.loadFullActivityLog && window.loadFullActivityLog()" class="w-full py-2 px-3 rounded-2xl bg-white hover:bg-blue-50 text-blue-700 hover:text-blue-900 border border-blue-200 hover:border-blue-300 text-[11px] font-black transition-colors shadow-2xs cursor-pointer">
+                        تحميل كامل السجل
+                    </button>
+                </div>
+            `;
+        }
+        return footerStatusHtml(`✔ تم تحميل كل السجل (${page.matched.toLocaleString()} عملية)`);
     }
     window.renderActivityLogModal = renderActivityLogModal;
 
@@ -315,6 +627,10 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
                     window.firebaseRemove(window.firebaseRef(window.firebaseDB, 'v2/activityLogs'));
                 } catch(e) {}
             }
+            // The cloud node was removed too: start paging from scratch.
+            setCursor({ oldestKey: null, hasMore: true });
+            cloudComplete = false;
+            persistCursorState();
             saveState();
             showSuccessToast('تم إفراغ سجل العمليات بالكامل بنجاح');
             renderActivityLogModal();
@@ -323,5 +639,5 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
     window.clearAllActivityLogs = clearAllActivityLogs;
 
 
-return { openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail, showMoreActivityLogs };
+return { openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail, showMoreActivityLogs, loadFullActivityLog };
 }
