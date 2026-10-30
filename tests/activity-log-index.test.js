@@ -9,6 +9,9 @@ import {
   queryActivityLogPage,
   queryActivityLogs,
   createActivityLogIndexer,
+  compareActivityLogKeys,
+  oldestActivityLogKey,
+  advanceActivityLogCursor,
 } from '../src/activity-log-index.js';
 
 const log = (id, timestamp, type, title, details = '', amount = 0) => ({ id, timestamp, type, title, details, amount });
@@ -183,4 +186,46 @@ test('indexer caches across renders and rebuilds only when the data changes', ()
   assert.equal(indexer.get(null).size, 0);
   indexer.invalidate();
   assert.equal(indexer.get(undefined).size, 0);
+});
+
+test('compareActivityLogKeys follows RTDB ordering', () => {
+  // Non-numeric keys are plain strings: 'act_10' sorts before 'act_2'.
+  assert.equal(compareActivityLogKeys('act_10', 'act_2') < 0, true);
+  assert.equal(compareActivityLogKeys('act_2', 'act_10') > 0, true);
+  assert.equal(compareActivityLogKeys('2', '10') < 0, true, 'numeric keys compare as numbers');
+  assert.equal(compareActivityLogKeys('abc', 'abc'), 0);
+});
+
+test('oldestActivityLogKey picks the endBefore() cursor from _rtdbKey or id', () => {
+  assert.equal(oldestActivityLogKey([]), null);
+  // `_rtdbKey` wins over `id` when both exist.
+  assert.equal(oldestActivityLogKey([{ id: 'b' }, { id: 'a', _rtdbKey: 'z' }]), 'b');
+  assert.equal(oldestActivityLogKey([{ id: 'b', _rtdbKey: 'k2' }, { id: 'a', _rtdbKey: 'k1' }]), 'k1');
+  assert.equal(oldestActivityLogKey([null, 'junk', { id: '' }]), null);
+});
+
+test('advanceActivityLogCursor moves forward and closes on a short page', () => {
+  // A full page keeps hasMore and moves the cursor to its oldest key.
+  const full = advanceActivityLogCursor({
+    items: [{ _rtdbKey: 'k9' }, { _rtdbKey: 'k3' }],
+    pageSize: 2,
+    cursor: { oldestKey: null, hasMore: true },
+  });
+  assert.deepEqual(full, { oldestKey: 'k3', hasMore: true });
+
+  // A short page means the end of the history.
+  const short = advanceActivityLogCursor({
+    items: [{ _rtdbKey: 'k2' }],
+    pageSize: 100,
+    cursor: { oldestKey: 'k3', hasMore: true },
+  });
+  assert.deepEqual(short, { oldestKey: 'k2', hasMore: false });
+
+  // An empty page also closes, and keeps the previous cursor.
+  assert.deepEqual(advanceActivityLogCursor({ items: [], pageSize: 100, cursor: { oldestKey: 'k3', hasMore: true } }),
+    { oldestKey: 'k3', hasMore: false });
+
+  // A cursor already closed stays closed.
+  assert.deepEqual(advanceActivityLogCursor({ items: [{ _rtdbKey: 'k0' }], pageSize: 1, cursor: { oldestKey: 'k3', hasMore: false } }),
+    { oldestKey: 'k0', hasMore: false });
 });
