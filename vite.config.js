@@ -54,7 +54,14 @@ export default defineConfig({
   },
   build: {
     target: 'es2020',
-    minify: 'esbuild',
+    minify: 'terser',
+    // terser يعطي ملفات إنتاج أصغر من esbuild (تحميل أسرع للمستخدم)،
+    // ويُسكت سجلات التطوير في البناء النهائي لتقليل حجم الحزمة.
+    terserOptions: {
+      compress: {
+        pure_funcs: ['console.log', 'console.info', 'console.debug'],
+      },
+    },
     cssMinify: true,
     cssCodeSplit: true,
     // Report chunks over 400 kB so regressions are visible in CI logs

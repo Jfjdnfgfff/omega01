@@ -4,6 +4,62 @@ import { createListenerRegistry } from './listener-registry.js';
 import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
 import { createTimeSliceRunner, afterNextPaint, whenIdle } from './main-thread-scheduler.js';
 import { collectFemaleSessionIncome, sessionActivityLabel } from './female-income.js';
+import { createSearchIndex } from './search-index.js';
+
+// فهرس البحث السريع للمشتركين والمنتجات (مثيل واحد للتطبيق)
+// يُبنى من بيانات appState ويُحدّث تلقائياً عند تغيّر أي من القسمين.
+window.omegaSearch = createSearchIndex();
+
+function reindexSearchSections() {
+  try {
+    if (!window.omegaSearch) return;
+    if (Array.isArray(window.appState && window.appState.customers)) {
+      window.omegaSearch.rebuild({
+        customers: window.appState.customers,
+        products: Array.isArray(window.appState.products) ? window.appState.products : [],
+      });
+    }
+  } catch (e) { console.warn('[search-index] rebuild note:', e); }
+}
+window.__reindexSearchSections = reindexSearchSections;
+
+// دوال اختصار سريعة للبحث في العملاء والمنتجات (للاستخدام من واجهة المستخدم)
+window.searchCustomersFast = function(query, limit) {
+  if (!window.omegaSearch) return [];
+  return window.omegaSearch.searchCustomers(String(query || ''), { limit: limit || 50 });
+};
+window.searchProductsFast = function(query, limit) {
+  if (!window.omegaSearch) return [];
+  return window.omegaSearch.searchProducts(String(query || ''), { limit: limit || 50 });
+};
+window.countCustomersFast = function(query) {
+  if (!window.omegaSearch) return 0;
+  return window.omegaSearch.countCustomers(String(query || ''));
+};
+window.countProductsFast = function(query) {
+  if (!window.omegaSearch) return 0;
+  return window.omegaSearch.countProducts(String(query || ''));
+};
+window.getCustomerByIdFast = function(id) {
+  if (!window.omegaSearch) return undefined;
+  return window.omegaSearch.getCustomerById(id);
+};
+window.getProductByIdFast = function(id) {
+  if (!window.omegaSearch) return undefined;
+  return window.omegaSearch.getProductById(id);
+};
+window.getCustomerByPhoneFast = function(phone) {
+  if (!window.omegaSearch) return undefined;
+  return window.omegaSearch.getCustomerByPhone(phone);
+};
+window.getProductByBarcodeFast = function(barcode) {
+  if (!window.omegaSearch) return undefined;
+  return window.omegaSearch.getProductByBarcode(barcode);
+};
+window.searchIndexStats = function() {
+  if (!window.omegaSearch) return null;
+  return window.omegaSearch.stats();
+};
 
 // Safe DOM helpers to prevent null property errors
 function getElem(id) {
@@ -279,7 +335,7 @@ window.addEventListener('unhandledrejection', (event) => {
     renderDebounceTimer = setTimeout(() => {
       renderDebounceTimer = null;
       if (typeof window.render === 'function') window.render();
-    }, 120);
+    }, 60);
   }
   window.scheduleRender = scheduleRender;
 
@@ -636,6 +692,10 @@ window.addEventListener('unhandledrejection', (event) => {
     window.firebaseSyncState.lastSync = new Date();
     window.firebaseSyncState.lastError = null;
     updateFirebaseUIBadge('connected', 'Firebase: متصل ومزامن');
+    // فهرس العملاء والمنتجات بعد تحميل التمهيدي (REST/bootstrap)
+    if (typeof window.__reindexSearchSections === 'function') {
+      try { window.__reindexSearchSections(); } catch (e) {}
+    }
     return true; };
 
   // Granular section-level updater: merges ONLY the target section with O(N) deduplication
@@ -722,6 +782,12 @@ window.addEventListener('unhandledrejection', (event) => {
 
     window.appState[sectionName] = merged;
     if (window.__localCacheMarkDirty) window.__localCacheMarkDirty(sectionName);
+    // حدّث فهرس البحث السريع لقسمي العملاء والمنتجات عند كل دمج بيانات
+    if (sectionName === 'customers' || sectionName === 'products') {
+      if (typeof window.__reindexSearchSections === 'function') {
+        try { window.__reindexSearchSections(); } catch (e) {}
+      }
+    }
     scheduleRender();
 
     window.firebaseSyncState = window.firebaseSyncState || {};
@@ -3195,6 +3261,18 @@ window.addEventListener('unhandledrejection', (event) => {
         if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
             return 'webp'; } return false; }
     window.checkImageMagicBytes = checkImageMagicBytes;
+    // هل يدعم المتصفح إعادة ترميزanvas إلى WebP؟ (fallback إلى JPEG إن لم يدعم)
+    let _webpSupport = null;
+    function supportsWebP() {
+        if (_webpSupport !== null) return _webpSupport;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1; canvas.height = 1;
+            _webpSupport = canvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
+        } catch (e) { _webpSupport = false; }
+        return _webpSupport;
+    }
+    window.supportsWebP = supportsWebP;
     function verifyFaceImageCharacteristics(ctx, width, height) {
         try { const sampleW = Math.min(width, 100);
             const sampleH = Math.min(height, 100);
@@ -3271,8 +3349,12 @@ window.addEventListener('unhandledrejection', (event) => {
                             showErrorToast('الصورة غير واضحة أو تبدو فارغة. يرجى رفع صورة واضحة.');
                             callback(null, null);
                             return; } }
-                    // 7. Re-encode to clean, sanitized JPEG data
-                    const cleanDataUrl = canvas.toDataURL('image/jpeg', 0.75);
+                    // 7. Re-encode to clean, sanitized image data (WebP by default for smaller size,
+                    //    automatic fallback to JPEG for browsers that don't support canvas WebP)
+                    const useWebP = supportsWebP();
+                    const cleanMime = useWebP ? 'image/webp' : 'image/jpeg';
+                    const cleanQuality = useWebP ? 0.85 : 0.75;
+                    const cleanDataUrl = canvas.toDataURL(cleanMime, cleanQuality);
                     callback(cleanDataUrl, safeName);
                 }; img.onerror = () => {
                     showErrorToast('تعذر معالجة الصورة، يرجى التأكد من صلاحية الملف.');
@@ -10469,6 +10551,12 @@ window.addEventListener('unhandledrejection', (event) => {
        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
        let filteredProducts = [];
        const stockFilter = appState.productStockFilter;
+       // فهرس سريع للبحث عن المنتجات بدلاً من مسح كامل القائمة (O(1) للمطابقات)
+       let productMatchIds = null;
+       if (query && window.omegaSearch) {
+           const matched = window.omegaSearch.searchProductsFast(query, { limit: 200 });
+           productMatchIds = new Set(matched.map(p => String(p.id || p._rtdbKey || p.barcode || '')));
+       }
        for (let i = 0; i < countAll; i++) {
            const p = prods[i];
            if (!p) continue;
@@ -10476,13 +10564,7 @@ window.addEventListener('unhandledrejection', (event) => {
            if (stockFilter === 'stock2' && p.stockLocation !== 'stock2') continue;
            if (stockFilter === 'near_expiry' && !getProductExpiryInfo(p).isNearExpiry) continue;
            if (stockFilter === 'low_stock' && Number(p.stock || 0) >= 5) continue;
-           if (query) {
-               const nameMatch = (p.name || '').toLowerCase().includes(query);
-               const barcodeMatch = !nameMatch && String(p.barcode || '').trim().toLowerCase().includes(query);
-               const catMatch = !nameMatch && !barcodeMatch && (p.category || '').toLowerCase().includes(query);
-               const weightMatch = !nameMatch && !barcodeMatch && !catMatch && (p.weight || '').toLowerCase().includes(query);
-               if (!nameMatch && !barcodeMatch && !catMatch && !weightMatch) continue;
-           }
+           if (productMatchIds && !productMatchIds.has(String(p.id || p._rtdbKey || p.barcode || ''))) continue;
            filteredProducts.push(p);
        }
        container.innerHTML = filteredProducts.map(p => {
@@ -10847,8 +10929,19 @@ window.addEventListener('unhandledrejection', (event) => {
         if (container1) container1.innerHTML = html;
         const container2 = document.getElementById('filterTabsView');
         if (container2) container2.innerHTML = html;
-    } function renderCustomers() { let filtered = (appState.customers || []).filter(c => {
+    } function renderCustomers() { let filtered;
+        // البحث الفوري عبر الفهرس (O(1) للمطابقات الدقيقة) بدلاً من مسح كامل القائمة في كل ضغطة مفتاح
+        if (appState.searchQuery && window.omegaSearch) {
+          const matched = window.omegaSearch.searchCustomersFast(appState.searchQuery, { limit: 200 });
+          const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
+          filtered = (appState.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
+        } else {
+          filtered = (appState.customers || []).filter(c => {
             if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
+            return true;
+          });
+        }
+        filtered = filtered.filter(c => {
             const status = calculateStatus(c);
             const isSession = customerIsSession(c);
             if (appState.filter === 'session') return isSession;
@@ -10878,7 +10971,7 @@ window.addEventListener('unhandledrejection', (event) => {
             const paymentDateStr = paymentDateVal ? String(paymentDateVal).split('-').reverse().join('/') : 'غير محدد';
             const firstLetter = c.name ? c.name.trim().charAt(0) : '؟';
             const genderLabel = c.gender === 'female' ? 'أنثى' : 'ذكر';
-            const avatarHtml = c.imageUrl ? `<img src="${c.imageUrl}" alt="${c.name}" class="w-12 h-12 rounded-full object-cover shrink-0 shadow-sm border border-slate-200">`
+            const avatarHtml = c.imageUrl ? `<img src="${c.imageUrl}" alt="${c.name}" loading="lazy" decode="async" class="w-12 h-12 rounded-full object-cover shrink-0 shadow-sm border border-slate-200">`
                 : `<div class="w-12 h-12 rounded-full ${c.gender === 'female' ? 'bg-slate-100 text-slate-700' : 'bg-blue-100 text-[#2563eb]'} font-extrabold text-xl flex items-center justify-center shrink-0 shadow-sm">${firstLetter}</div>`;
             let paymentBadge = ''; if (c.paymentStatus === 'paid') {
                 paymentBadge = `<span class="inline-block bg-blue-100/90 text-blue-700 font-bold text-xs px-3 py-1.5 rounded-xl">تم الدفع</span>`;
