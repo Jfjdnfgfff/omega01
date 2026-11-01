@@ -10551,11 +10551,22 @@ window.addEventListener('unhandledrejection', (event) => {
        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
        let filteredProducts = [];
        const stockFilter = appState.productStockFilter;
+       // ضمان بناء فهرس البحث إذا كانت بيانات المنتجات موجودة ولكن الفهرس لا يزال فارغاً
+       if (window.omegaSearch &&
+           window.omegaSearch.stats().products === 0 &&
+           Array.isArray(appState.products) && appState.products.length > 0) {
+         if (typeof window.__reindexSearchSections === 'function') {
+           try { window.__reindexSearchSections(); } catch (e) {}
+         }
+       }
        // فهرس سريع للبحث عن المنتجات بدلاً من مسح كامل القائمة (O(1) للمطابقات)
        let productMatchIds = null;
+       let useLegacyProductSearch = false;
        if (query && window.omegaSearch) {
            const matched = window.omegaSearch.searchProductsFast(query, { limit: 200 });
            productMatchIds = new Set(matched.map(p => String(p.id || p._rtdbKey || p.barcode || '')));
+           // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج
+           if (productMatchIds.size === 0) useLegacyProductSearch = true;
        }
        for (let i = 0; i < countAll; i++) {
            const p = prods[i];
@@ -10564,7 +10575,14 @@ window.addEventListener('unhandledrejection', (event) => {
            if (stockFilter === 'stock2' && p.stockLocation !== 'stock2') continue;
            if (stockFilter === 'near_expiry' && !getProductExpiryInfo(p).isNearExpiry) continue;
            if (stockFilter === 'low_stock' && Number(p.stock || 0) >= 5) continue;
-           if (productMatchIds && !productMatchIds.has(String(p.id || p._rtdbKey || p.barcode || ''))) continue;
+           if (productMatchIds && !useLegacyProductSearch && !productMatchIds.has(String(p.id || p._rtdbKey || p.barcode || ''))) continue;
+           if (useLegacyProductSearch) {
+               const nameMatch = (p.name || '').toLowerCase().includes(query);
+               const barcodeMatch = !nameMatch && String(p.barcode || '').trim().toLowerCase().includes(query);
+               const catMatch = !nameMatch && !barcodeMatch && (p.category || '').toLowerCase().includes(query);
+               const weightMatch = !nameMatch && !barcodeMatch && !catMatch && (p.weight || '').toLowerCase().includes(query);
+               if (!nameMatch && !barcodeMatch && !catMatch && !weightMatch) continue;
+           }
            filteredProducts.push(p);
        }
        container.innerHTML = filteredProducts.map(p => {
@@ -10930,11 +10948,27 @@ window.addEventListener('unhandledrejection', (event) => {
         const container2 = document.getElementById('filterTabsView');
         if (container2) container2.innerHTML = html;
     } function renderCustomers() { let filtered;
+        // ضمان بناء فهرس البحث إذا كانت بيانات العملاء موجودة ولكن الفهرس لا يزال فارغاً
+        // (يحدث إذا تم تحميل البيانات قبل تهيئة الفهرس أو عبر مسار تحميل مختلف)
+        if (window.omegaSearch &&
+            window.omegaSearch.stats().customers === 0 &&
+            Array.isArray(appState.customers) && appState.customers.length > 0) {
+          if (typeof window.__reindexSearchSections === 'function') {
+            try { window.__reindexSearchSections(); } catch (e) {}
+          }
+        }
         // البحث الفوري عبر الفهرس (O(1) للمطابقات الدقيقة) بدلاً من مسح كامل القائمة في كل ضغطة مفتاح
         if (appState.searchQuery && window.omegaSearch) {
           const matched = window.omegaSearch.searchCustomersFast(appState.searchQuery, { limit: 200 });
           const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
           filtered = (appState.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
+          // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج (يضمن العمل حتى لو لم يُبنى الفهرس بعد)
+          if (filtered.length === 0) {
+            filtered = (appState.customers || []).filter(c => {
+              if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
+              return true;
+            });
+          }
         } else {
           filtered = (appState.customers || []).filter(c => {
             if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
