@@ -10563,8 +10563,8 @@ window.addEventListener('unhandledrejection', (event) => {
        // فهرس سريع للبحث عن المنتجات بدلاً من مسح كامل القائمة (O(1) للمطابقات)
        let productMatchIds = null;
        let useLegacyProductSearch = false;
-       if (query && window.omegaSearch) {
-           const matched = window.omegaSearch.searchProductsFast(query, { limit: 200 });
+      if (query && window.omegaSearch) {
+          const matched = window.searchProductsFast(query, { limit: 200 });
            productMatchIds = new Set(matched.map(p => String(p.id || p._rtdbKey || p.barcode || '')));
            // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج
            if (productMatchIds.size === 0) useLegacyProductSearch = true;
@@ -10961,7 +10961,7 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         // البحث الفوري عبر الفهرس (O(1) للمطابقات الدقيقة) بدلاً من مسح كامل القائمة في كل ضغطة مفتاح
         if (state.searchQuery && window.omegaSearch) {
-          const matched = window.omegaSearch.searchCustomersFast(state.searchQuery, { limit: 200 });
+          const matched = window.searchCustomersFast(state.searchQuery, { limit: 200 });
           const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
           filtered = (state.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
           // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج (يضمن العمل حتى لو لم يُبنى الفهرس بعد)
