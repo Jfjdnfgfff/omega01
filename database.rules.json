@@ -7,7 +7,7 @@
       ".indexOn": ["timestamp", "type", "dateStr"]
     },
     "customers": {
-      ".indexOn": ["startDate", "endDate", "phone", "status", "paymentStatus", "createdAt", "updatedAt"]
+      ".indexOn": ["startDate", "endDate", "phone", "barcode", "name", "status", "paymentStatus", "createdAt", "updatedAt"]
     },
     "credits": {
       ".indexOn": ["date", "name", "phone", "customerId", "createdAt"]
@@ -16,7 +16,7 @@
       ".indexOn": ["date", "dateKey", "customerId", "createdAt", "barcode", "category", "stockLocation"]
     },
     "products": {
-      ".indexOn": ["barcode", "category", "stockLocation", "name", "createdAt"]
+      ".indexOn": ["barcode", "category", "stockLocation", "name", "createdAt", "updatedAt"]
     },
     "expenses": {
       ".indexOn": ["date", "dateKey", "category", "createdAt"]
@@ -41,7 +41,7 @@
     },
     "v2": {
       "customers": {
-        ".indexOn": ["phone", "barcode", "status", "paymentStatus", "startDate", "endDate", "createdAt", "updatedAt"]
+        ".indexOn": ["phone", "barcode", "name", "status", "paymentStatus", "startDate", "endDate", "createdAt", "updatedAt"]
       },
       "products": {
         ".indexOn": ["barcode", "category", "stockLocation", "name", "createdAt", "updatedAt"]
