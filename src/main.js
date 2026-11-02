@@ -10518,7 +10518,8 @@ window.addEventListener('unhandledrejection', (event) => {
         if (tabLowStock) tabLowStock.className = (appState.productStockFilter === 'low_stock') ? activeAmberClass : inactiveAmberClass;
         renderProductsList(); } window.setStockFilter = setStockFilter;
     function renderProductsList() { const container = document.getElementById('productsList');
-       if(!container) return; if (!appState.products) appState.products = [];
+       if(!container) return; const state = window.appState || {};
+       if (!state.products) state.products = [];
        const countAllElem = document.getElementById('countStockAll');
        const count1Elem = document.getElementById('countStock1');
        const count2Elem = document.getElementById('countStock2');
@@ -10526,13 +10527,13 @@ window.addEventListener('unhandledrejection', (event) => {
        const countLowStockElem = document.getElementById('countStockLowStock');
 
        // Single-pass metrics calculation O(N) instead of 5 separate array scans
-       let countAll = appState.products.length;
+       let countAll = state.products.length;
        let count1 = 0;
        let count2 = 0;
        let countNearExp = 0;
        let countLowStock = 0;
 
-       const prods = appState.products;
+       const prods = state.products;
        for (let i = 0; i < countAll; i++) {
            const p = prods[i];
            if (!p) continue;
@@ -10550,11 +10551,11 @@ window.addEventListener('unhandledrejection', (event) => {
        const searchInput = document.getElementById('searchProductInput');
        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
        let filteredProducts = [];
-       const stockFilter = appState.productStockFilter;
+       const stockFilter = state.productStockFilter;
        // ضمان بناء فهرس البحث إذا كانت بيانات المنتجات موجودة ولكن الفهرس لا يزال فارغاً
        if (window.omegaSearch &&
            window.omegaSearch.stats().products === 0 &&
-           Array.isArray(appState.products) && appState.products.length > 0) {
+           Array.isArray(state.products) && state.products.length > 0) {
          if (typeof window.__reindexSearchSections === 'function') {
            try { window.__reindexSearchSections(); } catch (e) {}
          }
@@ -10948,47 +10949,48 @@ window.addEventListener('unhandledrejection', (event) => {
         const container2 = document.getElementById('filterTabsView');
         if (container2) container2.innerHTML = html;
     } function renderCustomers() { let filtered;
+        const state = window.appState || {};
         // ضمان بناء فهرس البحث إذا كانت بيانات العملاء موجودة ولكن الفهرس لا يزال فارغاً
         // (يحدث إذا تم تحميل البيانات قبل تهيئة الفهرس أو عبر مسار تحميل مختلف)
         if (window.omegaSearch &&
             window.omegaSearch.stats().customers === 0 &&
-            Array.isArray(appState.customers) && appState.customers.length > 0) {
+            Array.isArray(state.customers) && state.customers.length > 0) {
           if (typeof window.__reindexSearchSections === 'function') {
             try { window.__reindexSearchSections(); } catch (e) {}
           }
         }
         // البحث الفوري عبر الفهرس (O(1) للمطابقات الدقيقة) بدلاً من مسح كامل القائمة في كل ضغطة مفتاح
-        if (appState.searchQuery && window.omegaSearch) {
-          const matched = window.omegaSearch.searchCustomersFast(appState.searchQuery, { limit: 200 });
+        if (state.searchQuery && window.omegaSearch) {
+          const matched = window.omegaSearch.searchCustomersFast(state.searchQuery, { limit: 200 });
           const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
-          filtered = (appState.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
+          filtered = (state.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
           // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج (يضمن العمل حتى لو لم يُبنى الفهرس بعد)
           if (filtered.length === 0) {
-            filtered = (appState.customers || []).filter(c => {
-              if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
+            filtered = (state.customers || []).filter(c => {
+              if (state.searchQuery && !customerMatchesQuery(c, state.searchQuery)) return false;
               return true;
             });
           }
         } else {
-          filtered = (appState.customers || []).filter(c => {
-            if (appState.searchQuery && !customerMatchesQuery(c, appState.searchQuery)) return false;
+          filtered = (state.customers || []).filter(c => {
+            if (state.searchQuery && !customerMatchesQuery(c, state.searchQuery)) return false;
             return true;
           });
         }
         filtered = filtered.filter(c => {
             const status = calculateStatus(c);
             const isSession = customerIsSession(c);
-            if (appState.filter === 'session') return isSession;
-            if (appState.filter === 'male') return c.gender === 'male' || !c.gender;
-            if (appState.filter === 'female') return c.gender === 'female';
-            if (appState.filter === 'active') return status === 'active' || status === 'near_expiry';
-            if (appState.filter === 'near_expiry') return status === 'near_expiry';
-            if (appState.filter === 'expired') return status === 'expired';
-            if (appState.filter === 'frozen') return c.status === 'frozen';
-            if (appState.filter === 'credit') return c.paymentStatus === 'credit';
+            if (state.filter === 'session') return isSession;
+            if (state.filter === 'male') return c.gender === 'male' || !c.gender;
+            if (state.filter === 'female') return c.gender === 'female';
+            if (state.filter === 'active') return status === 'active' || status === 'near_expiry';
+            if (state.filter === 'near_expiry') return status === 'near_expiry';
+            if (state.filter === 'expired') return status === 'expired';
+            if (state.filter === 'frozen') return c.status === 'frozen';
+            if (state.filter === 'credit') return c.paymentStatus === 'credit';
             return true; });
         const PAGE_SIZE = 24;
-        const page = appState.customerPage || 1;
+        const page = state.customerPage || 1;
         const visibleCustomers = filtered.slice(0, PAGE_SIZE * page);
         const renewalByCycle = new Map((appState.caisseLogs || [])
             .filter(log => log && log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription' && log.previousSubscription)

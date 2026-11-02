@@ -132,6 +132,18 @@
     window.handleSearchView = window.handleSearchView || function() {
       console.warn('handleSearchView is loading...');
     };
+    // تعريف آمن للكائن البحث السريع قبل تحميل main.js لتجنب Uncaught TypeError
+    window.omegaSearch = window.omegaSearch || {
+      searchCustomersFast: function() { return []; },
+      searchProductsFast: function() { return []; },
+      countCustomersFast: function() { return 0; },
+      countProductsFast: function() { return 0; },
+      getCustomerByIdFast: function() { return undefined; },
+      getProductByIdFast: function() { return undefined; },
+      getCustomerByPhoneFast: function() { return undefined; },
+      getProductByBarcodeFast: function() { return undefined; },
+      stats: function() { return { customers: 0, products: 0 }; }
+    };
   </script>
 </head>
 <body class="text-slate-900 w-full min-h-screen min-h-dvh flex flex-col bg-slate-50">
