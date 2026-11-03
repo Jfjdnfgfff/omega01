@@ -484,9 +484,10 @@ window.addEventListener('unhandledrejection', (event) => {
     return salesHistoryCompletionPromise;
   };
 
-  const startupSections = ['stats', 'privacy', 'customers', 'sales',
-    'quickSessions', 'expenses', 'credits', 'suppliers', 'supplierTransactions',
-    'packages', 'staffPayouts', 'coachAbsences', 'caisseLogs'];
+  // أقسام أساسية تُحمّل عند الإقلاع فقط (الشاشة الأولى). باقي الأقسام تُحمّل
+  // كسولاً عبر lazyLoadSection عند opening شاشتها فعلياً — لا تُحمّل كل البيانات
+  // إذا كنت تحتاج إلى جزء منها فقط.
+  const startupSections = ['stats', 'privacy', 'customers'];
   const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
     : `v2/${name === 'caisseLogs' ? 'caisse' : name}`;
   const legacyPath = name => ['stats', 'privacy'].includes(name) ? null : name;
