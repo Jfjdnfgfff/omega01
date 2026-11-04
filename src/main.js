@@ -484,10 +484,15 @@ window.addEventListener('unhandledrejection', (event) => {
     return salesHistoryCompletionPromise;
   };
 
-  // أقسام أساسية تُحمّل عند الإقلاع فقط (الشاشة الأولى). باقي الأقسام تُحمّل
-  // كسولاً عبر lazyLoadSection عند opening شاشتها فعلياً — لا تُحمّل كل البيانات
-  // إذا كنت تحتاج إلى جزء منها فقط.
-  const startupSections = ['stats', 'privacy', 'customers'];
+  // أقسام أساسية تُحمّل عند الإقلاع (الشاشة الرئيسية / الداشبورد).
+  // هذه الأقسام تُظهر أرقاماً مجمعة (إيرادات، مصاريف، مبيعات، مخزون، ديون، موظفين)
+  // لذلك يجب أن تكون كاملة قبل العرض لمنع إظهار قيم ناقصة أو صفرية.
+  // باقي الأقسام تُحمّل كسولاً عبر lazyLoadSection عند opening شاشتها فعلياً.
+  const startupSections = [
+    'stats', 'privacy', 'customers',
+    'sales', 'expenses', 'credits', 'packages',
+    'staffPayouts', 'products', 'quickSessions',
+  ];
   const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
     : `v2/${name === 'caisseLogs' ? 'caisse' : name}`;
   const legacyPath = name => ['stats', 'privacy'].includes(name) ? null : name;
