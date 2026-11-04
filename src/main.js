@@ -484,9 +484,10 @@ window.addEventListener('unhandledrejection', (event) => {
     return salesHistoryCompletionPromise;
   };
 
-  const startupSections = ['stats', 'privacy', 'customers', 'sales',
-    'quickSessions', 'expenses', 'credits', 'suppliers', 'supplierTransactions',
-    'packages', 'staffPayouts', 'coachAbsences', 'caisseLogs'];
+  // أقسام أساسية تُحمّل عند الإقلاع فقط (الشاشة الأولى). باقي الأقسام تُحمّل
+  // كسولاً عبر lazyLoadSection عند opening شاشتها فعلياً — لا تُحمّل كل البيانات
+  // إذا كنت تحتاج إلى جزء منها فقط.
+  const startupSections = ['stats', 'privacy', 'customers'];
   const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
     : `v2/${name === 'caisseLogs' ? 'caisse' : name}`;
   const legacyPath = name => ['stats', 'privacy'].includes(name) ? null : name;
@@ -2010,6 +2011,9 @@ window.addEventListener('unhandledrejection', (event) => {
             if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
             if (item.barcode) v2Deletes[`v2/customerByBarcode/${cleanKey(item.barcode)}`] = null;
           }
+          // ملاحظة هامة: عند حذف مشترك لا تُحذف مبيعاته (v2/sales) — مبيعات البيع مخزنة
+          // في قسم مستقل مع prodId فقط ولا تحتوي على customerId،所以ها تبقى محفوظة
+          // في السجل التاريخي حتى بعد حذف المشترك من النظام.
         } else if (sectionPath === 'products') {
           const item = (window.appState?.products || []).find(p => String(p.id || p.barcode) === String(itemId) || String(p._rtdbKey) === String(itemId)) || previousItem;
           if (item && item.barcode) {
@@ -7498,6 +7502,9 @@ window.addEventListener('unhandledrejection', (event) => {
                     for (const credit of autoCredits) await window.deleteFirebaseSectionItem('credits', credit.id, credit);
                 }
             }
+            // ملاحظة هامة: مبيعات البيع (sales) مخزنة في قسم مستقل (v2/sales) مع prodId فقط،
+            // ولا تحتوي على customerId. عند حذف المشترك لا تُحذف مبيعاته أبداً — هذا يضمن
+            // الاحتفاظ بسجل المبيعات التاريخي حتى بعد حذف المشترك من النظام.
             saveState(); showSuccessToast(`تم حذف المشترك ${receipts.length ? 'وحذف مبلغ اشتراكه من الصندوق ' : ''}بنجاح`);
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render();
