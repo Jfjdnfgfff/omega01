@@ -3726,7 +3726,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (!c || c.gender !== 'female') return false;
 
             // Date filtering
-            const subDateStr = c.startDate || (c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : null);
+            const subDateStr = c.startDate || (c.createdAt ? _localDateDisplay(c.createdAt) : null);
             if (subDateStr) {
                 const cDate = new Date(subDateStr);
                 if (!isNaN(cDate.getTime())) {
@@ -3871,7 +3871,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     const paidAmount = Math.max(0, fullPrice - debt);
                     const comm = Math.round(paidAmount * (rate / 100));
 
-                    const dateStr = c.startDate || (c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : 'غير محدد');
+                    const dateStr = c.startDate || (c.createdAt ? _localDateDisplay(c.createdAt) : 'غير محدد');
 
                     return `
                         <tr class="hover:bg-purple-50/30 transition-colors">
@@ -4078,12 +4078,12 @@ window.addEventListener('unhandledrejection', (event) => {
             const validity = parseInt(pkg.validityDays || 60);
             const endDate = new Date(startDate);
             endDate.setDate(startDate.getDate() + validity);
-            endDateInput.value = endDate.toISOString().split('T')[0];
+            endDateInput.value = getLocalDateString(endDate);
         } else { setAddCustSubscriptionType('time');
             const duration = pkg ? parseInt(pkg.durationDays || pkg.duration || 30) : 30;
             const endDate = new Date(startDate);
             endDate.setDate(startDate.getDate() + duration);
-            endDateInput.value = endDate.toISOString().split('T')[0];
+            endDateInput.value = getLocalDateString(endDate);
         }
         if (typeof window.updateAddCustomerPaymentDateHint === 'function') window.updateAddCustomerPaymentDateHint();
     };
@@ -4186,8 +4186,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 attendedSessions: 0,
                 sessionHistory: [],
                 paymentStatus, debtAmount, paymentDate: paymentDateCheck.dateKey,
-                status: 'active', startDate: startDate.toISOString(),
-                endDate: endDate.toISOString() };
+                status: 'active', startDate: _toLocalMidnightISO(startDate),
+                endDate: _toLocalMidnightISO(endDate) };
             appState.customers.unshift(newCustomer);
             const subscriptionCashPaid = paymentStatus === 'paid'
                 ? Number(custPrice || 0)
@@ -4295,14 +4295,14 @@ window.addEventListener('unhandledrejection', (event) => {
         if (document.getElementById('editPaymentStatus')) setElemValue('editPaymentStatus', customer.paymentStatus || 'paid');
         if (document.getElementById('editDebtAmount')) setElemValue('editDebtAmount', customer.debtAmount || '');
         if (customer.startDate && document.getElementById('editStartDate')) { 
-            setElemValue('editStartDate', new Date(customer.startDate).toISOString().split('T')[0]);
+            setElemValue('editStartDate', _localDateDisplay(customer.startDate));
         } 
         if (customer.endDate && document.getElementById('editEndDate')) { 
-            setElemValue('editEndDate', new Date(customer.endDate).toISOString().split('T')[0]);
+            setElemValue('editEndDate', _localDateDisplay(customer.endDate));
         }
         const editPaymentDateEl = document.getElementById('editPaymentDate');
         if (editPaymentDateEl) {
-            const pd = customer.paymentDate || (customer.startDate ? new Date(customer.startDate).toISOString().split('T')[0] : '');
+            const pd = customer.paymentDate || (customer.startDate ? _localDateDisplay(customer.startDate) : '');
             setElemValue('editPaymentDate', pd || '');
         }
         // Image setup for edit modal
@@ -4393,8 +4393,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 customer.attendedSessions = Math.max(0, (customer.totalSessions || 0) - (customer.remainingSessions || 0));
             } } const editStartDateVal = getElemVal('editStartDate');
         const editEndDateVal = getElemVal('editEndDate');
-        if (editStartDateVal) customer.startDate = new Date(editStartDateVal).toISOString();
-        if (editEndDateVal) customer.endDate = new Date(editEndDateVal).toISOString();
+        if (editStartDateVal) customer.startDate = _toLocalMidnightISO(new Date(editStartDateVal));
+        if (editEndDateVal) customer.endDate = _toLocalMidnightISO(new Date(editEndDateVal));
         const editPaymentDateVal = getElemVal('editPaymentDate');
         if (editPaymentDateVal) {
             const pdCheck = resolvePaymentDate(editPaymentDateVal, new Date());
@@ -4409,7 +4409,7 @@ window.addEventListener('unhandledrejection', (event) => {
             const currentEnd = new Date(customer.endDate || new Date());
             if (!isNaN(currentEnd.getTime())) {
                 currentEnd.setDate(currentEnd.getDate() + extraDays);
-                customer.endDate = currentEnd.toISOString();
+                customer.endDate = _toLocalMidnightISO(currentEnd);
             } }
         customer.packageId = getElemVal('editPackageId');
         const pkg = (appState.packages || []).find(p => String(p && p.id) === String(customer.packageId));
@@ -4710,7 +4710,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (mode === 'continue' && customer && customer.endDate) {
             const currentEnd = new Date(customer.endDate);
             if (!isNaN(currentEnd.getTime()) && currentEnd > now) {
-                if (startInput) startInput.value = currentEnd.toISOString().split('T')[0];
+                if (startInput) startInput.value = getLocalDateString(currentEnd);
                 if (contBtn) {
                     contBtn.className = 'py-2 px-3 rounded-xl border border-blue-600 bg-blue-50 text-blue-700 text-xs font-bold transition-all text-center shadow-2xs';
                 }
@@ -4778,7 +4778,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const duration = pkg ? parseInt(pkg.durationDays || pkg.duration || 30) : 30;
         const newEnd = new Date(startDate);
         newEnd.setDate(startDate.getDate() + duration);
-        endInput.value = newEnd.toISOString().split('T')[0];
+        endInput.value = getLocalDateString(newEnd);
     };
 
     window.applyRenewDuration = function(days) {
@@ -4789,7 +4789,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (isNaN(startDate.getTime())) return;
         const newEnd = new Date(startDate);
         newEnd.setDate(startDate.getDate() + days);
-        endInput.value = newEnd.toISOString().split('T')[0];
+        endInput.value = getLocalDateString(newEnd);
     };
 
     window.adjustRenewSessions = function(delta) {
@@ -4894,7 +4894,7 @@ window.addEventListener('unhandledrejection', (event) => {
             const startVal = getElemVal('renewStartDate');
             const endVal = getElemVal('renewEndDate');
             if (startVal) customer.startDate = new Date(startVal).toISOString();
-            if (endVal) customer.endDate = new Date(endVal).toISOString();
+            if (endVal) customer.endDate = _toLocalMidnightISO(new Date(endVal));
         }
 
         const renewalCashPaid = paymentStatus === 'paid'
@@ -7514,6 +7514,18 @@ window.addEventListener('unhandledrejection', (event) => {
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render();
         }); }
+    // Helper: compute the difference in whole calendar days between a target
+    // date and "now", both normalised to their LOCAL midnight.  This avoids
+    // off-by-one errors caused by timezone offsets (the stored endDate is a
+    // UTC-midnight ISO string, while Date.now() carries the current wall-clock
+    // time which can shift the result by up to ±1 day).
+    function _localDayDiff(targetMs, nowMs) {
+      const target = new Date(targetMs);
+      const now = new Date(nowMs);
+      const tNorm = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+      const nNorm = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+      return Math.round((tNorm - nNorm) / 86400000);
+    }
     function calculateStatus(customer, cachedNowMs) {
       if (!customer) return 'active';
       if (customer.status === 'frozen') return 'frozen';
@@ -7525,7 +7537,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (customer.endDate) {
           const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
           if (!isNaN(endMs)) {
-            const diffDays = Math.ceil((endMs - nowMs) / 86400000);
+            const diffDays = _localDayDiff(endMs, nowMs);
             if (diffDays < 0) return 'expired';
             if (diffDays <= 5 || remaining <= 2) return 'near_expiry';
           }
@@ -7537,7 +7549,7 @@ window.addEventListener('unhandledrejection', (event) => {
       if (!customer.endDate) return 'active';
       const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
       if (isNaN(endMs)) return 'active';
-      const diffDays = Math.ceil((endMs - nowMs) / 86400000);
+      const diffDays = _localDayDiff(endMs, nowMs);
       if (diffDays < 0) return 'expired';
       if (diffDays <= 5) return 'near_expiry';
       return 'active';
@@ -7549,7 +7561,7 @@ window.addEventListener('unhandledrejection', (event) => {
       const nowMs = cachedNowMs || Date.now();
       const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
       if (isNaN(endMs)) return 0;
-      return Math.max(0, Math.ceil((endMs - nowMs) / 86400000));
+      return Math.max(0, _localDayDiff(endMs, nowMs));
     } function recordCustomerAttendance(customerId) {
         if (!appState.customers) return;
         const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
@@ -9217,7 +9229,7 @@ window.addEventListener('unhandledrejection', (event) => {
         } appState.customers.forEach(c => { if (['active', 'near_expiry'].includes(calculateStatus(c))) {
                 const currentEnd = new Date(c.endDate);
                 currentEnd.setDate(currentEnd.getDate() + numDays);
-                c.endDate = currentEnd.toISOString();
+                c.endDate = _toLocalMidnightISO(currentEnd);
                 if (window.saveFirebaseSectionItem) {
                     window.saveFirebaseSectionItem('customers', c);
                 }
@@ -9241,7 +9253,7 @@ window.addEventListener('unhandledrejection', (event) => {
        if (customer.status === 'frozen') {
            const newEndDate = new Date();
            newEndDate.setDate(newEndDate.getDate() + customer.frozenRemainingDays);
-           customer.endDate = newEndDate.toISOString();
+           customer.endDate = _toLocalMidnightISO(newEndDate);
            customer.status = 'active'; } else {
            customer.frozenRemainingDays = getRemainingDays(customer);
            customer.status = 'frozen'; }
@@ -10779,6 +10791,24 @@ window.addEventListener('unhandledrejection', (event) => {
         const day = String(d.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`; }
     window.getLocalDateString = getLocalDateString;
+    // Convert a Date to an ISO string at UTC-midnight of its LOCAL calendar date.
+    // This prevents timezone shifts: e.g. Dec 1 00:30 local (UTC+1) = Nov 30 23:30 UTC,
+    // so toISOString() would return "2024-11-30T..." — off by one day.
+    // This helper always returns the correct local calendar day at UTC midnight.
+    function _toLocalMidnightISO(date) {
+        if (!date || isNaN(date.getTime())) return new Date().toISOString();
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}T00:00:00.000Z`;
+    }
+    // Safe local date display: always uses the LOCAL calendar date, not UTC.
+    // Replaces the buggy pattern: new Date(str).toISOString().split('T')[0]
+    function _localDateDisplay(dateStr) {
+        if (!dateStr) return '';
+        if (typeof getLocalDateString === 'function') return getLocalDateString(new Date(dateStr));
+        return new Date(dateStr).toISOString().split('T')[0];
+    }
     window.setPosFilterToday = function() {
         const input = document.getElementById('posFilterDate');
         if (input) { input.value = getLocalDateString(new Date());
