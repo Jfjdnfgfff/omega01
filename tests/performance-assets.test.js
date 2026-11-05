@@ -56,7 +56,9 @@ test('service worker precaches all six fonts for offline use', async () => {
 test('cache cleanup preserves other apps on the origin', async () => {
   const w = worker();
   await dispatch(w.listeners.activate);
-  assert.deepEqual(w.removed, ['omega-gym-v6']);
+  // With CACHE_NAME='omega-gym-v8', both v6 and v7 are old and removed;
+  // 'another-app' is kept because it doesn't belong to omega-gym.
+  assert.deepEqual(w.removed, ['omega-gym-v6', 'omega-gym-v7']);
 });
 
 test('cached content-hashed bundles do not trigger another network download', async () => {

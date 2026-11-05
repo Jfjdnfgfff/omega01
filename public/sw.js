@@ -1,6 +1,7 @@
 // OMEGA GYM - High-Speed Service Worker Cache Engine
 // تحسينات: معالجة الأخطاء، آلية Fallback، إدارة كاش محسنة للسرعة والاستقرار
-const CACHE_NAME = 'omega-gym-v7';
+// التحديث التلقائي: عند نشر نسخة جديدة يتم تحديث الكاش تلقائيًا
+const CACHE_NAME = 'omega-gym-v8';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -38,8 +39,6 @@ async function safeCachePut(cache, req, res) {
       await cache.put(req, res.clone());
     }
   } catch (err) {
-    // Ignore cache storage errors (quota exceeded, private mode, etc.)
-    // The app remains functional without caching this specific item.
     console.warn('[SW] Cache put skipped:', err?.message || err);
   }
 }
@@ -51,22 +50,27 @@ function shouldBypass(req) {
   if (url.pathname.startsWith('/@') || url.pathname.startsWith('/src/')) return true;
   if (url.pathname.includes('node_modules')) return true;
   if (url.search.includes('t=')) return true;
-  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname.endsWith('.e2b.app')) return true;
+  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') return true;
+  // Preview/sandbox environments bypass the SW so dev changes appear instantly
+  if (url.hostname.endsWith('.e2b.app')) return true;
   // Firebase / Google services are managed by the Firebase SDK, not the SW
   if (url.hostname.includes('firebaseio.com') ||
       url.hostname.includes('googleapis.com') ||
-      url.hostname.includes('accounts.google.com')) {
+      url.hostname.includes('accounts.google.com') ||
+      url.hostname.includes('firebasedatabase.app')) {
     return true;
   }
   return false;
 }
 
+// ------------------------------------------------------------------
+// Install: cache all static assets immediately, activate right away
+// ------------------------------------------------------------------
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
-        // Some assets may fail to cache; continue installation regardless
         console.warn('[SW] Install cache partial failure:', err?.message || err);
       });
     }).catch((err) => {
@@ -75,6 +79,9 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// ------------------------------------------------------------------
+// Activate: clean old caches, take control of all open tabs
+// ------------------------------------------------------------------
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -87,6 +94,45 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// ------------------------------------------------------------------
+// Message handler: app can request cache refresh or check version
+// ------------------------------------------------------------------
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+
+  // Command: force-refresh all cached static assets
+  if (event.data.type === 'REFRESH_CACHE') {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        for (const url of STATIC_ASSETS) {
+          try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (res && res.ok) await safeCachePut(cache, new Request(url), res);
+          } catch (e) { /* skip failed assets */ }
+        }
+        // Notify the client that refresh is done
+        if (event.source) {
+          event.source.postMessage({ type: 'CACHE_REFRESHED', version: CACHE_NAME });
+        }
+      }).catch((err) => {
+        console.warn('[SW] Cache refresh failed:', err?.message || err);
+      })
+    );
+    return;
+  }
+
+  // Command: return current cache version
+  if (event.data.type === 'GET_VERSION') {
+    if (event.source) {
+      event.source.postMessage({ type: 'SW_VERSION', version: CACHE_NAME });
+    }
+    return;
+  }
+});
+
+// ------------------------------------------------------------------
+// Fetch: serve cached content, update in background
+// ------------------------------------------------------------------
 self.addEventListener('fetch', (event) => {
   const req = event.request;
 
@@ -96,7 +142,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
 
   // -----------------------------------------------------------
-  // 1. HTML navigation: Network-First with Stale-While-Revalidate fallback
+  // 1. HTML navigation: Network-First with cache fallback
   // -----------------------------------------------------------
   if (req.mode === 'navigate') {
     event.respondWith(
@@ -108,14 +154,11 @@ self.addEventListener('fetch', (event) => {
               const cache = await caches.open(CACHE_NAME);
               await safeCachePut(cache, req, networkRes.clone());
             } catch (cacheErr) {
-              // Cache write failure is non-fatal; return network response anyway
               console.warn('[SW] Navigate cache write skipped:', cacheErr?.message || cacheErr);
             }
           }
           return networkRes;
         } catch (networkErr) {
-          // Network failed — try cache. Pass URL path strings (not Request objects)
-          // so that cache lookup works with both real Cache API and test mocks.
           try {
             const cached = await caches.match(req.url);
             if (cached) return cached;
@@ -136,10 +179,8 @@ self.addEventListener('fetch', (event) => {
 
   // -----------------------------------------------------------
   // 2. Content-hashed build assets (immutable): Cache First
-  // These never change at the same URL, so reuse cached copy without
-  // a redundant network download on every navigation.
   // -----------------------------------------------------------
-  if (url.origin === self.location.origin && /^\/assets\/.+-[\w-]{8,}\.(js|css)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /^\/assets\/.+[-][\w-]{8,}\.(js|css)$/.test(url.pathname)) {
     event.respondWith(
       (async () => {
         try {
@@ -158,7 +199,6 @@ self.addEventListener('fetch', (event) => {
             }
             return networkRes || offlineResponse();
           } catch (networkErr) {
-            // Network failed — return cached copy if available, else offline fallback
             const cached2 = await caches.match(req);
             if (cached2) return cached2;
             return offlineResponse();
@@ -177,9 +217,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // -----------------------------------------------------------
-  // 3. Static Assets (JS, CSS, Fonts, Images): Stale-While-Revalidate
-  // Return cached copy immediately (if any), update cache in background
-  // from network. If both fail, return an offline fallback.
+  // 3. Static Assets: Stale-While-Revalidate
   // -----------------------------------------------------------
   event.respondWith(
     (async () => {
@@ -198,14 +236,13 @@ self.addEventListener('fetch', (event) => {
             }
           }
         } catch (networkErr) {
-          // Network failed — will use cached copy if available
           console.warn('[SW] Static asset fetch failed, using cache:', networkErr?.message || networkErr);
         }
 
         if (cached) return cached;
         if (networkRes) return networkRes;
 
-        // Neither cache nor network available — fallback by content type
+        // Neither cache nor network — fallback by content type
         const accept = req.headers.get('accept') || '';
         if (accept.includes('text/html')) return offlineHtmlResponse();
         if (accept.includes('image/')) {

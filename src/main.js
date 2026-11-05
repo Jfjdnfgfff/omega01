@@ -169,10 +169,81 @@ window.addEventListener('unhandledrejection', (event) => {
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
 
   // High-Speed PWA Caching Engine Registration
+  // — Auto-refresh: when a new SW version is detected, it is activated
+  //   immediately and the page reloads so the user always sees the latest code.
+  // — Periodic check: the SW file is polled every 5 minutes for updates.
+  // — Cache refresh: the app can ask the SW to re-download static assets.
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {});
+    let _swRegistration = null;
+    let _updateCheckTimer = null;
+
+    function _notifyUpdate() {
+      try {
+        if (typeof window.showInfoToast === 'function') {
+          window.showInfoToast('جاري تحديث التطبيق...');
+        }
+      } catch (e) {}
+    }
+
+    function _handleSWUpdate(sw) {
+      if (!sw) return;
+      sw.addEventListener('updatefound', () => {
+        const newWorker = sw.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // A new SW is ready — tell it to skip waiting, then reload
+            _notifyUpdate();
+            newWorker.postMessage({ type: 'SKIP_WAITING' });
+            // Fallback reload after a short delay
+            setTimeout(() => { window.location.reload(); }, 1500);
+          }
+        });
+      });
+    }
+
+    function _checkForSWUpdate() {
+      if (_swRegistration) {
+        _swRegistration.update().catch(() => {});
+      }
+    }
+
+    // Listen for messages from the SW (version info, refresh confirmations)
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'CACHE_REFRESHED') {
+        console.log('[SW] Cache refreshed to version:', event.data.version);
+      }
     });
+
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
+        _swRegistration = reg;
+        _handleSWUpdate(reg);
+
+        // Periodic update check every 5 minutes
+        _updateCheckTimer = setInterval(_checkForSWUpdate, 5 * 60 * 1000);
+
+        // Also check when the page becomes visible again
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) _checkForSWUpdate();
+        });
+
+        // Request a cache refresh on first load
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'REFRESH_CACHE' });
+        }
+      }).catch(() => {});
+    });
+
+    // Expose manual refresh for the UI
+    window.refreshAppCache = function() {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'REFRESH_CACHE' });
+      }
+      _checkForSWUpdate();
+      // Also flush local data cache
+      try { if (window.localCache) window.localCache.flush(); } catch (e) {}
+    };
   }
 
   let firebaseConfig = {
@@ -835,6 +906,9 @@ window.addEventListener('unhandledrejection', (event) => {
     readSection: name => (window.appState && Array.isArray(window.appState[name])) ? window.appState[name] : [],
     readStats: () => (window.appState && window.appState.v2Stats) || null,
     readMeta: () => ({ salesHistoryComplete: !!window.salesHistoryComplete }),
+    // Faster auto-save: flush after just 300ms of inactivity instead of 900ms,
+    // so user edits are persisted to IndexedDB almost immediately.
+    flushDelayMs: 300,
     onError: err => console.warn('[LocalDB] isolated error:', (err && (err.message || err)) || err),
     onFlush: () => { if (window.refreshLocalCacheStatus) window.refreshLocalCacheStatus(); },
   });
@@ -1086,8 +1160,13 @@ window.addEventListener('unhandledrejection', (event) => {
     }
   })();
 
-  // Best-effort flush when the tab is hidden/closed so the last edits of a
-  // session are on disk for the next launch.
+  // ------------------------------------------------------------------
+  // AUTO-SAVE CACHE: Automatic persistence of the local data cache
+  // - Flush on tab hide/close (best-effort)
+  // - Flush on visibility change (going to background)
+  // - Periodic auto-flush every 30 seconds (safety net for any dirty data)
+  // - Flush on network reconnect (data may have changed offline)
+  // ------------------------------------------------------------------
   window.addEventListener('beforeunload', () => {
     try { window.localCache.flush(); } catch (e) {}
   });
@@ -1095,6 +1174,16 @@ window.addEventListener('unhandledrejection', (event) => {
     if (document.visibilityState === 'hidden') {
       try { window.localCache.flush(); } catch (e) {}
     }
+  });
+  // Periodic auto-flush every 30 seconds — catches any dirty data that
+  // the debounced 900ms timer might have missed, and ensures the cache
+  // is always up-to-date even during long sessions without tab switches.
+  setInterval(() => {
+    try { if (window.localCache) window.localCache.flush(); } catch (e) {}
+  }, 30000);
+  // Flush when the network comes back online (offline edits need saving)
+  window.addEventListener('online', () => {
+    try { if (window.localCache) window.localCache.flush(); } catch (e) {}
   });
 
   // Clean and sanitize payload to eliminate undefined fields
