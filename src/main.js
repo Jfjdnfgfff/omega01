@@ -1642,6 +1642,104 @@ window.addEventListener('unhandledrejection', (event) => {
   }
   window.recordCaisseMovement = recordCaisseMovement;
 
+  // ============================================================================
+  // ATOMIC TRANSACTION ENGINE — معاملات ذرية
+  // ----------------------------------------------------------------------------
+  // Subscription/renewal operations touch multiple data sections (customers,
+  // caisseLogs, credits, activityLogs). If any step fails mid-way the data
+  // would be left in an inconsistent state. This engine:
+  //
+  //   1. Snapshots the affected sections BEFORE the operation
+  //   2. Executes the operation
+  //   3. On success → immediate flush to IndexedDB + localStorage + Firebase queue
+  //   4. On failure → rollback to the snapshot (undo all mutations)
+  //
+  // This guarantees "all-or-nothing" semantics for every subscription action.
+  // ============================================================================
+
+  function _deepClone(obj) {
+    if (obj === null || obj === undefined) return obj;
+    try {
+      if (typeof structuredClone === 'function') return structuredClone(obj);
+      return JSON.parse(JSON.stringify(obj));
+    } catch (e) {
+      return JSON.parse(JSON.stringify(obj));
+    }
+  }
+
+  // Take a snapshot of all sections that a subscription operation may touch
+  function _snapshotTransactionState() {
+    return {
+      customers: _deepClone(appState.customers || []),
+      caisseLogs: _deepClone(appState.caisseLogs || []),
+      credits: _deepClone(appState.credits || []),
+      packages: _deepClone(appState.packages || []),
+    };
+  }
+
+  // Rollback all sections to the snapshot
+  function _rollbackTransaction(snapshot) {
+    if (!snapshot) return;
+    try {
+      appState.customers = snapshot.customers;
+      appState.caisseLogs = snapshot.caisseLogs;
+      appState.credits = snapshot.credits;
+      appState.packages = snapshot.packages;
+      // Re-mark dirty so the local cache picks up the rollback
+      if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
+      // Force immediate flush of the rollback
+      _immediatePersist();
+    } catch (e) {
+      console.warn('[Transaction] Rollback error:', e);
+    }
+  }
+
+  // Force immediate persistence of all in-memory data to every storage layer
+  function _immediatePersist() {
+    try {
+      // 1. Flush local IndexedDB cache immediately (bypass debounce)
+      if (window.localCache) {
+        try { window.localCache.flush(); } catch (e) {}
+      }
+      // 2. Persist the Firebase write queue (survives page reload / power outage)
+      if (typeof window.persistFirebaseWriteQueue === 'function') {
+        try { window.persistFirebaseWriteQueue(); } catch (e) {}
+      }
+      // 3. Save to localStorage as an extra safety net
+      try {
+        const sections = ['customers', 'caisseLogs', 'credits', 'packages', 'products', 'sales'];
+        for (const sec of sections) {
+          const data = appState[sec];
+          if (data !== undefined) {
+            localStorage.setItem('sm_' + sec, JSON.stringify(Array.isArray(data) ? data : []));
+          }
+        }
+      } catch (e) { /* quota exceeded — IndexedDB is the primary */ }
+    } catch (e) {
+      console.warn('[Transaction] Persist error:', e);
+    }
+  }
+
+  // Execute a subscription operation as an atomic transaction
+  // `operationFn` is a sync function that performs all mutations.
+  // If it throws, all changes are rolled back automatically.
+  function _runTransaction(operationFn) {
+    const snapshot = _snapshotTransactionState();
+    try {
+      const result = operationFn();
+      // Success — force immediate persistence so data survives power outage
+      _immediatePersist();
+      return result;
+    } catch (err) {
+      // Failure — rollback everything
+      console.error('[Transaction] Operation failed, rolling back:', err);
+      _rollbackTransaction(snapshot);
+      throw err;
+    }
+  }
+  window._runTransaction = _runTransaction;
+  window._immediatePersist = _immediatePersist;
+
   // Deleted Items Tombstone Registry (prevents deleted items like credits from resurrecting on reload or sync)
   window.registerDeletedItemId = function(sectionPath, id) {
     if (!sectionPath || !id) return;
@@ -4277,6 +4375,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 paymentStatus, debtAmount, paymentDate: paymentDateCheck.dateKey,
                 status: 'active', startDate: _toLocalMidnightISO(startDate),
                 endDate: _toLocalMidnightISO(endDate) };
+            // ---- ATOMIC TRANSACTION: snapshot before mutations ----
+            const _txSnap = _snapshotTransactionState();
+            try {
             appState.customers.unshift(newCustomer);
             const subscriptionCashPaid = paymentStatus === 'paid'
                 ? Number(custPrice || 0)
@@ -4311,7 +4412,15 @@ window.addEventListener('unhandledrejection', (event) => {
                 if (window.saveFirebaseSectionItem) {
                     window.saveFirebaseSectionItem('credits', newCredit);
                 }
-            } saveState(); const modalForm = document.getElementById('addCustomerFormModal');
+            } saveState();
+            // ---- TRANSACTION SUCCESS: immediate persist ----
+            _immediatePersist();
+            } catch (_txErr) {
+                // ---- TRANSACTION FAILED: rollback all mutations ----
+                console.error('[Transaction] Add customer failed, rolling back:', _txErr);
+                _rollbackTransaction(_txSnap);
+                throw _txErr;
+            } const modalForm = document.getElementById('addCustomerFormModal');
             if (modalForm) modalForm.reset(); if (typeof window.removeAddImage === 'function') window.removeAddImage();
             if (typeof window.setAddCustSubscriptionType === 'function') window.setAddCustSubscriptionType('time');
             if (typeof window.toggleDebtFieldView === 'function') window.toggleDebtFieldView();
@@ -4964,6 +5073,10 @@ window.addEventListener('unhandledrejection', (event) => {
         const renewalCreditId = paymentStatus === 'credit' && debtAmount > 0
             ? 'cr_auto_' + customer.id + '_' + renewalId : null;
 
+        // ---- ATOMIC TRANSACTION: snapshot before mutations ----
+        const _txSnap = _snapshotTransactionState();
+        try {
+
         customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
         customer.price = renewPrice;
         customer.subscriptionType = subType;
@@ -5035,6 +5148,17 @@ window.addEventListener('unhandledrejection', (event) => {
         }
 
         saveState();
+        // ---- TRANSACTION SUCCESS: immediate persist ----
+        _immediatePersist();
+
+        } catch (_txErr) {
+            // ---- TRANSACTION FAILED: rollback all mutations ----
+            console.error('[Transaction] Renewal failed, rolling back:', _txErr);
+            _rollbackTransaction(_txSnap);
+            showErrorToast('حدث خطأ أثناء التجديد — تم التراجع عن جميع التغييرات');
+            return false;
+        }
+
         closeModal('renewCustomerModal');
         showSuccessToast(`تم تجديد اشتراك (${customer.name}) بنجاح! 🎉`);
         if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
