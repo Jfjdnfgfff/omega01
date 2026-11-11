@@ -193,6 +193,56 @@ export function queryActivityLogs(index, options = {}) {
   return queryActivityLogPage(index, options).items;
 }
 
+// RTDB key ordering, numeric-aware ("10" after "2"), the same rule the sales
+// pager uses. Used to find the oldest key currently in memory, i.e. the
+// `endBefore()` cursor for the next older page.
+export function compareActivityLogKeys(a, b) {
+  const sa = String(a ?? '');
+  const sb = String(b ?? '');
+  const na = Number(sa);
+  const nb = Number(sb);
+  if (sa !== '' && sb !== '' && !Number.isNaN(na) && !Number.isNaN(nb)) {
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  }
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+/** The oldest RTDB key held by `items` (their `_rtdbKey`, else their id). */
+export function oldestActivityLogKey(items = EMPTY_LOGS) {
+  let oldest = null;
+  const list = Array.isArray(items) ? items : EMPTY_LOGS;
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i];
+    if (!item || typeof item !== 'object') continue;
+    const raw = item._rtdbKey ?? item.id;
+    if (raw === undefined || raw === null || raw === '') continue;
+    const key = String(raw);
+    if (oldest === null || compareActivityLogKeys(key, oldest) < 0) oldest = key;
+  }
+  return oldest;
+}
+
+/**
+ * Cursor bookkeeping after one older page came back from the cloud:
+ * `oldestKey` moves to the oldest fetched key (so the next request asks for
+ * strictly older rows), and `hasMore` becomes false on a short/empty page —
+ * the standard "fewer than a full page means the end" rule.
+ */
+export function advanceActivityLogCursor({ items = [], pageSize = 100, cursor = {} } = {}) {
+  const fetched = Array.isArray(items) ? items : [];
+  const size = Math.max(1, Math.floor(Number(pageSize) || 1));
+  const next = { oldestKey: cursor && cursor.oldestKey != null ? cursor.oldestKey : null, hasMore: true };
+  if (cursor && cursor.hasMore === false) next.hasMore = false;
+  if (!fetched.length) {
+    next.hasMore = false;
+    return next;
+  }
+  const oldestFetched = oldestActivityLogKey(fetched);
+  if (oldestFetched !== null) next.oldestKey = oldestFetched;
+  if (fetched.length < size) next.hasMore = false;
+  return next;
+}
+
 /**
  * Memoised index holder. `get(logs)` returns the cached index while the array
  * reference *and* the signature are unchanged, and rebuilds otherwise.
