@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// LifeOS — قواعد أمان Firestore
+// كل بيانات المستخدم معزولة داخل /users/{uid}/... ولا يقرأها ولا يعدّلها إلا صاحبها.
+// إخفاء الأزرار في الواجهة ليس حماية: هذه القواعد هي الحاجز الفعلي.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // حجم المستند معقول (يمنع إساءة الاستخدام)، والحقول الأساسية من نوع صحيح.
+    function saneDocument() {
+      return request.resource.data.size() < 300
+        && (request.resource.data.createdAt is timestamp || request.resource.data.createdAt is string);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid) && request.resource.data.size() < 300;
+      allow delete: if isOwner(uid);
+
+      // مجموعات البيانات: المهام، الأهداف، العادات، المشاريع، المعاملات، الملاحظات...
+      match /{collection}/{documentId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && saneDocument();
+        allow update: if isOwner(uid) && saneDocument();
+        allow delete: if isOwner(uid);
+      }
+    }
+
+    // أي مسار آخر: مرفوض.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
