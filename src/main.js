@@ -4907,7 +4907,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         if (mode === 'continue' && customer && customer.endDate) {
             const currentEnd = new Date(customer.endDate);
-            if (!isNaN(currentEnd.getTime()) && currentEnd > now) {
+            if (!isNaN(currentEnd.getTime())) {
                 if (startInput) startInput.value = getLocalDateString(currentEnd);
                 if (contBtn) {
                     contBtn.className = 'py-2 px-3 rounded-xl border border-blue-600 bg-blue-50 text-blue-700 text-xs font-bold transition-all text-center shadow-2xs';
