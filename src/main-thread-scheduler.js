@@ -162,3 +162,230 @@ export async function runChunked(items, worker, { budgetMs = 8, now = defaultNow
   }
   return results;
 }
+
+/**
+ * Classic trailing-edge debounce for search boxes and free-text filters.
+ * Coalesces rapid keystrokes so heavy filtering/DOM work runs once after the
+ * user pauses typing, cutting main-thread input blocking (INP Input Delay).
+ */
+export function debounce(fn, waitMs = 140) {
+  let timer = null;
+  let lastArgs = null;
+  let lastThis = undefined;
+  const delay = Math.max(0, Number(waitMs) || 0);
+
+  function invoke() {
+    timer = null;
+    const args = lastArgs;
+    const ctx = lastThis;
+    lastArgs = null;
+    lastThis = undefined;
+    return fn.apply(ctx, args || []);
+  }
+
+  function debounced(...args) {
+    lastArgs = args;
+    lastThis = this;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(invoke, delay);
+  }
+
+  debounced.cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    lastArgs = null;
+    lastThis = undefined;
+  };
+
+  debounced.flush = () => {
+    if (timer === null) return undefined;
+    clearTimeout(timer);
+    return invoke();
+  };
+
+  debounced.pending = () => timer !== null;
+  return debounced;
+}
+
+/**
+ * Leading + trailing throttle for live numeric calculators, quantity inputs,
+ * and continuous UI updates. Gives immediate feedback on the first event, then
+ * caps execution to at most once every `intervalMs` while guaranteeing the
+ * final value is always processed on the trailing edge.
+ */
+export function throttle(fn, intervalMs = 60, { leading = true, trailing = true, now = defaultNow } = {}) {
+  const wait = Math.max(0, Number(intervalMs) || 0);
+  let lastInvokeTime = -Infinity;
+  let timer = null;
+  let pendingArgs = null;
+  let pendingThis = undefined;
+
+  function invoke(time, ctx, args) {
+    lastInvokeTime = time;
+    pendingArgs = null;
+    pendingThis = undefined;
+    return fn.apply(ctx, args || []);
+  }
+
+  function trailingEdge() {
+    timer = null;
+    if (trailing && pendingArgs !== null) {
+      invoke(now(), pendingThis, pendingArgs);
+    } else {
+      pendingArgs = null;
+      pendingThis = undefined;
+    }
+  }
+
+  function throttled(...args) {
+    const current = now();
+    if (lastInvokeTime === -Infinity && !leading) {
+      lastInvokeTime = current;
+    }
+    const remaining = wait - (current - lastInvokeTime);
+    pendingArgs = args;
+    pendingThis = this;
+
+    if (remaining <= 0 || remaining > wait) {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      return invoke(current, pendingThis, pendingArgs);
+    }
+    if (timer === null && trailing) {
+      timer = setTimeout(trailingEdge, remaining);
+    }
+    return undefined;
+  }
+
+  throttled.cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    pendingArgs = null;
+    pendingThis = undefined;
+    lastInvokeTime = -Infinity;
+  };
+
+  throttled.flush = () => {
+    if (timer === null) return undefined;
+    clearTimeout(timer);
+    timer = null;
+    if (pendingArgs !== null) {
+      return invoke(now(), pendingThis, pendingArgs);
+    }
+    return undefined;
+  };
+
+  return throttled;
+}
+
+/**
+ * Frame-aligned throttle (`requestAnimationFrame`) for scroll, pointer-drag,
+ * and resize handlers that read/write layout properties.
+ */
+export function rafThrottle(fn) {
+  let frameId = null;
+  let timerId = null;
+  let latestArgs = null;
+  let latestThis = undefined;
+
+  function run() {
+    frameId = null;
+    timerId = null;
+    const args = latestArgs;
+    const ctx = latestThis;
+    latestArgs = null;
+    latestThis = undefined;
+    fn.apply(ctx, args || []);
+  }
+
+  function wrapped(...args) {
+    latestArgs = args;
+    latestThis = this;
+    if (frameId !== null || timerId !== null) return;
+    const raf = globalScope.requestAnimationFrame;
+    if (typeof raf === 'function') {
+      frameId = raf(run);
+    } else {
+      timerId = setTimeout(run, 16);
+    }
+  }
+
+  wrapped.cancel = () => {
+    if (frameId !== null && typeof globalScope.cancelAnimationFrame === 'function') {
+      globalScope.cancelAnimationFrame(frameId);
+    }
+    if (timerId !== null) clearTimeout(timerId);
+    frameId = null;
+    timerId = null;
+    latestArgs = null;
+    latestThis = undefined;
+  };
+
+  wrapped.pending = () => frameId !== null || timerId !== null;
+
+  return wrapped;
+}
+
+/**
+ * Schedule heavy post-click work (table/list rendering) right AFTER the
+ * browser paints the immediate visual state change (active tab, modal shell,
+ * view switch), keeping INP well under 100 ms. Keyed slots ensure rapid clicks
+ * supersede stale pending work rather than piling up tasks.
+ */
+export function createInteractiveDeferrer({ timeout = 120 } = {}) {
+  const pendingByKey = new Map();
+
+  function schedule(key, callback) {
+    const slot = String(key || 'default');
+    const prevCancel = pendingByKey.get(slot);
+    if (typeof prevCancel === 'function') prevCancel();
+
+    let done = false;
+    let rafId = 0;
+    let taskTimer = null;
+    let safetyTimer = null;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (taskTimer !== null) clearTimeout(taskTimer);
+      if (safetyTimer !== null) clearTimeout(safetyTimer);
+      if (pendingByKey.get(slot) === cancel) pendingByKey.delete(slot);
+      callback();
+    };
+
+    const cancel = () => {
+      done = true;
+      if (rafId && typeof globalScope.cancelAnimationFrame === 'function') {
+        globalScope.cancelAnimationFrame(rafId);
+      }
+      if (taskTimer !== null) clearTimeout(taskTimer);
+      if (safetyTimer !== null) clearTimeout(safetyTimer);
+      if (pendingByKey.get(slot) === cancel) pendingByKey.delete(slot);
+    };
+
+    pendingByKey.set(slot, cancel);
+    const raf = globalScope.requestAnimationFrame;
+    if (typeof raf === 'function') {
+      // rAF runs right before paint; setTimeout(0) inside rAF runs right AFTER
+      // paint — the standard browser pattern to minimize INP presentation delay.
+      rafId = raf(() => {
+        taskTimer = setTimeout(finish, 0);
+      });
+      if (timeout > 0) safetyTimer = setTimeout(finish, timeout);
+    } else {
+      taskTimer = setTimeout(finish, 0);
+    }
+    return cancel;
+  }
+
+  function cancelAll() {
+    for (const cancel of pendingByKey.values()) cancel();
+    pendingByKey.clear();
+  }
+
+  return { schedule, cancelAll, get size() { return pendingByKey.size; } };
+}
+

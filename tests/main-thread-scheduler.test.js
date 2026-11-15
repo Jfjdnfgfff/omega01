@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTimeSliceRunner, runChunked, yieldToMain } from '../src/main-thread-scheduler.js';
+import {
+  createTimeSliceRunner,
+  runChunked,
+  yieldToMain,
+  debounce,
+  throttle,
+  rafThrottle,
+  createInteractiveDeferrer,
+} from '../src/main-thread-scheduler.js';
 
 test('the slice runner yields once the time budget is spent, not once per step', async () => {
   // Fake clock: every step costs 3 ms. Budget 6 ms => a yield after every
@@ -106,3 +114,59 @@ test('afterNextPaint never runs the callback twice', async () => {
   await new Promise(resolve => setTimeout(resolve, 60));
   assert.equal(ran, 1);
 });
+
+test('debounce coalesces rapid input bursts into a single trailing call and supports flush/cancel', async () => {
+  const calls = [];
+  const fn = debounce(value => calls.push(value), 25);
+  fn('a');
+  fn('ab');
+  fn('abc');
+  assert.equal(fn.pending(), true);
+  assert.deepEqual(calls, []);
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal(fn.pending(), false);
+  assert.deepEqual(calls, ['abc']);
+
+  fn('x');
+  fn.flush();
+  assert.deepEqual(calls, ['abc', 'x']);
+
+  fn('cancelled');
+  fn.cancel();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(calls, ['abc', 'x']);
+});
+
+test('throttle runs leading immediately and coalesces burst into one trailing update with latest args', async () => {
+  const calls = [];
+  const fn = throttle(value => calls.push(value), 35);
+  fn(1);
+  fn(2);
+  fn(3);
+  assert.deepEqual(calls, [1], 'leading call runs immediately');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.deepEqual(calls, [1, 3], 'trailing call receives latest value');
+});
+
+test('rafThrottle coalesces multiple high-frequency events into one frame callback', async () => {
+  const seen = [];
+  const fn = rafThrottle(v => seen.push(v));
+  fn(10);
+  fn(20);
+  fn(30);
+  assert.equal(fn.pending(), true);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(seen, [30]);
+});
+
+test('createInteractiveDeferrer cancels superseded click tasks on the same slot', async () => {
+  const seen = [];
+  const defer = createInteractiveDeferrer({ timeout: 10 });
+  defer.schedule('filterTab', () => seen.push('first'));
+  defer.schedule('filterTab', () => seen.push('second'));
+  defer.schedule('otherSlot', () => seen.push('other'));
+  await new Promise(resolve => setTimeout(resolve, 45));
+  assert.deepEqual(seen.sort(), ['other', 'second']);
+  assert.equal(defer.size, 0);
+});
+

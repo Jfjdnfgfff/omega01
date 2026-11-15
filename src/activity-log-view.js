@@ -1,4 +1,5 @@
 import { createActivityLogIndexer, queryActivityLogPage } from './activity-log-index.js';
+import { debounce, afterNextPaint } from './main-thread-scheduler.js';
 
 // Cards are heavy markup, so a page of 100 keeps a 500-row log responsive on a
 // phone while search-as-you-type re-renders only one page. The rest is one tap
@@ -18,17 +19,25 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
     }
     window.showMoreActivityLogs = showMoreActivityLogs;
 
+    const handleActivityLogSearchInput = debounce(() => {
+        renderActivityLogModal();
+    }, 140);
+    window.handleActivityLogSearchInput = handleActivityLogSearchInput;
+
     async function openActivityLogModal() {
-        ensureSeedActivityLogs();
         const modal = document.getElementById('activityLogModal');
         if (modal) {
             modal.classList.add('active');
-            renderActivityLogModal();
         }
-        if (window.lazyLoadSection) {
-            await window.lazyLoadSection('activityLogs');
+        afterNextPaint(() => {
+            ensureSeedActivityLogs();
             renderActivityLogModal();
-        }
+            if (window.lazyLoadSection) {
+                Promise.resolve(window.lazyLoadSection('activityLogs'))
+                    .then(() => renderActivityLogModal())
+                    .catch(() => {});
+            }
+        }, { timeout: 120 });
     }
     window.openActivityLogModal = openActivityLogModal;
 
@@ -234,7 +243,7 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
             system: { label: 'النظام', color: 'bg-slate-50 text-slate-700 border-slate-200', icon: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' }
         };
 
-        container.innerHTML = logs.map(item => {
+        let html = logs.map(item => {
             const safeId = escapeHTML(item.id || '');
             const cfg = typeConfig[item.type] || typeConfig.system;
             const dateObj = new Date(item.timestamp || Date.now());
@@ -282,11 +291,14 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
 
         if (page.hasMore) {
             const remaining = page.matched - logs.length;
-            container.innerHTML += `
+            html += `
                 <button type="button" onclick="window.showMoreActivityLogs && window.showMoreActivityLogs()" class="w-full py-2.5 px-3 rounded-2xl bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 text-xs font-black transition-colors shadow-2xs cursor-pointer">
                     عرض المزيد (${remaining.toLocaleString()} عملية متبقية)
                 </button>
             `;
+        }
+        if (container.innerHTML !== html) {
+            container.innerHTML = html;
         }
     }
     window.renderActivityLogModal = renderActivityLogModal;
@@ -323,5 +335,5 @@ export function createActivityLogView({ getState, ensureSeedActivityLogs, escape
     window.clearAllActivityLogs = clearAllActivityLogs;
 
 
-return { openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail, showMoreActivityLogs };
+return { openActivityLogModal, renderActivityLogModal, handleActivityLogSearchInput, deleteActivityLog, clearAllActivityLogs, toggleActivityLogDetail, showMoreActivityLogs };
 }
