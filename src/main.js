@@ -2,9 +2,34 @@ import { createRealtimeSections, readSectionWithLegacy } from './realtime-sectio
 import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABLE_SECTIONS, compareRtdbKeys, reconcileMode, idsToRemoveOnReconcile, shouldRestoreSalesHistoryComplete } from './local-db.js';
 import { createListenerRegistry } from './listener-registry.js';
 import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
-import { createTimeSliceRunner, afterNextPaint, whenIdle } from './main-thread-scheduler.js';
+import { createTimeSliceRunner, afterNextPaint, whenIdle, debounce, throttle, rafThrottle, createInteractiveDeferrer } from './main-thread-scheduler.js';
 import { collectFemaleSessionIncome, sessionActivityLabel } from './female-income.js';
 import { createSearchIndex } from './search-index.js';
+
+// متتبّع التفاعل الفوري لتخفيض مؤشر INP إلى أقل من 100ms:
+// يسمح لمعالجات النقر بتحديث الحالة البصرية فوراً (فتح نافذة، تفعيل تبويب، تبديل شاشة)
+// ثم تأجيل بناء الجداول والقوائم الثقيلة إلى ما بعد رسم الإطار الأول (Next Paint)،
+// مع إبقاء الاستدعاءات البرمجية المباشرة متزامنة تماماً.
+const interactiveDeferrer = createInteractiveDeferrer({ timeout: 100 });
+window.__omegaInUserClick = false;
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  const markInteractiveStart = () => {
+    window.__omegaInUserClick = true;
+    const clearFlag = () => { window.__omegaInUserClick = false; };
+    if (typeof queueMicrotask === 'function') queueMicrotask(clearFlag);
+    else Promise.resolve().then(clearFlag);
+  };
+  document.addEventListener('click', markInteractiveStart, true);
+}
+function runOrDeferInteractive(slot, fn) {
+  if (typeof fn !== 'function') return;
+  if (window.__omegaInUserClick && window.OMEGA_DEFER_INTERACTIVE !== false) {
+    interactiveDeferrer.schedule(slot, fn);
+  } else {
+    fn();
+  }
+}
+window.runOrDeferInteractive = runOrDeferInteractive;
 
 // فهرس البحث السريع للمشتركين والمنتجات (مثيل واحد للتطبيق)
 // يُبنى من بيانات appState ويُحدّث تلقائياً عند تغيّر أي من القسمين.
@@ -24,13 +49,20 @@ function reindexSearchSections() {
 window.__reindexSearchSections = reindexSearchSections;
 
 // دوال اختصار سريعة للبحث في العملاء والمنتجات (للاستخدام من واجهة المستخدم)
+function resolveSearchLimit(limitArg, fallback = 50) {
+  if (typeof limitArg === 'number' && Number.isFinite(limitArg)) return limitArg;
+  if (limitArg && typeof limitArg === 'object' && Number.isFinite(Number(limitArg.limit))) {
+    return Number(limitArg.limit);
+  }
+  return fallback;
+}
 window.searchCustomersFast = function(query, limit) {
   if (!window.omegaSearch) return [];
-  return window.omegaSearch.searchCustomers(String(query || ''), { limit: limit || 50 });
+  return window.omegaSearch.searchCustomers(String(query || ''), { limit: resolveSearchLimit(limit, 50) });
 };
 window.searchProductsFast = function(query, limit) {
   if (!window.omegaSearch) return [];
-  return window.omegaSearch.searchProducts(String(query || ''), { limit: limit || 50 });
+  return window.omegaSearch.searchProducts(String(query || ''), { limit: resolveSearchLimit(limit, 50) });
 };
 window.countCustomersFast = function(query) {
   if (!window.omegaSearch) return 0;
@@ -3187,6 +3219,7 @@ window.addEventListener('unhandledrejection', (event) => {
       appState.activityLogs = ensureArray(appState.activityLogs);
       
       // Synchronous immediate local write + debounced safety
+      window.__omegaDataVersion = (window.__omegaDataVersion || 0) + 1;
       saveLocalStorageImmediate();
       scheduleLocalStorageSave();
       // Mirror the working set into the local IndexedDB cache (debounced)
@@ -3207,7 +3240,9 @@ window.addEventListener('unhandledrejection', (event) => {
       }, 500);
       if (typeof window.triggerGoogleDriveAutoSync === 'function') {
         window.triggerGoogleDriveAutoSync(); }
-      if (typeof render === 'function') render();
+      if (typeof render === 'function') {
+        runOrDeferInteractive('saveStateRender', () => render());
+      }
       } catch (err) { console.warn('saveState isolated error:', err); }
     }
 
@@ -3233,58 +3268,73 @@ window.addEventListener('unhandledrejection', (event) => {
 
         if (view === 'products') {
             if (pv) { pv.classList.remove('hidden'); pv.classList.add('flex'); }
-            if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('products');
             const sellDateElem = document.getElementById('sellDate');
             if (sellDateElem && !sellDateElem.value) {
                 sellDateElem.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
             }
             window.scrollTo(0, 0);
+            runOrDeferInteractive('toggleView', () => {
+                if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('products');
+                if (typeof window.render === 'function') window.render();
+            });
+            return;
         } else if (view === 'expenses') {
             if (ev) {
                 ev.classList.remove('hidden');
                 ev.classList.add('flex');
-                if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('expenses');
                 const expDate = document.getElementById('expenseDateView');
                 if (expDate && !expDate.value) {
                     expDate.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
                 }
-                if (typeof window.renderExpensesListView === 'function') {
-                    window.renderExpensesListView();
-                }
                 window.scrollTo(0, 0);
+                runOrDeferInteractive('toggleView', () => {
+                    if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('expenses');
+                    if (typeof window.renderExpensesListView === 'function') window.renderExpensesListView();
+                    if (typeof window.render === 'function') window.render();
+                });
+                return;
             }
         } else if (view === 'customers') {
             if (dv) { dv.classList.remove('hidden'); dv.classList.add('flex'); }
-            if (typeof window.lazyLoadSection === 'function') {
-                ['customers', 'caisseLogs', 'credits'].forEach(section => window.lazyLoadSection(section));
-            }
             const subSection = document.getElementById('subscribers-section');
             if (subSection) {
                 subSection.scrollIntoView({ behavior: 'auto' });
             } else {
                 window.scrollTo(0, 0);
             }
+            runOrDeferInteractive('toggleView', () => {
+                if (typeof window.lazyLoadSection === 'function') {
+                    ['customers', 'caisseLogs', 'credits'].forEach(section => window.lazyLoadSection(section));
+                }
+                if (typeof window.render === 'function') window.render();
+            });
+            return;
         } else if (view === 'credits') {
             if (crv) {
                 crv.classList.remove('hidden');
                 crv.classList.add('flex');
-                if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('credits');
-                if (typeof renderCreditsList === 'function') renderCreditsList();
                 window.scrollTo(0, 0);
+                runOrDeferInteractive('toggleView', () => {
+                    if (typeof window.lazyLoadSection === 'function') window.lazyLoadSection('credits');
+                    if (typeof renderCreditsList === 'function') renderCreditsList();
+                    if (typeof window.render === 'function') window.render();
+                });
+                return;
             }
         } else if (view === 'caisse') {
             if (caisseV) {
-                if (typeof window.lazyLoadSection === 'function') {
-                    // The caisse aggregates live cash movement from every finance section.
-                    ['caisseLogs', 'sales', 'customers', 'credits', 'packages', 'quickSessions', 'expenses',
-                     'staffPayouts', 'suppliers', 'supplierTransactions'].forEach(section => window.lazyLoadSection(section));
-                }
                 const openCaisseInternal = () => {
                     caisseV.classList.remove('hidden');
                     caisseV.classList.add('flex');
-                    if (typeof initCaisseView === 'function') initCaisseView();
                     window.scrollTo(0, 0);
-                    scheduleRender();
+                    runOrDeferInteractive('toggleView', () => {
+                        if (typeof window.lazyLoadSection === 'function') {
+                            ['caisseLogs', 'sales', 'customers', 'credits', 'packages', 'quickSessions', 'expenses',
+                             'staffPayouts', 'suppliers', 'supplierTransactions'].forEach(section => window.lazyLoadSection(section));
+                        }
+                        if (typeof initCaisseView === 'function') initCaisseView();
+                        scheduleRender();
+                    });
                 };
                 if (appState.hideFinances) {
                     promptWithPassword({
@@ -3299,16 +3349,15 @@ window.addEventListener('unhandledrejection', (event) => {
                 } else {
                     openCaisseInternal();
                 }
+                return;
             }
         } else {
             if (dv) { dv.classList.remove('hidden'); dv.classList.add('flex'); }
             window.scrollTo(0, 0);
         }
-        // Navigation should not wait for the global data-update debounce. The
-        // renderer already batches work into the next animation frame, so draw
-        // the newly visible view immediately while realtime updates remain
-        // debounced through scheduleRender().
-        if (typeof window.render === 'function') window.render();
+        runOrDeferInteractive('toggleView', () => {
+            if (typeof window.render === 'function') window.render();
+        });
     }
     window.toggleView = toggleView; function openBulkImportModal() {
         promptWithPassword({ title: 'استيراد بالباركود',
@@ -3377,16 +3426,19 @@ window.addEventListener('unhandledrejection', (event) => {
             const dateInput = document.getElementById('staffPayoutDate');
             if (dateInput && !dateInput.value) {
                 dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
-            } if (typeof renderStaffPayouts === 'function') {
-                renderStaffPayouts(); } if (typeof renderSuppliersList === 'function') {
-                renderSuppliersList(); } } else if (id === 'expensesModal') {
+            }
+            runOrDeferInteractive('openModal:staffPayouts', () => {
+                if (typeof renderStaffPayouts === 'function') renderStaffPayouts();
+                if (typeof renderSuppliersList === 'function') renderSuppliersList();
+            });
+        } else if (id === 'expensesModal') {
             const dateInput = document.getElementById('expenseDateModal');
             if (dateInput && !dateInput.value) {
                 dateInput.value = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().split('T')[0];
             }
-            if (typeof renderExpensesListModal === 'function') {
-                renderExpensesListModal();
-            }
+            runOrDeferInteractive('openModal:expenses', () => {
+                if (typeof renderExpensesListModal === 'function') renderExpensesListModal();
+            });
         } }
     function closeModal(id) { if (!id) return;
         const el = document.getElementById(id);
@@ -3693,10 +3745,16 @@ window.addEventListener('unhandledrejection', (event) => {
         const paymentDateInput = document.getElementById('quickSessPaymentDate');
         const todayKey = typeof getLocalDateString === 'function' ? getLocalDateString(new Date()) : new Date().toISOString().slice(0, 10);
         if (paymentDateInput) { paymentDateInput.value = todayKey; paymentDateInput.max = todayKey; }
-        if (typeof window.renderQuickSessClientsUI === 'function') window.renderQuickSessClientsUI();
-        if (typeof window.renderQuickSessionHistory === 'function') window.renderQuickSessionHistory();
         if (typeof window.openModal === 'function') window.openModal('quickSessionModal');
-    }; window.onQuickSessClientCountChange = function(val) {
+        if (typeof window.renderQuickSessClientsUI === 'function') window.renderQuickSessClientsUI();
+        runOrDeferInteractive('openModal:quickSessionHistory', () => {
+            if (typeof window.renderQuickSessionHistory === 'function') window.renderQuickSessionHistory();
+        });
+    };
+    window.onQuickSessClientCountInput = debounce((val) => {
+        if (typeof window.onQuickSessClientCountChange === 'function') window.onQuickSessClientCountChange(val);
+    }, 120);
+    window.onQuickSessClientCountChange = function(val) {
         if (!Array.isArray(window.quickSessClientsData)) {
             window.quickSessClientsData = [window.quickSessNewClient()];
         } if (val === '' || val === null || val === undefined) {
@@ -3728,6 +3786,15 @@ window.addEventListener('unhandledrejection', (event) => {
         if (window.quickSessClientsData[index]) {
             window.quickSessClientsData[index].price = val;
             window.calcQuickSessTotal(); } };
+    const _throttledCalcQuickSessTotal = throttle(() => {
+        if (typeof window.calcQuickSessTotal === 'function') window.calcQuickSessTotal();
+    }, 60);
+    window.updateQuickSessClientPriceInput = function(index, val) {
+        if (window.quickSessClientsData[index]) {
+            window.quickSessClientsData[index].price = val;
+            _throttledCalcQuickSessTotal();
+        }
+    };
     window.calcQuickSessTotal = function() { let total = 0;
         let hasAnyPrice = false; (window.quickSessClientsData || []).forEach(c => {
             if (c.price !== '' && c.price !== null && c.price !== undefined) {
@@ -3777,7 +3844,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 </div>
                 <div>
                   <label class="block text-[11px] font-bold text-slate-800 mb-1">السعر / المبلغ للزبون #${idx + 1} (دج)*</label>
-                  <input type="number" min="0" value="${c.price !== undefined && c.price !== null ? c.price : ''}" oninput="updateQuickSessClientPrice(${idx}, this.value)" placeholder="أدخل السعر بالدينار" class="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-xs font-bold text-slate-900 placeholder:text-slate-400 bg-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none text-center transition-all">
+                  <input type="number" min="0" value="${c.price !== undefined && c.price !== null ? c.price : ''}" oninput="updateQuickSessClientPriceInput(${idx}, this.value)" placeholder="أدخل السعر بالدينار" class="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-xs font-bold text-slate-900 placeholder:text-slate-400 bg-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none text-center transition-all">
                 </div>
               </div>
             `; }); container.innerHTML = html;
@@ -3888,10 +3955,15 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         // Guarded call: this handler is also reachable from inline HTML and from
         // environments where the module scope is not the global object.
-        if (typeof window.renderFemaleCoachModal === 'function') window.renderFemaleCoachModal();
-        if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
+        runOrDeferInteractive('openModal:femaleCoach', () => {
+            if (typeof window.renderFemaleCoachModal === 'function') window.renderFemaleCoachModal();
+            if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
+        });
     };
     window.openFemaleCommissionModal = window.openFemaleCoachModal;
+    window.handleFemaleCoachSearchInput = debounce(() => {
+        if (typeof window.renderFemaleCoachModal === 'function') window.renderFemaleCoachModal();
+    }, 140);
 
     window.renderFemaleCoachModal = function() {
         if (!appState.customers) appState.customers = [];
@@ -4274,6 +4346,9 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         if (typeof window.updateAddCustomerPaymentDateHint === 'function') window.updateAddCustomerPaymentDateHint();
     };
+    window.updateAddCustomerPaymentDateHintThrottled = throttle(() => {
+        if (typeof window.updateAddCustomerPaymentDateHint === 'function') window.updateAddCustomerPaymentDateHint();
+    }, 80);
     window.updateAddCustomerPaymentDateHint = function() {
         const hint = document.getElementById('addCustPaymentDateHint');
         if (!hint) return;
@@ -5349,8 +5424,8 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         const catDetails = getExpenseCategoryDetails(category);
         window.expenseCaisseToast(amount, isoDate, catDetails.label, fundSource);
-        if (window.renderExpensesListModal) window.renderExpensesListModal();
-        if (window.renderExpensesListView) window.renderExpensesListView();
+        if (window.renderExpensesListModal && isModalOpen('expensesModal')) window.renderExpensesListModal();
+        if (window.renderExpensesListView && isVisible('expensesView')) window.renderExpensesListView();
         if (typeof window.refreshCaisseIfVisible === 'function') window.refreshCaisseIfVisible();
         render(); // Update totals
     }); function renderExpensesListModal() {
@@ -5438,9 +5513,11 @@ window.addEventListener('unhandledrejection', (event) => {
             if (monthlyContainer) monthlyContainer.classList.add('hidden');
             if (yearSelectWrapper) yearSelectWrapper.classList.add('hidden');
         }
-        if (typeof window.renderExpensesDetailedTotals === 'function') {
-            window.renderExpensesDetailedTotals();
-        }
+        runOrDeferInteractive('expensesDetailedTab', () => {
+            if (typeof window.renderExpensesDetailedTotals === 'function') {
+                window.renderExpensesDetailedTotals();
+            }
+        });
     };
 
     window.changeExpensesDetailedYear = function(year) {
@@ -5941,111 +6018,121 @@ window.addEventListener('unhandledrejection', (event) => {
         }
     };
 
-    window.renderExpensesListView = function() {
+    let _expensesStatsCacheSig = null;
+    window.handleExpenseSearchInput = debounce(() => {
+        appState.expensesViewPage = 1;
+        if (typeof window.renderExpensesListView === 'function') {
+            window.renderExpensesListView({ listOnly: true });
+        }
+    }, 140);
+    window.loadMoreExpensesView = function() {
+        appState.expensesViewPage = (appState.expensesViewPage || 1) + 1;
+        if (typeof window.renderExpensesListView === 'function') {
+            window.renderExpensesListView({ listOnly: true });
+        }
+    };
+    window.renderExpensesListView = function(options = {}) {
         const container = document.getElementById('expensesListView');
         if (!container) return; const allExpenses = Array.isArray(appState.expenses) ? appState.expenses : [];
         const now = new Date(); const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
-        // 1. Calculate stats
-        let todayTotal = 0; let weekTotal = 0;
-        let monthTotal = 0; let yearTotal = 0;
-        let grandTotal = 0; let dailyTotal = 0;
-        let dailyMonth = 0; let dailyYear = 0;
-        let homeTotal = 0; let homeMonth = 0;
-        let homeYear = 0; let fixedTotal = 0;
-        let fixedMonth = 0; let fixedYear = 0;
-        let generalTotal = 0; let generalMonth = 0;
-        let generalYear = 0; const oneWeekAgo = new Date();
-        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-        allExpenses.forEach(ex => { const amt = Number(ex.amount) || 0;
-            grandTotal += amt; const d = new Date(ex.date);
-            const cat = getExpenseCategory(ex);
-            if (d.toDateString() === now.toDateString()) {
-                todayTotal += amt; } if (d >= oneWeekAgo) {
-                weekTotal += amt; } if (d.getFullYear() === currentYear) {
-                yearTotal += amt; if (cat === 'daily') dailyYear += amt;
-                else if (cat === 'home') homeYear += amt;
-                else if (cat === 'fixed_monthly') fixedYear += amt;
-                else generalYear += amt; if (d.getMonth() === currentMonth) {
-                    monthTotal += amt; if (cat === 'daily') dailyMonth += amt;
-                    else if (cat === 'home') homeMonth += amt;
-                    else if (cat === 'fixed_monthly') fixedMonth += amt;
-                    else generalMonth += amt; }
-            } if (cat === 'daily') dailyTotal += amt;
-            else if (cat === 'home') homeTotal += amt;
-            else if (cat === 'fixed_monthly') fixedTotal += amt;
-            else generalTotal += amt; });
-        // Update Statistics in DOM
-        // Live caisse balance for today, so the user sees each expense leaving the till immediately.
-        try {
-            const netElem = document.getElementById('expensesCaisseNetToday');
-            if (netElem && typeof window.calculateCaisseDetails === 'function') {
-                const cd = window.calculateCaisseDetails(getLocalDateString(new Date()));
-                netElem.innerHTML = formatMoney(cd.netCash);
-                const outElem = document.getElementById('expensesCaisseOutToday');
-                if (outElem) outElem.innerHTML = formatMoney(cd.totalExpenses);
+        const todayKey = getLocalDateString(now);
+        const monthPrefix = todayKey.substring(0, 7);
+        const yearPrefix = todayKey.substring(0, 4);
+        const detState = window.expensesDetailedState || {};
+        const statsSig = `${window.__omegaDataVersion || 0}|${allExpenses.length}|${todayKey}|${appState.hideFinances}|${detState.year}|${detState.tab}|${detState.filterMonth}|${detState.filterYear}`;
+        // 1. Calculate stats & detailed tables only when underlying data/date/tab changed (skip on pure search typing)
+        if (!options.listOnly || _expensesStatsCacheSig !== statsSig) {
+            _expensesStatsCacheSig = statsSig;
+            let todayTotal = 0; let weekTotal = 0;
+            let monthTotal = 0; let yearTotal = 0;
+            let grandTotal = 0; let dailyTotal = 0;
+            let dailyMonth = 0; let dailyYear = 0;
+            let homeTotal = 0; let homeMonth = 0;
+            let homeYear = 0; let fixedTotal = 0;
+            let fixedMonth = 0; let fixedYear = 0;
+            let generalTotal = 0; let generalMonth = 0;
+            let generalYear = 0;
+            const oneWeekAgoDate = new Date(now);
+            oneWeekAgoDate.setDate(oneWeekAgoDate.getDate() - 7);
+            const oneWeekAgoKey = getLocalDateString(oneWeekAgoDate);
+            for (let i = 0; i < allExpenses.length; i++) {
+                const ex = allExpenses[i];
+                if (!ex) continue;
+                const amt = Number(ex.amount) || 0;
+                grandTotal += amt;
+                const exKey = getLocalDateString(ex.date);
+                const cat = getExpenseCategory(ex);
+                if (exKey === todayKey) todayTotal += amt;
+                if (exKey && exKey >= oneWeekAgoKey) weekTotal += amt;
+                if (exKey && exKey.substring(0, 4) === yearPrefix) {
+                    yearTotal += amt;
+                    if (cat === 'daily') dailyYear += amt;
+                    else if (cat === 'home') homeYear += amt;
+                    else if (cat === 'fixed_monthly') fixedYear += amt;
+                    else generalYear += amt;
+                    if (exKey.substring(0, 7) === monthPrefix) {
+                        monthTotal += amt;
+                        if (cat === 'daily') dailyMonth += amt;
+                        else if (cat === 'home') homeMonth += amt;
+                        else if (cat === 'fixed_monthly') fixedMonth += amt;
+                        else generalMonth += amt;
+                    }
+                }
+                if (cat === 'daily') dailyTotal += amt;
+                else if (cat === 'home') homeTotal += amt;
+                else if (cat === 'fixed_monthly') fixedTotal += amt;
+                else generalTotal += amt;
             }
-        } catch (e) { console.warn('expenses caisse card note:', e); }
-        const todayElem = document.getElementById('todayExpenses');
-        const weekElem = document.getElementById('weekExpenses');
-        const monthElem = document.getElementById('monthExpenses');
-        const yearStatsElem = document.getElementById('yearExpensesStats');
-        const totalStatsElem = document.getElementById('totalExpensesStats');
-        const dailyTotalElem = document.getElementById('dailyExpensesTotal');
-        const dailyMonthElem = document.getElementById('dailyExpensesMonth');
-        const dailyYearElem = document.getElementById('dailyExpensesYear');
-        const homeTotalElem = document.getElementById('homeExpensesTotal');
-        const homeMonthElem = document.getElementById('homeExpensesMonth');
-        const homeYearElem = document.getElementById('homeExpensesYear');
-        const fixedTotalElem = document.getElementById('fixedExpensesTotal');
-        const fixedMonthElem = document.getElementById('fixedExpensesMonth');
-        const fixedYearElem = document.getElementById('fixedExpensesYear');
-        const generalTotalElem = document.getElementById('generalExpensesTotal');
-        const generalMonthElem = document.getElementById('generalExpensesMonth');
-        const generalYearElem = document.getElementById('generalExpensesYear');
-        if (todayElem) todayElem.innerHTML = `${todayTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (weekElem) weekElem.innerHTML = `${weekTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (monthElem) monthElem.innerHTML = `${monthTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (yearStatsElem) yearStatsElem.innerHTML = `${yearTotal.toLocaleString()} <span class="text-xs font-normal text-blue-700">دج</span>`;
-        if (totalStatsElem) totalStatsElem.innerHTML = `${grandTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (dailyTotalElem) dailyTotalElem.innerHTML = `${dailyTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (dailyMonthElem) dailyMonthElem.innerText = `${dailyMonth.toLocaleString()} دج`;
-        if (dailyYearElem) dailyYearElem.innerText = `${dailyYear.toLocaleString()} دج`;
-        if (homeTotalElem) homeTotalElem.innerHTML = `${homeTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (homeMonthElem) homeMonthElem.innerText = `${homeMonth.toLocaleString()} دج`;
-        if (homeYearElem) homeYearElem.innerText = `${homeYear.toLocaleString()} دج`;
-        if (fixedTotalElem) fixedTotalElem.innerHTML = `${fixedTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (fixedMonthElem) fixedMonthElem.innerText = `${fixedMonth.toLocaleString()} دج`;
-        if (fixedYearElem) fixedYearElem.innerText = `${fixedYear.toLocaleString()} دج`;
-        if (generalTotalElem) generalTotalElem.innerHTML = `${generalTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
-        if (generalMonthElem) generalMonthElem.innerText = `${generalMonth.toLocaleString()} دج`;
-        if (generalYearElem) generalYearElem.innerText = `${generalYear.toLocaleString()} دج`;
+            // Live caisse balance for today
+            try {
+                const netElem = document.getElementById('expensesCaisseNetToday');
+                if (netElem && typeof window.calculateCaisseDetails === 'function') {
+                    const cd = window.calculateCaisseDetails(todayKey);
+                    setElemHTML('expensesCaisseNetToday', formatMoney(cd.netCash));
+                    setElemHTML('expensesCaisseOutToday', formatMoney(cd.totalExpenses));
+                }
+            } catch (e) { console.warn('expenses caisse card note:', e); }
+            setElemHTML('todayExpenses', `${todayTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemHTML('weekExpenses', `${weekTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemHTML('monthExpenses', `${monthTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemHTML('yearExpensesStats', `${yearTotal.toLocaleString()} <span class="text-xs font-normal text-blue-700">دج</span>`);
+            setElemHTML('totalExpensesStats', `${grandTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemHTML('dailyExpensesTotal', `${dailyTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemText('dailyExpensesMonth', `${dailyMonth.toLocaleString()} دج`);
+            setElemText('dailyExpensesYear', `${dailyYear.toLocaleString()} دج`);
+            setElemHTML('homeExpensesTotal', `${homeTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemText('homeExpensesMonth', `${homeMonth.toLocaleString()} دج`);
+            setElemText('homeExpensesYear', `${homeYear.toLocaleString()} دج`);
+            setElemHTML('fixedExpensesTotal', `${fixedTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemText('fixedExpensesMonth', `${fixedMonth.toLocaleString()} دج`);
+            setElemText('fixedExpensesYear', `${fixedYear.toLocaleString()} دج`);
+            setElemHTML('generalExpensesTotal', `${generalTotal.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`);
+            setElemText('generalExpensesMonth', `${generalMonth.toLocaleString()} دج`);
+            setElemText('generalExpensesYear', `${generalYear.toLocaleString()} دج`);
 
-        // Render the detailed monthly & yearly totals
-        if (typeof window.renderExpensesDetailedTotals === 'function') {
-            window.renderExpensesDetailedTotals();
+            if (typeof window.renderExpensesDetailedTotals === 'function') {
+                window.renderExpensesDetailedTotals();
+            }
         }
 
-        // 2. Filter & Render List
+        // 2. Filter & Render List (paginated to keep DOM updates under 10 ms)
         const searchInput = document.getElementById('searchExpenseInput');
         const catFilter = document.getElementById('filterExpenseCategoryView');
         const countBadge = document.getElementById('expensesListCountBadge');
         const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
         const selectedCat = catFilter ? catFilter.value : 'all';
+        const targetYearMonth = (detState.filterMonth !== null && detState.filterMonth !== undefined && detState.filterYear !== null && detState.filterYear !== undefined)
+            ? `${detState.filterYear}-${String(detState.filterMonth + 1).padStart(2, '0')}`
+            : null;
         let filtered = allExpenses.filter(ex => {
+            if (!ex) return false;
             const cat = getExpenseCategory(ex);
             if (selectedCat !== 'all' && cat !== selectedCat) return false;
-
-            // Month/Year drill-down filter
-            if (window.expensesDetailedState && window.expensesDetailedState.filterMonth !== null && window.expensesDetailedState.filterYear !== null) {
-                if (ex.date) {
-                    const d = new Date(ex.date);
-                    if (d.getFullYear() !== window.expensesDetailedState.filterYear || d.getMonth() !== window.expensesDetailedState.filterMonth) {
-                        return false;
-                    }
-                }
+            if (targetYearMonth && ex.date) {
+                const exKey = getLocalDateString(ex.date);
+                if (exKey.substring(0, 7) !== targetYearMonth) return false;
             }
-
             if (q) { const combined = `${ex.desc || ''} ${getExpenseCategoryDetails(cat).label}`.toLowerCase();
                 if (!combined.includes(q)) return false;
             } return true; }); if (countBadge) {
@@ -6056,9 +6143,14 @@ window.addEventListener('unhandledrejection', (event) => {
                     <div class="text-sm font-bold text-slate-700">لا توجد مصاريف مطابقة في هذا التصنيف</div>
                     <div class="text-xs text-slate-400 mt-0.5">يمكنك إضافة مصروف جديد أو تغيير خيارات البحث</div>
                 </div>
-            `; return; } const sorted = filtered.map(ex => { const __t = new Date(ex.date).getTime(); return [isNaN(__t) ? 0 : __t, ex]; }).sort((a, b) => b[0] - a[0]).map(__p => __p[1]);
-        container.innerHTML = sorted.map(ex => {
-            const d = new Date(ex.date); const dateFormatted = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+            `; return; }
+        const EXPENSES_VIEW_PAGE_SIZE = 80;
+        const page = Math.max(1, Number(appState.expensesViewPage) || 1);
+        const sorted = filtered.map(ex => { const __t = new Date(ex.date).getTime(); return [isNaN(__t) ? 0 : __t, ex]; }).sort((a, b) => b[0] - a[0]).map(__p => __p[1]);
+        const visibleExpenses = sorted.slice(0, EXPENSES_VIEW_PAGE_SIZE * page);
+        let html = visibleExpenses.map(ex => {
+            const exKey = getLocalDateString(ex.date);
+            const dateFormatted = exKey ? exKey.replace(/-/g, '/') : '';
             const safeDesc = escapeHTML(ex.desc || 'مصروف');
             const safeId = escapeHTML(ex.id || '');
             const cat = getExpenseCategory(ex);
@@ -6090,7 +6182,13 @@ window.addEventListener('unhandledrejection', (event) => {
                         <div class="text-base sm:text-lg font-black text-slate-900" dir="ltr">${Number(ex.amount || 0).toLocaleString()} دج</div>
                     </div>
                 </div>
-            `; }).join(''); }; document.getElementById('addExpenseFormView')?.addEventListener('submit', function(e) {
+            `; }).join('');
+        if (sorted.length > visibleExpenses.length) {
+            const remaining = sorted.length - visibleExpenses.length;
+            html += `<div class="pt-3 text-center"><button type="button" onclick="loadMoreExpensesView()" class="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 text-xs font-black transition-colors cursor-pointer">عرض المزيد (${remaining.toLocaleString()} مصروف متبقي)</button></div>`;
+        }
+        if (container.innerHTML !== html) container.innerHTML = html;
+    }; document.getElementById('addExpenseFormView')?.addEventListener('submit', function(e) {
         e.preventDefault();
         const dateInput = document.getElementById('expenseDateView');
         const dateVal = dateInput ? dateInput.value : '';
@@ -6217,6 +6315,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const total = s1 + s2; const badge = document.getElementById('bothStockTotalBadge');
         if (badge) { badge.textContent = `المجموع: ${total} ${prodStockUnitWord()} (Stock 1: ${s1} + Stock 2: ${s2})`;
         } } window.updateDualStockTotal = updateDualStockTotal;
+    window.updateDualStockTotalThrottled = throttle(() => updateDualStockTotal(), 60);
     // Stock of a gram-priced product (dose or weighed) is counted in grams, so the
     // quantity fields and their totals are worded in grams instead of pieces.
     function isProdFormGramPriced() { return isGramPricedProduct(getProdFormProduct()); }
@@ -6308,9 +6407,10 @@ window.addEventListener('unhandledrejection', (event) => {
         syncProdStockUnitLabels();
     }
     window.syncProdKiloPriceField = syncProdKiloPriceField;
+    const syncProdKiloPriceFieldThrottled = throttle(() => syncProdKiloPriceField(), 60);
     ['prodCategory', 'prodWeightType', 'prodWeight', 'prodGramPrice', 'prodGramSalePrice', 'prodDoseGrams'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', syncProdKiloPriceField);
-        document.getElementById(id)?.addEventListener('input', syncProdKiloPriceField);
+        document.getElementById(id)?.addEventListener('input', syncProdKiloPriceFieldThrottled);
     });
     syncProdKiloPriceField();
 
@@ -6753,6 +6853,7 @@ window.addEventListener('unhandledrejection', (event) => {
         previewBadge.textContent = `${fromName}: (${sourceStock} ➔ ${newSourceStock})  |  ${toName}: (${destStock} ➔ ${newDestStock})`;
     }
     window.updateTransferPreview = updateTransferPreview;
+    window.updateTransferPreviewThrottled = throttle(() => updateTransferPreview(), 60);
 
     function setTransferMaxQty() {
         const sel = document.getElementById('transferProductSelect');
@@ -6913,9 +7014,15 @@ window.addEventListener('unhandledrejection', (event) => {
         if (rightBtn) rightBtn.classList.remove('hidden');
         const sl = Math.abs(nav.scrollLeft);
         const maxScroll = nav.scrollWidth - nav.clientWidth;
-        if (leftBtn) { leftBtn.style.opacity = sl <= 4 ? '0.35' : '1';
-        } if (rightBtn) { rightBtn.style.opacity = sl >= (maxScroll - 4) ? '0.35' : '1';
-        } }; window.initHeaderNavScroll = function() {
+        const leftOpacity = sl <= 4 ? '0.35' : '1';
+        const rightOpacity = sl >= (maxScroll - 4) ? '0.35' : '1';
+        if (leftBtn && leftBtn.style.opacity !== leftOpacity) leftBtn.style.opacity = leftOpacity;
+        if (rightBtn && rightBtn.style.opacity !== rightOpacity) rightBtn.style.opacity = rightOpacity;
+    };
+    const scheduleHeaderNavControlsUpdate = rafThrottle(() => {
+        if (typeof window.updateHeaderNavControls === 'function') window.updateHeaderNavControls();
+    });
+    window.initHeaderNavScroll = function() {
         const nav = document.getElementById('topHeaderNav');
         if (!nav || nav.dataset.scrollInitialized) return;
         nav.dataset.scrollInitialized = 'true';
@@ -6924,7 +7031,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (Math.abs(e.deltaY) > 0 || Math.abs(e.deltaX) > 0) {
                 e.preventDefault(); const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY;
                 nav.scrollLeft += delta * 1.1;
-                window.updateHeaderNavControls();
+                scheduleHeaderNavControlsUpdate();
             } }, { passive: false });
         // 2. Mouse Drag-to-Scroll on Desktop
         nav.addEventListener('mousedown', (e) => {
@@ -6940,7 +7047,7 @@ window.addEventListener('unhandledrejection', (event) => {
             const walk = (x - navDragStartX) * 1.4;
             if (Math.abs(walk) > 4) {
                 navHasMoved = true; } nav.scrollLeft = navScrollStartLeft - walk;
-            window.updateHeaderNavControls(); });
+            scheduleHeaderNavControlsUpdate(); }, { passive: true });
         window.addEventListener('mouseup', () => {
             if (!isNavDragging) return;
             isNavDragging = false; if (nav) {
@@ -6948,8 +7055,8 @@ window.addEventListener('unhandledrejection', (event) => {
                 nav.classList.add('cursor-grab');
             } setTimeout(() => { navHasMoved = false;
             }, 60); }); nav.addEventListener('scroll', () => {
-            window.updateHeaderNavControls(); }, { passive: true });
-        window.addEventListener('resize', window.updateHeaderNavControls);
+            scheduleHeaderNavControlsUpdate(); }, { passive: true });
+        window.addEventListener('resize', scheduleHeaderNavControlsUpdate, { passive: true });
         // Initial check
         setTimeout(window.updateHeaderNavControls, 250);
     };
@@ -7044,6 +7151,10 @@ window.addEventListener('unhandledrejection', (event) => {
         }).join(''); select.innerHTML = html; if (currentVal && prods.some(p => p.id === currentVal)) {
             select.value = currentVal; } }
     window.updateSellProductDropdown = updateSellProductDropdown;
+
+    window.handlePosProductSearchInput = debounce((query) => {
+        handlePosProductSearch(query, false);
+    }, 120);
 
     function handlePosProductSearch(query, isEnter = false) {
         query = String(query || '').trim().toLowerCase();
@@ -7466,17 +7577,21 @@ window.addEventListener('unhandledrejection', (event) => {
         if (nameInput) nameInput.required = isCredit;
         if (isCredit) window.updateProductCreditSplit();
     };
+    window.updateProductCreditSplitThrottled = throttle(() => {
+        if (typeof window.updateProductCreditSplit === 'function') window.updateProductCreditSplit();
+    }, 60);
+    const updateStockInfoDisplayThrottled = throttle(() => updateStockInfoDisplay(), 60);
     window.toggleProductSaleCreditFields();
     ['sellProdId', 'sellProdQty', 'sellCustomPrice', 'sellGramPrice', 'sellDoseGrams'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) { el.addEventListener('input', () => window.updateProductCreditSplit()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
+        if (el) { el.addEventListener('input', () => window.updateProductCreditSplitThrottled()); el.addEventListener('change', () => window.updateProductCreditSplit()); }
     });
     // Keep the live stock/total panel (and the net profit line) in sync while the
     // selling gram price or the dose weight is typed.
     ['sellGramPrice', 'sellDoseGrams'].forEach(id =>
         document.getElementById(id)?.addEventListener('input', function() {
             this.dataset.userEdited = 'true';
-            updateStockInfoDisplay();
+            updateStockInfoDisplayThrottled();
         }));
 
     function getProductSalePaymentInfo(total) {
@@ -7562,10 +7677,10 @@ window.addEventListener('unhandledrejection', (event) => {
     }
 
     document.getElementById('sellProdId')?.addEventListener('change', updateStockInfoDisplay);
-    document.getElementById('sellProdQty')?.addEventListener('input', updateStockInfoDisplay);
+    document.getElementById('sellProdQty')?.addEventListener('input', updateStockInfoDisplayThrottled);
     document.getElementById('sellCustomPrice')?.addEventListener('input', function() {
         this.dataset.userEdited = 'true';
-        updateStockInfoDisplay();
+        updateStockInfoDisplayThrottled();
     });
     document.getElementById('sellProductForm')?.addEventListener('submit', function(e) {
         e.preventDefault(); const prodId = getElemVal('sellProdId');
@@ -7929,13 +8044,16 @@ window.addEventListener('unhandledrejection', (event) => {
             if (supIconBox) supIconBox.className = activeIconClass;
             if (staffContent) staffContent.classList.add('hidden');
             if (supContent) supContent.classList.remove('hidden');
-            renderSuppliersList(); } else { if (staffBtn) staffBtn.className = activeBtnClass;
+            runOrDeferInteractive('switchPayoutTab', () => renderSuppliersList()); } else { if (staffBtn) staffBtn.className = activeBtnClass;
             if (staffIconBox) staffIconBox.className = activeIconClass;
             if (supBtn) supBtn.className = inactiveBtnClass;
             if (supIconBox) supIconBox.className = inactiveIconClass;
             if (staffContent) staffContent.classList.remove('hidden');
             if (supContent) supContent.classList.add('hidden');
-            renderStaffPayouts(); } } window.switchPayoutTab = switchPayoutTab;
+            runOrDeferInteractive('switchPayoutTab', () => renderStaffPayouts()); } } window.switchPayoutTab = switchPayoutTab;
+    window.handleSupplierAutoFillInput = debounce((val) => {
+        if (typeof window.autoFillSupplierInfo === 'function') window.autoFillSupplierInfo(val);
+    }, 140);
     function openStaffPayoutsIfAllowed(tab = 'staff') {
         openModal('staffPayoutsModal');
         switchPayoutTab(tab); } window.openStaffPayoutsIfAllowed = openStaffPayoutsIfAllowed;
@@ -8468,14 +8586,11 @@ window.addEventListener('unhandledrejection', (event) => {
         appState.creditPage = Math.max(1, Math.min(totalCredPages, (appState.creditPage || 1) + delta));
         renderCreditsList();
     };
-    let _creditSearchDebounceTimer = null;
-    function handleCreditSearch() {
-        if (_creditSearchDebounceTimer) clearTimeout(_creditSearchDebounceTimer);
-        _creditSearchDebounceTimer = setTimeout(() => {
-            appState.creditPage = 1;
-            renderCreditsList();
-        }, 120);
-    } window.handleCreditSearch = handleCreditSearch;
+    const handleCreditSearch = debounce(() => {
+        appState.creditPage = 1;
+        renderCreditsList();
+    }, 130);
+    window.handleCreditSearch = handleCreditSearch;
     function findCreditById(id) {
         const targetId = String(id || '').trim();
         return (Array.isArray(appState.credits) ? appState.credits : []).find(c => c && (String(c.id).trim() === targetId || String(c._rtdbKey || '').trim() === targetId)) || null;
@@ -8532,6 +8647,9 @@ window.addEventListener('unhandledrejection', (event) => {
             afterEl.className = 'block text-base font-black ' + (paid >= current && current > 0 ? 'text-blue-700' : 'text-slate-800');
         }
     };
+    window.updatePartialCreditPreviewThrottled = throttle(() => {
+        if (typeof window.updatePartialCreditPreview === 'function') window.updatePartialCreditPreview();
+    }, 60);
     window.submitPartialCreditPayment = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         const creditId = getElemVal('partialCreditId');
@@ -9996,13 +10114,13 @@ window.addEventListener('unhandledrejection', (event) => {
             .catch((e) => console.warn('Customer search note:', e));
     }
     window.searchSubscriber = searchSubscriber;
+    const _runCustomerSearchView = debounce(() => {
+        const val = getElemVal('searchInputView') || '';
+        applyCustomerSearch(val);
+        triggerRemoteCustomerSearch(val);
+    }, 130);
     window.handleSearchView = function() {
-        if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
-        _customerSearchDebounceTimer = setTimeout(() => {
-            const val = getElemVal('searchInputView') || '';
-            applyCustomerSearch(val);
-            triggerRemoteCustomerSearch(val);
-        }, 120);
+        _runCustomerSearchView();
     };
     window.toggleDebtFieldView = function() {
        const status = getElemVal('paymentStatusView');
@@ -10014,20 +10132,22 @@ window.addEventListener('unhandledrejection', (event) => {
            setElemRequired('debtAmountView', false);
            setElemValue('debtAmountView', '');
        } };
+    const _runCustomerSearchDashboard = debounce(() => {
+        const val = getElemVal('searchInput') || '';
+        applyCustomerSearch(val);
+        triggerRemoteCustomerSearch(val);
+    }, 130);
     function handleSearch() {
-        if (_customerSearchDebounceTimer) clearTimeout(_customerSearchDebounceTimer);
-        _customerSearchDebounceTimer = setTimeout(() => {
-            const val = getElemVal('searchInput') || '';
-            applyCustomerSearch(val);
-            triggerRemoteCustomerSearch(val);
-        }, 120);
+        _runCustomerSearchDashboard();
     }
     // Exposed for the inline oninput="handleSearch()" in index.html
     window.handleSearch = handleSearch;
     function setFilter(filter) {
         appState.filter = filter;
         appState.customerPage = 1;
-        renderCustomers();
+        // Paint the newly active filter pill immediately, then render the cards
+        renderFilterTabs();
+        runOrDeferInteractive('customerFilter', () => renderCustomers({ skipTabs: true }));
     }
     function handleBarcodeScan(event) { if (event.key === 'Enter') {
             event.preventDefault(); const barcode = event.target.value.trim();
@@ -10681,7 +10801,7 @@ window.addEventListener('unhandledrejection', (event) => {
     } window.closeBarcodeCamera = closeBarcodeCamera;
     window.openBarcodeCamera = openBarcodeCamera;
     window.restartBarcodeScanner = restartBarcodeScanner;
-    function getProductExpiryInfo(p) {
+    function getProductExpiryInfo(p, refTodayMs) {
         if (!p) {
             return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
         }
@@ -10705,10 +10825,14 @@ window.addEventListener('unhandledrejection', (event) => {
             if (isNaN(exp.getTime())) {
                 return { hasExpiry: false, isNearExpiry: false, isExpired: false, diffDays: Infinity, daysLeft: 0, label: '' };
             }
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            let todayMs = refTodayMs;
+            if (typeof todayMs !== 'number') {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                todayMs = today.getTime();
+            }
             exp.setHours(0, 0, 0, 0);
-            const diffTime = exp.getTime() - today.getTime();
+            const diffTime = exp.getTime() - todayMs;
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
             
             // <= 93 days (3 months / 90 days threshold) or already expired
@@ -10737,6 +10861,7 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.getProductExpiryInfo = getProductExpiryInfo;
     function setStockFilter(filter) { appState.productStockFilter = filter || 'all';
+        appState.productPage = 1;
         const tabAll = document.getElementById('stockTabAll');
         const tab1 = document.getElementById('stockTab1');
         const tab2 = document.getElementById('stockTab2');
@@ -10753,7 +10878,17 @@ window.addEventListener('unhandledrejection', (event) => {
         if (tab2) tab2.className = (appState.productStockFilter === 'stock2') ? activeClass : inactiveClass;
         if (tabNearExp) tabNearExp.className = (appState.productStockFilter === 'near_expiry') ? activeRedClass : inactiveRedClass;
         if (tabLowStock) tabLowStock.className = (appState.productStockFilter === 'low_stock') ? activeAmberClass : inactiveAmberClass;
-        renderProductsList(); } window.setStockFilter = setStockFilter;
+        runOrDeferInteractive('stockFilter', () => renderProductsList());
+    } window.setStockFilter = setStockFilter;
+    let _sellDropdownProductsSig = null;
+    window.handleProductSearchInput = debounce(() => {
+        appState.productPage = 1;
+        renderProductsList();
+    }, 140);
+    window.loadMoreProductsLocal = function() {
+        appState.productPage = (appState.productPage || 1) + 1;
+        renderProductsList();
+    };
     function renderProductsList() { const container = document.getElementById('productsList');
        if(!container) return; const state = window.appState || {};
        if (!state.products) state.products = [];
@@ -10763,21 +10898,31 @@ window.addEventListener('unhandledrejection', (event) => {
        const countNearExpElem = document.getElementById('countStockNearExpiry');
        const countLowStockElem = document.getElementById('countStockLowStock');
 
-       // Single-pass metrics calculation O(N) instead of 5 separate array scans
-       let countAll = state.products.length;
+       const todayRef = new Date();
+       todayRef.setHours(0, 0, 0, 0);
+       const todayMidnightMs = todayRef.getTime();
+
+       // Single-pass metrics + cached expiry lookup O(N) (was 3-4 expiry parses per product)
+       const prods = state.products;
+       let countAll = prods.length;
        let count1 = 0;
        let count2 = 0;
        let countNearExp = 0;
        let countLowStock = 0;
+       let stockChecksum = 0;
+       const expiryByIndex = new Array(countAll);
 
-       const prods = state.products;
        for (let i = 0; i < countAll; i++) {
            const p = prods[i];
            if (!p) continue;
            if (!p.stockLocation || p.stockLocation === 'stock1') count1++;
            if (p.stockLocation === 'stock2') count2++;
-           if (getProductExpiryInfo(p).isNearExpiry) countNearExp++;
-           if (Number(p.stock || 0) < 5) countLowStock++;
+           const expInfo = getProductExpiryInfo(p, todayMidnightMs);
+           expiryByIndex[i] = expInfo;
+           if (expInfo.isNearExpiry) countNearExp++;
+           const st = Number(p.stock || 0);
+           stockChecksum += st;
+           if (st < 5) countLowStock++;
        }
 
        if (countAllElem) countAllElem.textContent = `(${countAll})`;
@@ -10787,7 +10932,7 @@ window.addEventListener('unhandledrejection', (event) => {
        if (countLowStockElem) countLowStockElem.textContent = countLowStock;
        const searchInput = document.getElementById('searchProductInput');
        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
-       let filteredProducts = [];
+       let filteredEntries = [];
        const stockFilter = state.productStockFilter;
        // ضمان بناء فهرس البحث إذا كانت بيانات المنتجات موجودة ولكن الفهرس لا يزال فارغاً
        if (window.omegaSearch &&
@@ -10800,10 +10945,9 @@ window.addEventListener('unhandledrejection', (event) => {
        // فهرس سريع للبحث عن المنتجات بدلاً من مسح كامل القائمة (O(1) للمطابقات)
        let productMatchIds = null;
        let useLegacyProductSearch = false;
-      if (query && window.omegaSearch) {
-          const matched = window.searchProductsFast(query, { limit: 200 });
+       if (query && window.omegaSearch) {
+           const matched = window.searchProductsFast(query, 200);
            productMatchIds = new Set(matched.map(p => String(p.id || p._rtdbKey || p.barcode || '')));
-           // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج
            if (productMatchIds.size === 0) useLegacyProductSearch = true;
        }
        for (let i = 0; i < countAll; i++) {
@@ -10811,7 +10955,8 @@ window.addEventListener('unhandledrejection', (event) => {
            if (!p) continue;
            if (stockFilter === 'stock1' && p.stockLocation && p.stockLocation !== 'stock1') continue;
            if (stockFilter === 'stock2' && p.stockLocation !== 'stock2') continue;
-           if (stockFilter === 'near_expiry' && !getProductExpiryInfo(p).isNearExpiry) continue;
+           const expInfo = expiryByIndex[i];
+           if (stockFilter === 'near_expiry' && !expInfo.isNearExpiry) continue;
            if (stockFilter === 'low_stock' && Number(p.stock || 0) >= 5) continue;
            if (productMatchIds && !useLegacyProductSearch && !productMatchIds.has(String(p.id || p._rtdbKey || p.barcode || ''))) continue;
            if (useLegacyProductSearch) {
@@ -10821,13 +10966,15 @@ window.addEventListener('unhandledrejection', (event) => {
                const weightMatch = !nameMatch && !barcodeMatch && !catMatch && (p.weight || '').toLowerCase().includes(query);
                if (!nameMatch && !barcodeMatch && !catMatch && !weightMatch) continue;
            }
-           filteredProducts.push(p);
+           filteredEntries.push([p, expInfo]);
        }
-       container.innerHTML = filteredProducts.map(p => {
+       const PRODUCTS_PAGE_SIZE = 60;
+       const prodPage = Math.max(1, Number(state.productPage) || 1);
+       const visibleEntries = filteredEntries.slice(0, PRODUCTS_PAGE_SIZE * prodPage);
+       let html = visibleEntries.map(([p, expInfo]) => {
            const isStock2 = p.stockLocation === 'stock2';
            const stockBadge = isStock2 ? `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200"><svg class="w-3 h-3 text-slate-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 21h18M3 7v14M21 7v14M6 11h4M6 15h4M14 11h4M14 15h4M9 3l3 4 3-4"></path></svg><span>Stock 2</span></span>`
                : `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200"><svg class="w-3 h-3 text-blue-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg><span>Stock 1</span></span>`;
-           const expInfo = getProductExpiryInfo(p);
            let expiryBadgeHtml = '';
            if (expInfo.isNearExpiry) {
                if (expInfo.isExpired) {
@@ -10935,8 +11082,20 @@ window.addEventListener('unhandledrejection', (event) => {
                     <span>إضافة منتج جديد الآن</span>
                 </button>
             </div>
-        `; updateSellProductDropdown();
-       updateStockInfoDisplay(); } window.renderProductsList = renderProductsList;
+        `;
+       if (filteredEntries.length > visibleEntries.length) {
+           const remaining = filteredEntries.length - visibleEntries.length;
+           html += `<div class="pt-2 pb-3 text-center"><button type="button" onclick="loadMoreProductsLocal()" class="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 text-xs font-black transition-colors cursor-pointer">عرض المزيد (${remaining.toLocaleString()} منتج متبقي)</button></div>`;
+       }
+       if (container.innerHTML !== html) container.innerHTML = html;
+       const nextDropdownSig = `${window.__omegaDataVersion || 0}|${countAll}|${count1}|${stockChecksum}`;
+       const posSearchQuery = getElemVal('posProductSearchInput').trim();
+       if (!posSearchQuery && _sellDropdownProductsSig !== nextDropdownSig) {
+           _sellDropdownProductsSig = nextDropdownSig;
+           updateSellProductDropdown();
+           updateStockInfoDisplay();
+       }
+    } window.renderProductsList = renderProductsList;
     function getUniqueCoaches() { const set = new Set();
         if (appState.staffPayouts && Array.isArray(appState.staffPayouts)) {
             appState.staffPayouts.forEach(p => {
@@ -11175,36 +11334,58 @@ window.addEventListener('unhandledrejection', (event) => {
         'female': 'الإناث', 'all': 'الكل',
         'active': 'النشطة', 'near_expiry': 'قريبة الانتهاء',
         'expired': 'المنتهية', 'frozen': 'المجمدة',
-        'credit': 'الكريدي' }; function getFilterCount(filterKey) {
-        if (!appState.customers) return 0;
-        return appState.customers.filter(c => {
-            const status = calculateStatus(c);
-            if (filterKey === 'male') return c.gender === 'male' || !c.gender; // Default to male if not specified for old data
-            if (filterKey === 'female') return c.gender === 'female';
-            if (filterKey === 'all') return true;
-            if (filterKey === 'active') return status === 'active' || status === 'near_expiry';
-            if (filterKey === 'near_expiry') return status === 'near_expiry';
-            if (filterKey === 'expired') return status === 'expired';
-            if (filterKey === 'frozen') return c.status === 'frozen';
-            if (filterKey === 'credit') return c.paymentStatus === 'credit';
-            return true; }).length; } function customerIsSession(c) {
+        'credit': 'الكريدي' };
+    function computeAllCustomerFilterCounts(customers, nowMs = Date.now()) {
+        const counts = { all: 0, male: 0, female: 0, active: 0, near_expiry: 0, expired: 0, frozen: 0, credit: 0 };
+        if (!Array.isArray(customers) || customers.length === 0) return counts;
+        counts.all = customers.length;
+        for (let i = 0; i < customers.length; i++) {
+            const c = customers[i];
+            if (!c) continue;
+            if (c.gender === 'female') counts.female++;
+            else counts.male++;
+            if (c.status === 'frozen') counts.frozen++;
+            if (c.paymentStatus === 'credit') counts.credit++;
+            const status = calculateStatus(c, nowMs);
+            if (status === 'active' || status === 'near_expiry') {
+                counts.active++;
+                if (status === 'near_expiry') counts.near_expiry++;
+            } else if (status === 'expired') {
+                counts.expired++;
+            }
+        }
+        return counts;
+    }
+    function getFilterCount(filterKey) {
+        const counts = computeAllCustomerFilterCounts(appState.customers, Date.now());
+        return counts[filterKey] !== undefined ? counts[filterKey] : counts.all;
+    }
+    function customerIsSession(c) {
         return c.subscriptionType === 'session' || (c.remainingSessions !== undefined && c.remainingSessions !== null && c.subscriptionType !== 'time');
-    } function renderFilterTabs() { if (appState.filter === 'session') appState.filter = 'all';
+    }
+    function renderFilterTabs() { if (appState.filter === 'session') appState.filter = 'all';
         const filterKeys = ['all', 'male', 'female', 'active', 'near_expiry', 'expired', 'frozen', 'credit'];
+        // Single O(N) pass across customers instead of 8 separate filter() scans
+        const counts = computeAllCustomerFilterCounts(appState.customers, Date.now());
         const html = filterKeys.map(key => {
             const isActive = appState.filter === key;
-            const count = getFilterCount(key);
+            const count = counts[key] || 0;
             return `<button onclick="setFilter('${key}')" class="px-5 py-2 rounded-full text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
                 isActive ? 'bg-[#2563eb] text-white shadow-md shadow-blue-200'
                   : 'bg-white hover:bg-slate-50 text-slate-600 border border-slate-200/80 shadow-sm'
             }">
                 ${filterLabels[key] || key} ${count > 0 ? `<span class="mr-1 text-[11px] opacity-80">(${count})</span>` : ''}
-            </button>`; }).join(''); const container1 = document.getElementById('filterTabs');
-        if (container1) container1.innerHTML = html;
-        const container2 = document.getElementById('filterTabsView');
-        if (container2) container2.innerHTML = html;
-    } function renderCustomers() { let filtered;
+            </button>`; }).join('');
+        if (isVisible('dashboardView') || !isVisible('customersView')) {
+            setElemHTML('filterTabs', html);
+        }
+        if (isVisible('customersView')) {
+            setElemHTML('filterTabsView', html);
+        }
+    }
+    function renderCustomers(options = {}) { let filtered;
         const state = window.appState || {};
+        const nowMs = Date.now();
         // ضمان بناء فهرس البحث إذا كانت بيانات العملاء موجودة ولكن الفهرس لا يزال فارغاً
         // (يحدث إذا تم تحميل البيانات قبل تهيئة الفهرس أو عبر مسار تحميل مختلف)
         if (window.omegaSearch &&
@@ -11216,10 +11397,9 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         // البحث الفوري عبر الفهرس (O(1) للمطابقات الدقيقة) بدلاً من مسح كامل القائمة في كل ضغطة مفتاح
         if (state.searchQuery && window.omegaSearch) {
-          const matched = window.searchCustomersFast(state.searchQuery, { limit: 200 });
+          const matched = window.searchCustomersFast(state.searchQuery, 200);
           const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
           filtered = (state.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
-          // Fallback إلى البحث التقليدي إذا لم يعطِ الفهرس نتائج (يضمن العمل حتى لو لم يُبنى الفهرس بعد)
           if (filtered.length === 0) {
             filtered = (state.customers || []).filter(c => {
               if (state.searchQuery && !customerMatchesQuery(c, state.searchQuery)) return false;
@@ -11233,7 +11413,7 @@ window.addEventListener('unhandledrejection', (event) => {
           });
         }
         filtered = filtered.filter(c => {
-            const status = calculateStatus(c);
+            const status = calculateStatus(c, nowMs);
             const isSession = customerIsSession(c);
             if (state.filter === 'session') return isSession;
             if (state.filter === 'male') return c.gender === 'male' || !c.gender;
@@ -11247,13 +11427,14 @@ window.addEventListener('unhandledrejection', (event) => {
         const PAGE_SIZE = 24;
         const page = state.customerPage || 1;
         const visibleCustomers = filtered.slice(0, PAGE_SIZE * page);
+        const packageMap = getPackageMap();
         const renewalByCycle = new Map((appState.caisseLogs || [])
             .filter(log => log && log.type === CAISSE_MOVEMENT_TYPE && log.source === 'subscription' && log.previousSubscription)
             .map(log => [String(log.sourceId), log]));
         let html = visibleCustomers.map(c => {
             const age = calculateAge(c.dob);
             const ageStr = age !== null ? `${age} سنة` : 'غير محدد';
-            const pkg = getPackageById(c.packageId);
+            const pkg = packageMap.get(c.packageId) || getPackageById(c.packageId);
             const pkgName = pkg ? pkg.name : 'ملاكمة';
             const priceVal = c.price !== undefined && c.price !== null ? c.price : (pkg && pkg.price ? pkg.price : null);
             const priceSuffix = priceVal !== null ? ` (${priceVal} دج)` : '';
@@ -11361,11 +11542,14 @@ window.addEventListener('unhandledrejection', (event) => {
             </div>
             `;
         }
-        const dashboardGrid = document.getElementById('customersGrid');
-        if (dashboardGrid) dashboardGrid.innerHTML = html;
-        const viewGrid = document.getElementById('customersGridView');
-        if (viewGrid) viewGrid.innerHTML = html;
-        renderFilterTabs(); } window.renderCustomers = renderCustomers;
+        if (isVisible('dashboardView') || !isVisible('customersView')) {
+            setElemHTML('customersGrid', html);
+        }
+        if (isVisible('customersView')) {
+            setElemHTML('customersGridView', html);
+        }
+        if (!options.skipTabs) renderFilterTabs();
+    } window.renderCustomers = renderCustomers;
     window.loadMoreCustomersLocal = function() {
         window.appState.customerPage = (window.appState.customerPage || 1) + 1;
         renderCustomers();
@@ -11379,6 +11563,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const d = parseSafeDate(sale.date || sale.id || sale.createdAt);
         return d ? (d.getMonth() === currentMonth && d.getFullYear() === currentYear) : true;
     }
+    let _lastKpiRenderSignature = null;
     function performFullRender() { const nowMs = Date.now();
         const currentMonth = new Date().getMonth();
         const currentYear = new Date().getFullYear();
@@ -11389,368 +11574,358 @@ window.addEventListener('unhandledrejection', (event) => {
         const monthKeyPrefix = todayKey.substring(0, 7);
         const yearKeyPrefix = todayKey.substring(0, 4);
         const renderDataVersion = window.__omegaDataVersion || 0;
-        let totalIncome = 0; let todaySubIncome = 0;
-        let monthlySubIncome = 0; let yearlySubIncome = 0;
-        let totalDebt = 0, activeCount = 0, nearExpiryCount = 0;
-        let totalQuickSessionClients = 0; let totalQuickSessionsCount = 0;
-        let monthlyQuickSessionsCount = 0; let monthlyCardioCount = 0; let monthlyMusculationCount = 0;
-        let monthlyMaleClientsCount = 0; let monthlyFemaleClientsCount = 0;
-        // Count and income from quick sessions
-        if (Array.isArray(appState.quickSessions)) {
-            appState.quickSessions.forEach(qs => {
-                const p = Number(qs.price || 0);
-                const clients = Number(qs.clientCount || 1);
-                const sessions = Number(qs.sessionCount || 1);
-                totalIncome += p;
-                totalQuickSessionClients += clients;
-                totalQuickSessionsCount += sessions;
-                const qKey = getLocalDateString(qs.date || (Number(qs.id) || nowMs));
-                const qInMonth = qKey.substring(0, 7) === monthKeyPrefix;
-                if (qInMonth) {
-                    monthlyQuickSessionsCount += sessions;
-                    const qsClients = Array.isArray(qs.clients) ? qs.clients : [];
-                    qsClients.forEach(cl => {
-                        if (cl?.activity === 'cardio') monthlyCardioCount++;
-                        else if (cl?.activity === 'musculation') monthlyMusculationCount++;
-                        if (cl?.gender === 'female') monthlyFemaleClientsCount++;
-                        else monthlyMaleClientsCount++;
-                    });
-                }
-                if (qKey === todayKey) {
-                    todaySubIncome += p; } if (qInMonth) {
-                    monthlySubIncome += p; } if (qKey.substring(0, 4) === yearKeyPrefix) {
-                    yearlySubIncome += p; } });
-        } // O(1) package lookup index (was packages.find inside the customers loop => O(n*m))
-        const packagesArr = Array.isArray(appState.packages) ? appState.packages : [];
-        const packageById = new Map();
-        packagesArr.forEach(p => { if (p && p.id !== undefined && p.id !== null) packageById.set(String(p.id), p); });
-        const customersArr = Array.isArray(appState.customers) ? appState.customers : [];
-        customersArr.forEach(c => { if (customerIsSession(c)) {
-               totalQuickSessionClients++; }
-           const pkg = packageById.get(String(c.packageId));
-           const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
-           let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
-           else if (c.paymentStatus === 'credit') {
-               const debt = parseInt(c.debtAmount) || 0;
-               totalDebt += debt; paidAmount = Math.max(0, price - debt);
-           } totalIncome += paidAmount; const cKey = getLocalDateString(c.startDate);
-           if (cKey === todayKey) {
-               todaySubIncome += paidAmount; }
-           if (cKey.substring(0, 7) === monthKeyPrefix) {
-               monthlySubIncome += paidAmount; }
-           if (cKey.substring(0, 4) === yearKeyPrefix) {
-               yearlySubIncome += paidAmount; }
-           const status = calculateStatus(c, nowMs); if (status === 'active' || status === 'near_expiry') {
-               activeCount++; if (status === 'near_expiry') nearExpiryCount++;
-           } }); const expensesArrForStats = Array.isArray(appState.expenses) ? appState.expenses : [];
-        // One pass for both totals (was reduce + filter + reduce).
-        let totalExpenses = 0;
-        let monthlyExpenses = 0;
-        expensesArrForStats.forEach(e => {
-            const amt = parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0;
-            totalExpenses += amt;
-            const dStr = e.date || ''; let inMonth = false;
-            if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
-                const parts = dStr.split('-');
-                inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
-            } else { const d = new Date(e.date); inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
-            if (inMonth) monthlyExpenses += amt;
-        });
-        const staffPayoutsArrForStats = Array.isArray(appState.staffPayouts) ? appState.staffPayouts : [];
-        // One pass for both totals (was reduce + filter + reduce).
-        let totalStaffPayouts = 0;
-        let monthlyStaffPayouts = 0;
-        staffPayoutsArrForStats.forEach(p => {
-            const amt = parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0;
-            totalStaffPayouts += amt;
-            const dStr = p.date || p.createdAt || '';
-            let inMonth = false;
-            if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
-                const parts = dStr.split('-');
-                inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
-            } else { const d = new Date(p.date || p.id);
-                inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
-            if (inMonth) monthlyStaffPayouts += amt;
-        });
-        const creditsArr = Array.isArray(appState.credits) ? appState.credits : [];
-        let totalExternalCredits = creditsArr.reduce((sum, cr) => sum + (Number(cr && cr.amount) || 0), 0);
-        let allTimeSales = 0; let todaySales = 0;
-        let todaySalesCount = 0; let monthlySales = 0;
-        let yearlySales = 0; let allTimeProductProfit = 0;
-        let monthlyProductProfit = 0;
-        // While older sales history is still being completed in the background, use the
-        // incrementally-maintained v2Stats yearly aggregates for exact all-time totals;
-        // once history is fully in memory the raw loop below is authoritative.
-        const yearlyStats = appState.v2Stats && appState.v2Stats.yearly ? appState.v2Stats.yearly : null;
-        const statsInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStats && Object.keys(yearlyStats).length > 0);
-        if (statsInterim) {
-            Object.values(yearlyStats).forEach(ys => {
-                if (!ys) return;
-                allTimeSales += Number(ys.sales) || 0;
-                allTimeProductProfit += Number(ys.profit) || 0;
-            });
-        }
-        const salesArr = Array.isArray(appState.sales) ? appState.sales : [];
-        salesArr.forEach(s => { if (!s) return;
-           const sTotal = Number(s.total) || 0;
-           if (!statsInterim) { allTimeSales += sTotal; }
-           const sProfit = (Number(s.profit) || 0);
-           if (!statsInterim) { allTimeProductProfit += sProfit; }
-           const sKey = getLocalDateString(s.date); if (sKey === todayKey) {
-               todaySales += sTotal;
-               todaySalesCount++; } if (sKey.substring(0, 7) === monthKeyPrefix) {
-               monthlySales += sTotal;
-               monthlyProductProfit += sProfit;
-           } if (sKey.substring(0, 4) === yearKeyPrefix) {
-               yearlySales += sTotal; } });
-        // Use v2Stats for accelerated O(1) stats aggregation
-        const nowIso = new Date().toISOString();
-        const statDateKey = nowIso.split('T')[0];
-        const statMonthKey = statDateKey.substring(0, 7);
-        const statYearKey = statDateKey.substring(0, 4);
-        const v2Stats = appState.v2Stats || null;
-        if (v2Stats) {
-            const dStat = v2Stats.daily?.[statDateKey];
-            const mStat = v2Stats.monthly?.[statMonthKey];
-            const yStat = v2Stats.yearly?.[statYearKey];
-            if (dStat) {
-                if (dStat.sales !== undefined) todaySales = dStat.sales;
-                if (dStat.salesCount !== undefined) todaySalesCount = dStat.salesCount;
-                if (dStat.subIncome !== undefined && todaySubIncome === 0) todaySubIncome = dStat.subIncome;
-            }
-            if (mStat) {
-                if (mStat.sales !== undefined) monthlySales = mStat.sales;
-                if (mStat.profit !== undefined) monthlyProductProfit = mStat.profit;
-                if (mStat.expenses !== undefined) monthlyExpenses = mStat.expenses;
-                if (mStat.subIncome !== undefined && monthlySubIncome === 0) monthlySubIncome = mStat.subIncome;
-            }
-            if (yStat) {
-                if (yStat.sales !== undefined) yearlySales = yStat.sales;
-                if (yStat.subIncome !== undefined && yearlySubIncome === 0) yearlySubIncome = yStat.subIncome;
-            }
-            if (v2Stats.allTime) {
-                if (v2Stats.allTime.sales !== undefined) allTimeSales = v2Stats.allTime.sales;
-                if (v2Stats.allTime.profit !== undefined) allTimeProductProfit = v2Stats.allTime.profit;
-                if (v2Stats.allTime.expenses !== undefined) totalExpenses = v2Stats.allTime.expenses;
-                if (v2Stats.allTime.subIncome !== undefined && totalIncome === 0) totalIncome = v2Stats.allTime.subIncome;
-                if (v2Stats.allTime.debt !== undefined && totalDebt === 0) totalDebt = v2Stats.allTime.debt;
-                if (v2Stats.allTime.activeCount !== undefined && activeCount === 0) activeCount = v2Stats.allTime.activeCount;
-                if (v2Stats.allTime.nearExpiryCount !== undefined && nearExpiryCount === 0) nearExpiryCount = v2Stats.allTime.nearExpiryCount;
-            }
-        }
-        const totalRevenue = totalIncome + allTimeSales;
-        const totalProductCost = allTimeSales - allTimeProductProfit;
-        const totalOverallCosts = totalExpenses + totalStaffPayouts + totalProductCost;
-        const totalOverallNetProfit = totalRevenue - totalOverallCosts;
-        const monthlyNetProfitValue = (monthlySubIncome + monthlySales) - (monthlyExpenses + monthlyStaffPayouts + (monthlySales - monthlyProductProfit));
-        setElemHTML('totalIncome', formatMoney(totalRevenue));
-        if (document.getElementById('monthlyNetProfit')) {
-            setElemHTML('monthlyNetProfit', formatMoney(monthlyNetProfitValue));
-        } if (document.getElementById('totalYearlyIncome')) {
-            setElemHTML('totalYearlyIncome', formatMoney(yearlySubIncome + yearlySales));
-        } if (document.getElementById('totalExpenses')) {
-            setElemHTML('totalExpenses', formatMoney(totalExpenses + totalStaffPayouts));
-        } setElemHTML('netProfit', formatMoney(totalOverallNetProfit));
-        if (document.getElementById('netProductProfit')) {
-            setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
-        } setElemHTML('totalDebt', formatMoney(totalDebt + totalExternalCredits));
-        setElemText('activeCount', activeCount);
-        setElemText('nearExpiryCount', nearExpiryCount);
-        if (document.getElementById('sessionSubscribersCount')) {
-            setElemText('sessionSubscribersCount', totalQuickSessionClients);
-        }
-        if (document.getElementById('monthlyQuickSessionsCount')) {
-            setElemText('monthlyQuickSessionsCount', monthlyQuickSessionsCount);
-        }
-        if (document.getElementById('monthlyCardioCount')) {
-            setElemText('monthlyCardioCount', monthlyCardioCount);
-        }
-        if (document.getElementById('monthlyMusculationCount')) {
-            setElemText('monthlyMusculationCount', monthlyMusculationCount);
-        }
-        if (document.getElementById('monthlyMaleClientsCount')) {
-            setElemText('monthlyMaleClientsCount', monthlyMaleClientsCount);
-        }
-        if (document.getElementById('monthlyFemaleClientsCount')) {
-            setElemText('monthlyFemaleClientsCount', monthlyFemaleClientsCount);
-        }
-        // Update new dashboard metrics
-        if (document.getElementById('todaySubIncome')) {
-            setElemHTML('todaySubIncome', formatMoney(todaySubIncome));
-            setElemHTML('todayProductSales', formatMoney(todaySales));
-            setElemHTML('todaySalesCount', todaySalesCount);
-            setElemHTML('monthlySubIncome', formatMoney(monthlySubIncome));
-            setElemHTML('yearlySubIncome', formatMoney(yearlySubIncome));
-            setElemHTML('monthlyProductSales', formatMoney(monthlySales));
-            setElemHTML('yearlyProductSales', formatMoney(yearlySales));
-            setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
-        }
-        // Calculate Stock metrics & valuation (سعر المشتريات وقيمة السلع بثمن البيع وبثمن الشراء)
-        const stockVal = calculateStockValuation();
-
-        // Update Products View Summary Stats
-        if (document.getElementById('prodViewTodaySales')) {
-            setElemHTML('prodViewTodaySales', formatMoney(todaySales));
-        } if (document.getElementById('prodViewMonthlySales')) {
-            setElemHTML('prodViewMonthlySales', formatMoney(monthlySales));
-        } if (document.getElementById('prodViewTodayCount')) {
-            setElemText('prodViewTodayCount', todaySalesCount);
-        } if (document.getElementById('prodViewStock1Count')) {
-            setElemText('prodViewStock1Count', `${stockVal.stock1ItemsCount} قطعة`);
-        } if (document.getElementById('prodViewStock2Count')) {
-            setElemText('prodViewStock2Count', `${stockVal.stock2ItemsCount} قطعة`);
-        } if (document.getElementById('prodViewTotalCapital')) {
-            setElemHTML('prodViewTotalCapital', formatMoney(stockVal.totalCost));
-        } if (document.getElementById('prodViewNetProfit')) {
-            setElemHTML('prodViewNetProfit', formatMoney(allTimeProductProfit));
-        }
-
-        // Product View Stock Valuation Bar (سعر المشتريات وقيمة السلع بثمن البيع وبثمن الشراء)
-        if (document.getElementById('prodViewTotalCost')) {
-            setElemHTML('prodViewTotalCost', formatMoney(stockVal.totalCost));
-        } if (document.getElementById('prodViewStock1Cost')) {
-            setElemHTML('prodViewStock1Cost', formatMoney(stockVal.stock1Cost));
-        } if (document.getElementById('prodViewStock2Cost')) {
-            setElemHTML('prodViewStock2Cost', formatMoney(stockVal.stock2Cost));
-        } if (document.getElementById('prodViewTotalSelling')) {
-            setElemHTML('prodViewTotalSelling', formatMoney(stockVal.totalSelling));
-        } if (document.getElementById('prodViewStock1Selling')) {
-            setElemHTML('prodViewStock1Selling', formatMoney(stockVal.stock1Selling));
-        } if (document.getElementById('prodViewStock2Selling')) {
-            setElemHTML('prodViewStock2Selling', formatMoney(stockVal.stock2Selling));
-        } if (document.getElementById('prodViewTotalProfit')) {
-            setElemHTML('prodViewTotalProfit', formatMoney(stockVal.totalPotentialProfit));
-        } if (document.getElementById('prodViewProfitMargin')) {
-            setElemText('prodViewProfitMargin', `${stockVal.profitMargin}%`);
-        } if (document.getElementById('prodViewTotalItemsCount')) {
-            setElemText('prodViewTotalItemsCount', `${stockVal.totalItemsCount} قطعة`);
-        }
-
-        // Dashboard Stock Valuation Cards
-        if (document.getElementById('dashboardStockCost')) {
-            setElemHTML('dashboardStockCost', formatMoney(stockVal.totalCost));
-        } if (document.getElementById('dashboardStockSelling')) {
-            setElemHTML('dashboardStockSelling', formatMoney(stockVal.totalSelling));
-        } if (document.getElementById('dashboardStockProfit')) {
-            setElemHTML('dashboardStockProfit', formatMoney(stockVal.totalPotentialProfit));
-        }
-        // Real-time Category Breakdown Calculations (Doses, Boxes, Frigo)
         const catFilterMode = window.categoryBreakdownFilter || 'month';
-        let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
-        let boxesSales = 0, boxesProfit = 0, boxesUnits = 0;
-        let frigoSales = 0, frigoProfit = 0, frigoUnits = 0;
-        let allDosesSales = 0, allDosesProfit = 0, allDosesUnits = 0;
-        let allBoxesSales = 0, allBoxesProfit = 0, allBoxesUnits = 0;
-        let allFrigoSales = 0, allFrigoProfit = 0, allFrigoUnits = 0;
+        const lenOf = (arr) => Array.isArray(arr) ? arr.length : 0;
+        const kpiSig = `${renderDataVersion}|${todayKey}|${catFilterMode}|${Boolean(appState.hideFinances)}|${Boolean(window.salesHistoryLoading)}|${Boolean(window.salesHistoryComplete)}|${lenOf(appState.quickSessions)},${lenOf(appState.customers)},${lenOf(appState.packages)},${lenOf(appState.expenses)},${lenOf(appState.staffPayouts)},${lenOf(appState.credits)},${lenOf(appState.sales)},${lenOf(appState.products)},${lenOf(appState.coachAbsences)}`;
 
-        const allSalesList = Array.isArray(appState.sales) ? appState.sales : [];
-        allSalesList.forEach(s => {
-            if (!s) return;
-            const isThisMonth = isSaleInMonth(s, monthKeyPrefix, currentMonth, currentYear);
-            const cat = getProductCategory(s);
-            const total = Number(s.total) || 0;
-            const cost = Number(s.cost) || 0;
-            const profit = s.profit !== undefined && s.profit !== null ? Number(s.profit) : (total - cost);
-            const qty = Number(s.qty) || 1;
+        // Skip re-scanning thousands of financial records when only UI navigation
+        // happened without any data/date/filter change.
+        if (_lastKpiRenderSignature !== kpiSig) {
+            _lastKpiRenderSignature = kpiSig;
+            let totalIncome = 0; let todaySubIncome = 0;
+            let monthlySubIncome = 0; let yearlySubIncome = 0;
+            let totalDebt = 0, activeCount = 0, nearExpiryCount = 0;
+            let totalQuickSessionClients = 0; let totalQuickSessionsCount = 0;
+            let monthlyQuickSessionsCount = 0; let monthlyCardioCount = 0; let monthlyMusculationCount = 0;
+            let monthlyMaleClientsCount = 0; let monthlyFemaleClientsCount = 0;
+            // Count and income from quick sessions
+            if (Array.isArray(appState.quickSessions)) {
+                appState.quickSessions.forEach(qs => {
+                    const p = Number(qs.price || 0);
+                    const clients = Number(qs.clientCount || 1);
+                    const sessions = Number(qs.sessionCount || 1);
+                    totalIncome += p;
+                    totalQuickSessionClients += clients;
+                    totalQuickSessionsCount += sessions;
+                    const qKey = getLocalDateString(qs.date || (Number(qs.id) || nowMs));
+                    const qInMonth = qKey.substring(0, 7) === monthKeyPrefix;
+                    if (qInMonth) {
+                        monthlyQuickSessionsCount += sessions;
+                        const qsClients = Array.isArray(qs.clients) ? qs.clients : [];
+                        qsClients.forEach(cl => {
+                            if (cl?.activity === 'cardio') monthlyCardioCount++;
+                            else if (cl?.activity === 'musculation') monthlyMusculationCount++;
+                            if (cl?.gender === 'female') monthlyFemaleClientsCount++;
+                            else monthlyMaleClientsCount++;
+                        });
+                    }
+                    if (qKey === todayKey) {
+                        todaySubIncome += p; } if (qInMonth) {
+                        monthlySubIncome += p; } if (qKey.substring(0, 4) === yearKeyPrefix) {
+                        yearlySubIncome += p; } });
+            } // O(1) package lookup index (was packages.find inside the customers loop => O(n*m))
+            const packagesArr = Array.isArray(appState.packages) ? appState.packages : [];
+            const packageById = new Map();
+            packagesArr.forEach(p => { if (p && p.id !== undefined && p.id !== null) packageById.set(String(p.id), p); });
+            const customersArr = Array.isArray(appState.customers) ? appState.customers : [];
+            customersArr.forEach(c => { if (customerIsSession(c)) {
+                   totalQuickSessionClients++; }
+               const pkg = packageById.get(String(c.packageId));
+               const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
+               let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
+               else if (c.paymentStatus === 'credit') {
+                   const debt = parseInt(c.debtAmount) || 0;
+                   totalDebt += debt; paidAmount = Math.max(0, price - debt);
+               } totalIncome += paidAmount; const cKey = getLocalDateString(c.startDate);
+               if (cKey === todayKey) {
+                   todaySubIncome += paidAmount; }
+               if (cKey.substring(0, 7) === monthKeyPrefix) {
+                   monthlySubIncome += paidAmount; }
+               if (cKey.substring(0, 4) === yearKeyPrefix) {
+                   yearlySubIncome += paidAmount; }
+               const status = calculateStatus(c, nowMs); if (status === 'active' || status === 'near_expiry') {
+                   activeCount++; if (status === 'near_expiry') nearExpiryCount++;
+               } }); const expensesArrForStats = Array.isArray(appState.expenses) ? appState.expenses : [];
+            // One pass for both totals (was reduce + filter + reduce).
+            let totalExpenses = 0;
+            let monthlyExpenses = 0;
+            expensesArrForStats.forEach(e => {
+                const amt = parseFloat(String(e.amount || 0).replace(/,/g, '')) || 0;
+                totalExpenses += amt;
+                const dStr = e.date || ''; let inMonth = false;
+                if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
+                    const parts = dStr.split('-');
+                    inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
+                } else { const d = new Date(e.date); inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
+                if (inMonth) monthlyExpenses += amt;
+            });
+            const staffPayoutsArrForStats = Array.isArray(appState.staffPayouts) ? appState.staffPayouts : [];
+            // One pass for both totals (was reduce + filter + reduce).
+            let totalStaffPayouts = 0;
+            let monthlyStaffPayouts = 0;
+            staffPayoutsArrForStats.forEach(p => {
+                const amt = parseFloat(String(p.amount || 0).replace(/,/g, '')) || 0;
+                totalStaffPayouts += amt;
+                const dStr = p.date || p.createdAt || '';
+                let inMonth = false;
+                if (typeof dStr === 'string' && /^\d{4}-\d{2}/.test(dStr)) {
+                    const parts = dStr.split('-');
+                    inMonth = parseInt(parts[0], 10) === currentYear && parseInt(parts[1], 10) === (currentMonth + 1);
+                } else { const d = new Date(p.date || p.id);
+                    inMonth = !isNaN(d.getTime()) && d.getMonth() === currentMonth && d.getFullYear() === currentYear; }
+                if (inMonth) monthlyStaffPayouts += amt;
+            });
+            const creditsArr = Array.isArray(appState.credits) ? appState.credits : [];
+            let totalExternalCredits = creditsArr.reduce((sum, cr) => sum + (Number(cr && cr.amount) || 0), 0);
+            let allTimeSales = 0; let todaySales = 0;
+            let todaySalesCount = 0; let monthlySales = 0;
+            let yearlySales = 0; let allTimeProductProfit = 0;
+            let monthlyProductProfit = 0;
+            let dosesSales = 0, dosesProfit = 0, dosesUnits = 0;
+            let boxesSales = 0, boxesProfit = 0, boxesUnits = 0;
+            let frigoSales = 0, frigoProfit = 0, frigoUnits = 0;
+            let allDosesSales = 0, allDosesProfit = 0, allDosesUnits = 0;
+            let allBoxesSales = 0, allBoxesProfit = 0, allBoxesUnits = 0;
+            let allFrigoSales = 0, allFrigoProfit = 0, allFrigoUnits = 0;
 
-            if (cat === 'doses') {
-                allDosesSales += total;
-                allDosesProfit += profit;
-                allDosesUnits += qty;
-            } else if (cat === 'frigo') {
-                allFrigoSales += total;
-                allFrigoProfit += profit;
-                allFrigoUnits += qty;
-            } else {
-                allBoxesSales += total;
-                allBoxesProfit += profit;
-                allBoxesUnits += qty;
+            const yearlyStats = appState.v2Stats && appState.v2Stats.yearly ? appState.v2Stats.yearly : null;
+            const statsInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStats && Object.keys(yearlyStats).length > 0);
+            if (statsInterim) {
+                Object.values(yearlyStats).forEach(ys => {
+                    if (!ys) return;
+                    allTimeSales += Number(ys.sales) || 0;
+                    allTimeProductProfit += Number(ys.profit) || 0;
+                });
             }
-
-            if (isThisMonth) {
+            // Single merged pass over appState.sales (replaces two separate full-array scans)
+            const salesArr = Array.isArray(appState.sales) ? appState.sales : [];
+            for (let i = 0; i < salesArr.length; i++) {
+                const s = salesArr[i];
+                if (!s) continue;
+                const sTotal = Number(s.total) || 0;
+                const sCost = Number(s.cost) || 0;
+                const sProfitRaw = Number(s.profit) || 0;
+                if (!statsInterim) {
+                    allTimeSales += sTotal;
+                    allTimeProductProfit += sProfitRaw;
+                }
+                const sKey = getLocalDateString(s.date);
+                if (sKey === todayKey) {
+                    todaySales += sTotal;
+                    todaySalesCount++;
+                }
+                if (sKey.substring(0, 7) === monthKeyPrefix) {
+                    monthlySales += sTotal;
+                    monthlyProductProfit += sProfitRaw;
+                }
+                if (sKey.substring(0, 4) === yearKeyPrefix) {
+                    yearlySales += sTotal;
+                }
+                // Category breakdown in the same pass
+                const isThisMonth = isSaleInMonth(s, monthKeyPrefix, currentMonth, currentYear);
+                const cat = getProductCategory(s);
+                const catProfit = s.profit !== undefined && s.profit !== null ? Number(s.profit) : (sTotal - sCost);
+                const qty = Number(s.qty) || 1;
                 if (cat === 'doses') {
-                    dosesSales += total;
-                    dosesProfit += profit;
-                    dosesUnits += qty;
+                    allDosesSales += sTotal; allDosesProfit += catProfit; allDosesUnits += qty;
+                    if (isThisMonth) { dosesSales += sTotal; dosesProfit += catProfit; dosesUnits += qty; }
                 } else if (cat === 'frigo') {
-                    frigoSales += total;
-                    frigoProfit += profit;
-                    frigoUnits += qty;
+                    allFrigoSales += sTotal; allFrigoProfit += catProfit; allFrigoUnits += qty;
+                    if (isThisMonth) { frigoSales += sTotal; frigoProfit += catProfit; frigoUnits += qty; }
                 } else {
-                    boxesSales += total;
-                    boxesProfit += profit;
-                    boxesUnits += qty;
+                    allBoxesSales += sTotal; allBoxesProfit += catProfit; allBoxesUnits += qty;
+                    if (isThisMonth) { boxesSales += sTotal; boxesProfit += catProfit; boxesUnits += qty; }
                 }
             }
-        });
-
-        // Auto fallback: if filter is 'month' but month has 0 sales and all-time has sales, show all-time or filtered
-        const showAll = catFilterMode === 'all';
-        const displayDosesSales = showAll ? allDosesSales : dosesSales;
-        const displayDosesProfit = showAll ? allDosesProfit : dosesProfit;
-        const displayDosesUnits = showAll ? allDosesUnits : dosesUnits;
-
-        const displayBoxesSales = showAll ? allBoxesSales : boxesSales;
-        const displayBoxesProfit = showAll ? allBoxesProfit : boxesProfit;
-        const displayBoxesUnits = showAll ? allBoxesUnits : boxesUnits;
-
-        const displayFrigoSales = showAll ? allFrigoSales : frigoSales;
-        const displayFrigoProfit = showAll ? allFrigoProfit : frigoProfit;
-        const displayFrigoUnits = showAll ? allFrigoUnits : frigoUnits;
-
-        if (document.getElementById('prodCatMonthLabel')) {
-            const labelStr = showAll
-                ? `إحصائيات إجمالية (جميع المبيعات المسجلة)`
-                : `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`;
-            setElemText('prodCatMonthLabel', labelStr);
-        }
-
-        const btnMonth = document.getElementById('catFilterThisMonthBtn');
-        const btnAll = document.getElementById('catFilterAllTimeBtn');
-        if (btnMonth && btnAll) {
-            if (showAll) {
-                btnAll.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
-                btnMonth.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
-            } else {
-                btnMonth.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
-                btnAll.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
+            // Use v2Stats for accelerated O(1) stats aggregation
+            const nowIso = new Date().toISOString();
+            const statDateKey = nowIso.split('T')[0];
+            const statMonthKey = statDateKey.substring(0, 7);
+            const statYearKey = statDateKey.substring(0, 4);
+            const v2Stats = appState.v2Stats || null;
+            if (v2Stats) {
+                const dStat = v2Stats.daily?.[statDateKey];
+                const mStat = v2Stats.monthly?.[statMonthKey];
+                const yStat = v2Stats.yearly?.[statYearKey];
+                if (dStat) {
+                    if (dStat.sales !== undefined) todaySales = dStat.sales;
+                    if (dStat.salesCount !== undefined) todaySalesCount = dStat.salesCount;
+                    if (dStat.subIncome !== undefined && todaySubIncome === 0) todaySubIncome = dStat.subIncome;
+                }
+                if (mStat) {
+                    if (mStat.sales !== undefined) monthlySales = mStat.sales;
+                    if (mStat.profit !== undefined) monthlyProductProfit = mStat.profit;
+                    if (mStat.expenses !== undefined) monthlyExpenses = mStat.expenses;
+                    if (mStat.subIncome !== undefined && monthlySubIncome === 0) monthlySubIncome = mStat.subIncome;
+                }
+                if (yStat) {
+                    if (yStat.sales !== undefined) yearlySales = yStat.sales;
+                    if (yStat.subIncome !== undefined && yearlySubIncome === 0) yearlySubIncome = yStat.subIncome;
+                }
+                if (v2Stats.allTime) {
+                    if (v2Stats.allTime.sales !== undefined) allTimeSales = v2Stats.allTime.sales;
+                    if (v2Stats.allTime.profit !== undefined) allTimeProductProfit = v2Stats.allTime.profit;
+                    if (v2Stats.allTime.expenses !== undefined) totalExpenses = v2Stats.allTime.expenses;
+                    if (v2Stats.allTime.subIncome !== undefined && totalIncome === 0) totalIncome = v2Stats.allTime.subIncome;
+                    if (v2Stats.allTime.debt !== undefined && totalDebt === 0) totalDebt = v2Stats.allTime.debt;
+                    if (v2Stats.allTime.activeCount !== undefined && activeCount === 0) activeCount = v2Stats.allTime.activeCount;
+                    if (v2Stats.allTime.nearExpiryCount !== undefined && nearExpiryCount === 0) nearExpiryCount = v2Stats.allTime.nearExpiryCount;
+                }
             }
-        }
+            const totalRevenue = totalIncome + allTimeSales;
+            const totalProductCost = allTimeSales - allTimeProductProfit;
+            const totalOverallCosts = totalExpenses + totalStaffPayouts + totalProductCost;
+            const totalOverallNetProfit = totalRevenue - totalOverallCosts;
+            const monthlyNetProfitValue = (monthlySubIncome + monthlySales) - (monthlyExpenses + monthlyStaffPayouts + (monthlySales - monthlyProductProfit));
+            setElemHTML('totalIncome', formatMoney(totalRevenue));
+            if (document.getElementById('monthlyNetProfit')) {
+                setElemHTML('monthlyNetProfit', formatMoney(monthlyNetProfitValue));
+            } if (document.getElementById('totalYearlyIncome')) {
+                setElemHTML('totalYearlyIncome', formatMoney(yearlySubIncome + yearlySales));
+            } if (document.getElementById('totalExpenses')) {
+                setElemHTML('totalExpenses', formatMoney(totalExpenses + totalStaffPayouts));
+            } setElemHTML('netProfit', formatMoney(totalOverallNetProfit));
+            if (document.getElementById('netProductProfit')) {
+                setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
+            } setElemHTML('totalDebt', formatMoney(totalDebt + totalExternalCredits));
+            setElemText('activeCount', activeCount);
+            setElemText('nearExpiryCount', nearExpiryCount);
+            if (document.getElementById('sessionSubscribersCount')) {
+                setElemText('sessionSubscribersCount', totalQuickSessionClients);
+            }
+            if (document.getElementById('monthlyQuickSessionsCount')) {
+                setElemText('monthlyQuickSessionsCount', monthlyQuickSessionsCount);
+            }
+            if (document.getElementById('monthlyCardioCount')) {
+                setElemText('monthlyCardioCount', monthlyCardioCount);
+            }
+            if (document.getElementById('monthlyMusculationCount')) {
+                setElemText('monthlyMusculationCount', monthlyMusculationCount);
+            }
+            if (document.getElementById('monthlyMaleClientsCount')) {
+                setElemText('monthlyMaleClientsCount', monthlyMaleClientsCount);
+            }
+            if (document.getElementById('monthlyFemaleClientsCount')) {
+                setElemText('monthlyFemaleClientsCount', monthlyFemaleClientsCount);
+            }
+            // Update new dashboard metrics
+            if (document.getElementById('todaySubIncome')) {
+                setElemHTML('todaySubIncome', formatMoney(todaySubIncome));
+                setElemHTML('todayProductSales', formatMoney(todaySales));
+                setElemHTML('todaySalesCount', todaySalesCount);
+                setElemHTML('monthlySubIncome', formatMoney(monthlySubIncome));
+                setElemHTML('yearlySubIncome', formatMoney(yearlySubIncome));
+                setElemHTML('monthlyProductSales', formatMoney(monthlySales));
+                setElemHTML('yearlyProductSales', formatMoney(yearlySales));
+                setElemHTML('netProductProfit', formatMoney(allTimeProductProfit));
+            }
+            // Calculate Stock metrics & valuation
+            const stockVal = calculateStockValuation();
 
-        // Doses
-        setElemHTML('prodCatDosesIncome', formatMoney(displayDosesSales));
-        setElemHTML('catDosesIncome', formatMoney(displayDosesSales));
-        setElemHTML('prodCatDosesProfit', `صافي الربح: ${displayDosesProfit.toLocaleString()} دج`);
-        setElemHTML('catDosesProfit', formatMoney(displayDosesProfit));
-        setElemText('prodCatDosesUnits', `${displayDosesUnits} جرعة مباعة`);
-        setElemText('catDosesCountBadge', `${displayDosesUnits} جرعة`);
+            // Update Products View Summary Stats
+            if (document.getElementById('prodViewTodaySales')) {
+                setElemHTML('prodViewTodaySales', formatMoney(todaySales));
+            } if (document.getElementById('prodViewMonthlySales')) {
+                setElemHTML('prodViewMonthlySales', formatMoney(monthlySales));
+            } if (document.getElementById('prodViewTodayCount')) {
+                setElemText('prodViewTodayCount', todaySalesCount);
+            } if (document.getElementById('prodViewStock1Count')) {
+                setElemText('prodViewStock1Count', `${stockVal.stock1ItemsCount} قطعة`);
+            } if (document.getElementById('prodViewStock2Count')) {
+                setElemText('prodViewStock2Count', `${stockVal.stock2ItemsCount} قطعة`);
+            } if (document.getElementById('prodViewTotalCapital')) {
+                setElemHTML('prodViewTotalCapital', formatMoney(stockVal.totalCost));
+            } if (document.getElementById('prodViewNetProfit')) {
+                setElemHTML('prodViewNetProfit', formatMoney(allTimeProductProfit));
+            }
 
-        // Boxes
-        setElemHTML('prodCatBoxesIncome', formatMoney(displayBoxesSales));
-        setElemHTML('catBoxesIncome', formatMoney(displayBoxesSales));
-        setElemHTML('prodCatBoxesProfit', `صافي الربح: ${displayBoxesProfit.toLocaleString()} دج`);
-        setElemHTML('catBoxesProfit', formatMoney(displayBoxesProfit));
-        setElemText('prodCatBoxesUnits', `${displayBoxesUnits} علبة مباعة`);
-        setElemText('catBoxesCountBadge', `${displayBoxesUnits} علبة`);
+            // Product View Stock Valuation Bar
+            if (document.getElementById('prodViewTotalCost')) {
+                setElemHTML('prodViewTotalCost', formatMoney(stockVal.totalCost));
+            } if (document.getElementById('prodViewStock1Cost')) {
+                setElemHTML('prodViewStock1Cost', formatMoney(stockVal.stock1Cost));
+            } if (document.getElementById('prodViewStock2Cost')) {
+                setElemHTML('prodViewStock2Cost', formatMoney(stockVal.stock2Cost));
+            } if (document.getElementById('prodViewTotalSelling')) {
+                setElemHTML('prodViewTotalSelling', formatMoney(stockVal.totalSelling));
+            } if (document.getElementById('prodViewStock1Selling')) {
+                setElemHTML('prodViewStock1Selling', formatMoney(stockVal.stock1Selling));
+            } if (document.getElementById('prodViewStock2Selling')) {
+                setElemHTML('prodViewStock2Selling', formatMoney(stockVal.stock2Selling));
+            } if (document.getElementById('prodViewTotalProfit')) {
+                setElemHTML('prodViewTotalProfit', formatMoney(stockVal.totalPotentialProfit));
+            } if (document.getElementById('prodViewProfitMargin')) {
+                setElemText('prodViewProfitMargin', `${stockVal.profitMargin}%`);
+            } if (document.getElementById('prodViewTotalItemsCount')) {
+                setElemText('prodViewTotalItemsCount', `${stockVal.totalItemsCount} قطعة`);
+            }
 
-        // Frigo
-        setElemHTML('prodCatFrigoIncome', formatMoney(displayFrigoSales));
-        setElemHTML('catFrigoIncome', formatMoney(displayFrigoSales));
-        setElemHTML('prodCatFrigoProfit', `صافي الربح: ${displayFrigoProfit.toLocaleString()} دج`);
-        setElemHTML('catFrigoProfit', formatMoney(displayFrigoProfit));
-        setElemText('prodCatFrigoUnits', `${displayFrigoUnits} قارورة / قطعة`);
-        setElemText('catFrigoCountBadge', `${displayFrigoUnits} قطعة`);
-        // Update Customers View Summary Stats
-        if (document.getElementById('custViewActiveCount')) {
-            setElemText('custViewActiveCount', activeCount);
-        } if (document.getElementById('custViewTodayIncome')) {
-            setElemHTML('custViewTodayIncome', formatMoney(todaySubIncome));
-        } if (document.getElementById('custViewMonthlyIncome')) {
-            setElemHTML('custViewMonthlyIncome', formatMoney(monthlySubIncome));
-        } if (document.getElementById('custViewSessionCount')) {
-            setElemText('custViewSessionCount', totalQuickSessionClients);
-        } if (document.getElementById('custViewNearExpiryCount')) {
-            setElemText('custViewNearExpiryCount', nearExpiryCount);
+            // Dashboard Stock Valuation Cards
+            if (document.getElementById('dashboardStockCost')) {
+                setElemHTML('dashboardStockCost', formatMoney(stockVal.totalCost));
+            } if (document.getElementById('dashboardStockSelling')) {
+                setElemHTML('dashboardStockSelling', formatMoney(stockVal.totalSelling));
+            } if (document.getElementById('dashboardStockProfit')) {
+                setElemHTML('dashboardStockProfit', formatMoney(stockVal.totalPotentialProfit));
+            }
+
+            const showAll = catFilterMode === 'all';
+            const displayDosesSales = showAll ? allDosesSales : dosesSales;
+            const displayDosesProfit = showAll ? allDosesProfit : dosesProfit;
+            const displayDosesUnits = showAll ? allDosesUnits : dosesUnits;
+
+            const displayBoxesSales = showAll ? allBoxesSales : boxesSales;
+            const displayBoxesProfit = showAll ? allBoxesProfit : boxesProfit;
+            const displayBoxesUnits = showAll ? allBoxesUnits : boxesUnits;
+
+            const displayFrigoSales = showAll ? allFrigoSales : frigoSales;
+            const displayFrigoProfit = showAll ? allFrigoProfit : frigoProfit;
+            const displayFrigoUnits = showAll ? allFrigoUnits : frigoUnits;
+
+            if (document.getElementById('prodCatMonthLabel')) {
+                const labelStr = showAll
+                    ? `إحصائيات إجمالية (جميع المبيعات المسجلة)`
+                    : `إحصائيات شهر ${currentMonth + 1} / ${currentYear}`;
+                setElemText('prodCatMonthLabel', labelStr);
+            }
+
+            const btnMonth = document.getElementById('catFilterThisMonthBtn');
+            const btnAll = document.getElementById('catFilterAllTimeBtn');
+            if (btnMonth && btnAll) {
+                if (showAll) {
+                    btnAll.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
+                    btnMonth.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
+                } else {
+                    btnMonth.className = "px-2.5 py-1 rounded-lg transition-all bg-white text-blue-700 shadow-2xs font-extrabold";
+                    btnAll.className = "px-2.5 py-1 rounded-lg transition-all text-slate-600 hover:text-slate-900 font-bold";
+                }
+            }
+
+            // Doses
+            setElemHTML('prodCatDosesIncome', formatMoney(displayDosesSales));
+            setElemHTML('catDosesIncome', formatMoney(displayDosesSales));
+            setElemHTML('prodCatDosesProfit', `صافي الربح: ${displayDosesProfit.toLocaleString()} دج`);
+            setElemHTML('catDosesProfit', formatMoney(displayDosesProfit));
+            setElemText('prodCatDosesUnits', `${displayDosesUnits} جرعة مباعة`);
+            setElemText('catDosesCountBadge', `${displayDosesUnits} جرعة`);
+
+            // Boxes
+            setElemHTML('prodCatBoxesIncome', formatMoney(displayBoxesSales));
+            setElemHTML('catBoxesIncome', formatMoney(displayBoxesSales));
+            setElemHTML('prodCatBoxesProfit', `صافي الربح: ${displayBoxesProfit.toLocaleString()} دج`);
+            setElemHTML('catBoxesProfit', formatMoney(displayBoxesProfit));
+            setElemText('prodCatBoxesUnits', `${displayBoxesUnits} علبة مباعة`);
+            setElemText('catBoxesCountBadge', `${displayBoxesUnits} علبة`);
+
+            // Frigo
+            setElemHTML('prodCatFrigoIncome', formatMoney(displayFrigoSales));
+            setElemHTML('catFrigoIncome', formatMoney(displayFrigoSales));
+            setElemHTML('prodCatFrigoProfit', `صافي الربح: ${displayFrigoProfit.toLocaleString()} دج`);
+            setElemHTML('catFrigoProfit', formatMoney(displayFrigoProfit));
+            setElemText('prodCatFrigoUnits', `${displayFrigoUnits} قارورة / قطعة`);
+            setElemText('catFrigoCountBadge', `${displayFrigoUnits} قطعة`);
+            // Update Customers View Summary Stats
+            if (document.getElementById('custViewActiveCount')) {
+                setElemText('custViewActiveCount', activeCount);
+            } if (document.getElementById('custViewTodayIncome')) {
+                setElemHTML('custViewTodayIncome', formatMoney(todaySubIncome));
+            } if (document.getElementById('custViewMonthlyIncome')) {
+                setElemHTML('custViewMonthlyIncome', formatMoney(monthlySubIncome));
+            } if (document.getElementById('custViewSessionCount')) {
+                setElemText('custViewSessionCount', totalQuickSessionClients);
+            } if (document.getElementById('custViewNearExpiryCount')) {
+                setElemText('custViewNearExpiryCount', nearExpiryCount);
+            }
         }
         // Keep all Dashboard Stats sections visible on all screen sizes and devices
         if (document.getElementById('mainStatsSection')) {
@@ -11851,9 +12026,11 @@ window.addEventListener('unhandledrejection', (event) => {
                 listRenderQueue.push(['staffPayouts', renderStaffPayouts]);
             }
         }
-        if (isVisible('productsView') || isVisible('dashboardView')) listRenderQueue.push(['productsList', renderProductsList]);
-        if (isVisible('dashboardView') || isVisible('productsView')) listRenderQueue.push(['salesList', renderSalesList]);
-        if (isVisible('customersView') || isVisible('dashboardView')) listRenderQueue.push(['customers', renderCustomers]);
+        if (isVisible('productsView')) {
+            listRenderQueue.push(['productsList', renderProductsList]);
+            listRenderQueue.push(['salesList', renderSalesList]);
+        }
+        if (isVisible('customersView') || isVisible('dashboardView')) listRenderQueue.push(['customers', () => renderCustomers({ skipTabs: true })]);
         if (isVisible('caisseView') || isModalOpen('caisseModal')) listRenderQueue.push(['caisse', renderCaisseView]);
         listRenderQueue.push(['mockDataUI', updateMockDataUIState]);
         scheduleListRenders(listRenderQueue);
@@ -12126,6 +12303,7 @@ window.addEventListener('unhandledrejection', (event) => {
             previewVal.textContent = '0 دج (متوازن)';
             previewVal.className = 'text-base font-black text-blue-600';
         } } window.handleClotureAmountInput = handleClotureAmountInput;
+    window.handleClotureAmountInputThrottled = throttle(() => handleClotureAmountInput(), 60);
     function toggleDenominationCounter() { const container = document.getElementById('denominationCounterContainer');
         if (container) { container.classList.toggle('hidden');
         } } window.toggleDenominationCounter = toggleDenominationCounter;
@@ -12139,6 +12317,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const badge = document.getElementById('denomTotalBadge');
         if (badge) { badge.textContent = `المجموع: ${formatMoney(sum)}`;
         } return sum; } window.calcDenominations = calcDenominations;
+    window.calcDenominationsThrottled = throttle(() => calcDenominations(), 60);
     function applyDenominationsToInput() { const sum = calcDenominations();
         const input = document.getElementById('clotureFormActualAmount');
         if (input) { input.value = sum;
@@ -12420,39 +12599,24 @@ window.addEventListener('unhandledrejection', (event) => {
     // REAL-TIME INPUT GUARDS & SECURITY BINDINGS
     // ==========================================
     function setupGlobalInputSecurity() {
-        // Prevent unwanted keys on numeric inputs (e.g., 'e', 'E', '+', '-')
-        document.addEventListener('keydown', function(e) {
-            const target = e.target; if (!target || !target.tagName || !['INPUT', 'TEXTAREA'].includes(target.tagName)) return;
+        // O(1) per-element classification cache so global keydown/input listeners
+        // do not re-read attributes and run 25+ substring checks on every keystroke.
+        const inputProfileCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+        function getInputGuardProfile(target) {
+            if (inputProfileCache && inputProfileCache.has(target)) {
+                return inputProfileCache.get(target);
+            }
             const type = (target.getAttribute('type') || '').toLowerCase();
             const id = (target.id || '').toLowerCase();
+            const placeholder = (target.getAttribute('placeholder') || '').toLowerCase();
             const isStrictNumeric = ( type === 'number' ||
                 id.includes('amount') || id.includes('price') ||
                 id.includes('paid') || id.includes('debt') ||
                 id.includes('weight') || id.includes('age') ||
                 id.includes('qty') || id.includes('count') ||
                 id.includes('duration') || id.includes('days') ||
-                id.includes('sessions') ); if (isStrictNumeric) {
-                if (['e', 'E', '+', '-'].includes(e.key) && type === 'number') {
-                    e.preventDefault(); } } }, true);
-        document.addEventListener('input', function(e) {
-            const target = e.target; if (!target || !target.tagName || !['INPUT', 'TEXTAREA'].includes(target.tagName)) return;
-            const type = (target.getAttribute('type') || '').toLowerCase();
-            const id = (target.id || '').toLowerCase();
-            const placeholder = (target.getAttribute('placeholder') || '').toLowerCase();
-            // Search fields must NEVER be sanitized as name fields: their placeholders
-            // contain the word "الاسم" which used to match the rule below and silently
-            // delete digits while typing a phone number or a barcode in the search box
+                id.includes('sessions') );
             const isSearchField = id.includes('search') || type === 'search' || placeholder.includes('بحث') || target.getAttribute('data-search-field') === '1';
-            // Search boxes must keep both letters and digits. Their placeholders mention
-            // "الاسم" and "هاتف", which used to match the name/phone rules and wipe the
-            // query (names deleted as "phone", phone digits deleted as "name").
-            if (isSearchField) {
-                const raw = target.value;
-                const sanitized = raw.replace(/[<>{}`$\\]/g, '');
-                if (raw !== sanitized) target.value = sanitized;
-                return;
-            }
-            // Real-time Name & Nickname restriction (Letters, spaces, hyphens ONLY - strictly NO numbers/symbols)
             const isNameOrNickname = !isSearchField && (
                 id.includes('nickname') ||
                 id.includes('creditname') || id.includes('custname') ||
@@ -12467,29 +12631,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 placeholder.includes('اسم المشترك') ||
                 placeholder.includes('اسم العامل') ||
                 placeholder.includes('اسم المدرب')
-            ); if (isNameOrNickname) { const raw = target.value;
-                // Remove all numbers (English 0-9 & Arabic ٠-٩) and non-letter symbols from person name inputs
-                const sanitized = raw.replace(/[0-9\u0660-\u0669\u06F0-\u06F9]/g, '').replace(/[^a-zA-Z\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\s'-]/g, '');
-                if (raw !== sanitized) { target.value = sanitized;
-                } }
-            // Real-time Phone number restriction (Digits 0-9 and leading '+' ONLY - strictly NO letters/symbols)
-            const isPhone = ( type === 'tel' ||
+            );
+            const isPhone = !isSearchField && ( type === 'tel' ||
                 id.includes('phone') || id.includes('mobile') ||
                 placeholder.includes('0x') ||
                 placeholder.includes('هاتف') ||
                 placeholder.includes('0550') );
-            if (isPhone) { const raw = target.value;
-                let sanitized = raw.replace(/[^\d+]/g, '');
-                if (sanitized.indexOf('+') > 0) {
-                    sanitized = sanitized.replace(/\+/g, '');
-                } if (raw !== sanitized) {
-                    target.value = sanitized; }
-            }
-            // Bypass all text/numeric restrictions for date, month, time inputs
-            if (type === 'date' || type === 'month' || type === 'time' || type === 'datetime-local') {
-                return; }
-            // Real-time numeric input restriction (Digits 0-9 & decimal point ONLY - strictly NO letters/text)
-            const isNumericInput = ( type === 'number' ||
+            const isDateOrTime = (type === 'date' || type === 'month' || type === 'time' || type === 'datetime-local');
+            const isNumericInput = !isDateOrTime && ( type === 'number' ||
                 id.includes('amount') || id.includes('price') ||
                 id.includes('paid') || id.includes('debt') ||
                 id.includes('weight') || id.includes('age') ||
@@ -12498,21 +12647,60 @@ window.addEventListener('unhandledrejection', (event) => {
                 id.includes('sessions') || id === 'staffamount' ||
                 id === 'staffpayoutamount' || id.includes('salary') ||
                 (id.includes('expense') && id.includes('amount')) ) && !id.includes('date') && !id.includes('filter') && !id.includes('desc') && !id.includes('search') && !id.includes('category') && id !== 'prodweight';
-            if (isNumericInput && type !== 'number') {
-                const raw = target.value; const sanitized = raw.replace(/[^0-9.]/g, '');
-                if (raw !== sanitized) { target.value = sanitized;
-                } }
-            // Real-time Code & Injection Guard for general text inputs (blocks HTML tags, script braces, backticks, backslashes)
-            // Allows natural arabic characters, hyphens, slashes, punctuation, parentheses
-            if ((type === 'text' || type === 'search' || target.tagName === 'TEXTAREA') && !isNameOrNickname && !isPhone && !isNumericInput) {
-                const raw = target.value; const sanitized = raw.replace(/[<>{}`$\\]/g, '');
-                if (raw !== sanitized) { target.value = sanitized;
-                } }
-            // Real-time check for script tags or dangerous code in all inputs
-            if (target.value && containsDangerousCode(target.value)) {
-                target.value = sanitizeInputText(target.value);
+            const isGeneralText = (type === 'text' || type === 'search' || target.tagName === 'TEXTAREA') && !isNameOrNickname && !isPhone && !isNumericInput;
+            const profile = { type, isStrictNumeric, isSearchField, isNameOrNickname, isPhone, isDateOrTime, isNumericInput, isGeneralText };
+            if (inputProfileCache) inputProfileCache.set(target, profile);
+            return profile;
+        }
+        // Prevent unwanted keys on numeric inputs (e.g., 'e', 'E', '+', '-')
+        document.addEventListener('keydown', function(e) {
+            const target = e.target; if (!target || !target.tagName || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
+            const profile = getInputGuardProfile(target);
+            if (profile.isStrictNumeric && profile.type === 'number') {
+                if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') {
+                    e.preventDefault();
+                }
+            }
+        }, true);
+        document.addEventListener('input', function(e) {
+            const target = e.target; if (!target || !target.tagName || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
+            const profile = getInputGuardProfile(target);
+            if (profile.isDateOrTime) return;
+            if (profile.isSearchField) {
+                const raw = target.value;
+                const sanitized = raw.replace(/[<>{}`$\\]/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+                return;
+            }
+            if (profile.isNameOrNickname) {
+                const raw = target.value;
+                const sanitized = raw.replace(/[0-9\u0660-\u0669\u06F0-\u06F9]/g, '').replace(/[^a-zA-Z\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\s'-]/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+            }
+            if (profile.isPhone) {
+                const raw = target.value;
+                let sanitized = raw.replace(/[^\d+]/g, '');
+                if (sanitized.indexOf('+') > 0) sanitized = sanitized.replace(/\+/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+            }
+            if (profile.isNumericInput && profile.type !== 'number') {
+                const raw = target.value;
+                const sanitized = raw.replace(/[^0-9.]/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+            }
+            if (profile.isGeneralText) {
+                const raw = target.value;
+                const sanitized = raw.replace(/[<>{}`$\\]/g, '');
+                if (raw !== sanitized) target.value = sanitized;
+            }
+            // Fast character check before running full dangerous-code regex suite
+            const val = target.value;
+            if (val && val.length >= 6 && /[<(:;=\\`]/.test(val) && containsDangerousCode(val)) {
+                target.value = sanitizeInputText(val);
                 showErrorToast('تحذير أمني: تم حظر كتابة رموز أو أكواد غير مسموح بها.');
-            } }, true); }
+            }
+        }, true);
+    }
     // ==========================================
     // 1. GOOGLE DRIVE DIRECT OAUTH & BACKUP ENGINE
     // ==========================================
@@ -13078,8 +13266,8 @@ window.addEventListener('unhandledrejection', (event) => {
         if (monthSelect && !monthSelect.value) {
             monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         }
-        renderCategoryProfitsModal();
         modal.classList.add('active');
+        runOrDeferInteractive('openModal:categoryProfits', () => renderCategoryProfitsModal());
     }; 
     window.renderCategoryProfitsModal = function() {
         const monthSelect = document.getElementById('catProfitFilterMonth');
@@ -13219,7 +13407,9 @@ window.addEventListener('unhandledrejection', (event) => {
         if (!modal) return; const now = new Date();
         const monthSelect = document.getElementById('coachCommissionsFilterMonth');
         if (monthSelect && !monthSelect.value) { monthSelect.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        } renderCoachCommissionsModal(); modal.classList.add('active');
+        }
+        modal.classList.add('active');
+        runOrDeferInteractive('openModal:coachCommissions', () => renderCoachCommissionsModal());
     }; window.renderCoachCommissionsModal = function() {
         const monthSelect = document.getElementById('coachCommissionsFilterMonth');
         const selectedVal = monthSelect ? monthSelect.value : '';
@@ -13416,8 +13606,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const supDateInput = document.getElementById('supplierDate');
         if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
         if (supDateInput) supDateInput.value = new Date().toISOString().split('T')[0];
-        switchStaffModalTab(tab);
         modal.classList.add('active');
+        switchStaffModalTab(tab);
     };
 
     window.switchStaffModalTab = function(tab) {
@@ -13434,13 +13624,13 @@ window.addEventListener('unhandledrejection', (event) => {
             if (suppliersContent) suppliersContent.classList.add('hidden');
             if (btnPayouts) btnPayouts.className = activeClass;
             if (btnSuppliers) btnSuppliers.className = inactiveClass;
-            renderStaffPayouts();
+            runOrDeferInteractive('switchStaffModalTab', () => renderStaffPayouts());
         } else {
             if (payoutsContent) payoutsContent.classList.add('hidden');
             if (suppliersContent) suppliersContent.classList.remove('hidden');
             if (btnPayouts) btnPayouts.className = inactiveClass;
             if (btnSuppliers) btnSuppliers.className = activeClass;
-            renderSuppliersList();
+            runOrDeferInteractive('switchStaffModalTab', () => renderSuppliersList());
         }
     };
 
@@ -14056,6 +14246,12 @@ window.addEventListener('unhandledrejection', (event) => {
         catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }
     }
     window.renderActivityLogModal = renderActivityLogModal;
+    const _lazyActivityLogSearchInput = debounce((...args) => {
+        renderActivityLogModal(...args);
+    }, 140);
+    window.handleActivityLogSearchInput = function(...args) {
+        _lazyActivityLogSearchInput(...args);
+    };
     async function deleteActivityLog(...args) {
         try { return (await loadActivityLogView()).deleteActivityLog(...args); }
         catch (error) { showErrorToast('تعذّر تحميل سجل العمليات، أعد المحاولة'); }

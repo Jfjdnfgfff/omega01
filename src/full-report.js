@@ -112,7 +112,7 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             if (page.blob && String(page.url).startsWith('blob:')) _lastReportBlobUrls.push(page.url);
         });
 
-        pagesContainer.replaceChildren();
+        const fragment = document.createDocumentFragment();
         pages.forEach((page, index) => {
             const card = document.createElement('section');
             card.className = 'rounded-xl border border-slate-200 bg-white p-3 space-y-2';
@@ -156,8 +156,9 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             }
 
             card.append(pageTitle, imageFrame, actions);
-            pagesContainer.appendChild(card);
+            fragment.appendChild(card);
         });
+        pagesContainer.replaceChildren(fragment);
 
         if (title) title.textContent = `معاينة صور التقرير (${pages.length} ${pages.length === 1 ? 'صفحة' : 'صفحات'})`;
         if (hint) hint.textContent = 'كل صفحة هي صورة PNG مستقلة. زر تنزيل الكل يحفظ جميع الصفحات داخل ملف ZIP واحد؛ ويمكن تنزيل أي صفحة وحدها من زرها.';
