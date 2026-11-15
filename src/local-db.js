@@ -317,8 +317,10 @@ export function createLocalCache({
     if (!available || dirty.size === 0) return available;
     const batch = Array.from(dirty);
     dirty.clear();
+    let sliceStart = now();
     try {
-      for (const name of batch) {
+      for (let i = 0; i < batch.length; i++) {
+        const name = batch[i];
         if (name === 'stats') {
           const statsObj = readStats();
           if (statsObj && typeof statsObj === 'object') {
@@ -329,6 +331,12 @@ export function createLocalCache({
           const items = (Array.isArray(raw) ? raw : []).filter(it => it && typeof it === 'object');
           await storage.set(`section:${name}`, { items, count: items.length, updatedAt: now() });
           counts[name] = items.length;
+        }
+        // Yield to the main thread between sections if structured-cloning large
+        // arrays spent the frame budget, preventing multi-section IDB freezes.
+        if (i < batch.length - 1 && (now() - sliceStart) >= 12) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+          sliceStart = now();
         }
       }
       const meta = readMeta() || {};
