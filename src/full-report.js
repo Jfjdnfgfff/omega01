@@ -1,10 +1,59 @@
 // Loaded only when the comprehensive report is requested.
 import { createReportPageRanges, REPORT_IMAGE_PAGE_HEIGHT_CSS } from './report-image-pagination.js';
+import { afterNextPaint, debounce, yieldToMain } from './main-thread-scheduler.js';
+
+const REPORT_PREVIEW_ROW_LIMIT = 200;
+const reportTimeFmt = (() => {
+    try { return new Intl.DateTimeFormat('ar-DZ', { hour: '2-digit', minute: '2-digit' }); }
+    catch (e) { return null; }
+})();
+const reportNumFmt = (() => {
+    try { return new Intl.NumberFormat(); }
+    catch (e) { return null; }
+})();
+function fmtReportNum(val) {
+    const n = Number(val || 0);
+    return reportNumFmt ? reportNumFmt.format(n) : n.toLocaleString();
+}
+function fmtReportDateTime(raw) {
+    if (!raw) return '-';
+    const ts = typeof raw === 'number' ? raw : Date.parse(raw);
+    if (!Number.isFinite(ts)) return '-';
+    const d = new Date(ts);
+    const ymd = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+    if (typeof raw === 'string' && !raw.includes('T')) return ymd;
+    const tStr = reportTimeFmt ? reportTimeFmt.format(d) : d.toTimeString().slice(0, 5);
+    return `${ymd} - ${tStr}`;
+}
+function fmtReportDateOnly(raw) {
+    if (!raw) return '-';
+    if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+        const parts = raw.slice(0, 10).split('-');
+        return `${Number(parts[0])}/${Number(parts[1])}/${Number(parts[2])}`;
+    }
+    const ts = Date.parse(raw);
+    if (!Number.isFinite(ts)) return '-';
+    const d = new Date(ts);
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
 
 export function createFullReport({ getState, openModal, showToast, logActivity, showSuccessToast, showErrorToast, getPackageById, calculateStatus, getDisplayPhone, getUniqueCoaches, getLocalDateString }) {
+    let showAllReportRows = false;
     function openFullReportModal() {
-        renderFullReport(); openModal('fullReportModal');
+        showAllReportRows = false;
+        const reportContainer = document.getElementById('fullReportContent');
+        if (reportContainer && !reportContainer.innerHTML.trim()) {
+            reportContainer.innerHTML = '<div class="py-16 text-center text-slate-500 text-sm font-bold">جاري تجهيز التقرير الشامل...</div>';
+        }
+        openModal('fullReportModal');
+        afterNextPaint(() => {
+            renderFullReport({ full: false });
+        });
     } window.openFullReportModal = openFullReportModal;
+    window.expandAllFullReportRows = function() {
+        showAllReportRows = true;
+        afterNextPaint(() => renderFullReport({ full: true }));
+    };
     let html2canvasInstance = null;
     async function loadLocalHtml2Canvas() {
         if (!html2canvasInstance) {
@@ -19,6 +68,10 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
     function printFullReportSheet() {
         const modal = document.getElementById('fullReportModal');
         if (!modal) return;
+        if (!showAllReportRows) {
+            showAllReportRows = true;
+            renderFullReport({ full: true });
+        }
         const body = document.body;
         let cleanedUp = false;
         const cleanup = () => {
@@ -198,6 +251,11 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             `;
         }
         try {
+            if (!showAllReportRows) {
+                showAllReportRows = true;
+                renderFullReport({ full: true });
+                await yieldToMain();
+            }
             const html2canvas = await loadLocalHtml2Canvas();
             if (typeof html2canvas !== 'function') throw new Error('html2canvas-pro failed to load');
             // Adaptive scale: very long reports at scale 2 can exceed the mobile
@@ -314,6 +372,9 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                     ...image,
                     filename: `${baseFilename}_صفحة_${String(index + 1).padStart(2, '0')}.png`
                 });
+                if (index < pageRanges.length - 1) {
+                    await yieldToMain();
+                }
             }
             canvas.width = 0;
             canvas.height = 0;
@@ -346,31 +407,73 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
         }
     }
     window.printFullReport = printFullReport;
-    function renderFullReport() { const reportContainer = document.getElementById('fullReportContent');
-        if (!reportContainer) return; const now = new Date();
+    function renderFullReport(opts = {}) { const reportContainer = document.getElementById('fullReportContent');
+        if (!reportContainer) return;
+        const fullAll = Boolean(opts && opts.full) || showAllReportRows;
+        const now = new Date();
+        const nowMs = now.getTime();
         const formattedDate = now.toLocaleDateString('ar-DZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         const formattedTime = now.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const allCustomers = getState().customers || [];
+        const allStaffPayouts = getState().staffPayouts || [];
+        const allSuppliers = getState().suppliers || [];
+        const allExpenses = getState().expenses || [];
+        const allSales = getState().sales || [];
         let totalIncome = 0; let totalDebt = 0;
         let activeCount = 0; let expiredCount = 0;
-        (getState().customers || []).forEach(c => {
+        for (let i = 0; i < allCustomers.length; i++) {
+            const c = allCustomers[i];
+            if (!c) continue;
             const pkg = getPackageById(c.packageId);
             const price = (c.price !== undefined && c.price !== null && c.price !== '') ? Number(c.price) : (pkg ? Number(pkg.price || 0) : 0);
             let paidAmount = 0; if (c.paymentStatus === 'paid') paidAmount = price;
             else if (c.paymentStatus === 'credit') {
                 const debt = parseInt(c.debtAmount) || 0;
                 totalDebt += debt; paidAmount = Math.max(0, price - debt);
-            } totalIncome += paidAmount; const status = calculateStatus ? calculateStatus(c) : 'active';
+            } totalIncome += paidAmount; const status = calculateStatus ? calculateStatus(c, nowMs) : 'active';
             if (status === 'active' || status === 'near_expiry') activeCount++;
             else if (status === 'expired') expiredCount++;
-        }); const totalStaffPayouts = (getState().staffPayouts || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-        const totalExpenses = (getState().expenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        }
+        let totalStaffPayouts = 0;
+        for (let i = 0; i < allStaffPayouts.length; i++) totalStaffPayouts += (Number(allStaffPayouts[i]?.amount) || 0);
+        let totalExpenses = 0;
+        for (let i = 0; i < allExpenses.length; i++) totalExpenses += (Number(allExpenses[i]?.amount) || 0);
+        let totalSupPaid = 0;
+        let totalSupDebt = 0;
+        for (let i = 0; i < allSuppliers.length; i++) {
+            totalSupPaid += (Number(allSuppliers[i]?.paid) || 0);
+            totalSupDebt += (Number(allSuppliers[i]?.debt) || 0);
+        }
         // Prefer exact pre-aggregated yearly stats while older sales history is still loading
         const yearlyStatsR = getState().v2Stats && getState().v2Stats.yearly ? getState().v2Stats.yearly : null;
         const salesInterim = Boolean(window.salesHistoryLoading && !window.salesHistoryComplete && yearlyStatsR && Object.keys(yearlyStatsR).length > 0);
-        const totalSales = salesInterim
-            ? Object.values(yearlyStatsR).reduce((sum, ys) => sum + (Number(ys && ys.sales) || 0), 0)
-            : (getState().sales || []).reduce((sum, s) => sum + (Number(s.total) || 0), 0);
+        let totalSales = 0;
+        if (salesInterim) {
+            totalSales = Object.values(yearlyStatsR).reduce((sum, ys) => sum + (Number(ys && ys.sales) || 0), 0);
+        } else {
+            for (let i = 0; i < allSales.length; i++) totalSales += (Number(allSales[i]?.total) || 0);
+        }
         const netProfit = (totalIncome + totalSales) - (totalExpenses + totalStaffPayouts);
+        const visiblePayouts = fullAll ? allStaffPayouts : allStaffPayouts.slice(0, REPORT_PREVIEW_ROW_LIMIT);
+        const visibleSuppliers = fullAll ? allSuppliers : allSuppliers.slice(0, REPORT_PREVIEW_ROW_LIMIT);
+        const visibleCustomers = fullAll ? allCustomers : allCustomers.slice(0, REPORT_PREVIEW_ROW_LIMIT);
+        const visibleExpenses = fullAll ? allExpenses : allExpenses.slice(0, REPORT_PREVIEW_ROW_LIMIT);
+        const uniqueSaleProdsSet = new Set();
+        for (let i = 0; i < allSales.length; i++) {
+            const nm = allSales[i] && (allSales[i].prodName || allSales[i].productName);
+            if (nm) uniqueSaleProdsSet.add(nm);
+        }
+        const expandRowsBanner = (!fullAll && (
+            allCustomers.length > REPORT_PREVIEW_ROW_LIMIT ||
+            allSales.length > REPORT_PREVIEW_ROW_LIMIT ||
+            allExpenses.length > REPORT_PREVIEW_ROW_LIMIT ||
+            allStaffPayouts.length > REPORT_PREVIEW_ROW_LIMIT
+        )) ? `
+            <div class="no-print mb-4 flex items-center justify-between gap-2 bg-blue-50/90 border border-blue-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-blue-900">
+                <span>يتم عرض أول ${REPORT_PREVIEW_ROW_LIMIT} سجل في كل جدول لتسريع المعاينة الفورية (الإجماليات محسوبة لكامل البيانات، وتُضمَّن كل السجلات تلقائياً عند الطباعة أو تنزيل الصور).</span>
+                <button type="button" onclick="window.expandAllFullReportRows && window.expandAllFullReportRows()" class="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer">عرض كل السجلات</button>
+            </div>
+        ` : '';
         let html = `
         <!-- Header -->
         <div class="border-b-2 border-slate-800 pb-4 mb-6 text-right">
@@ -386,33 +489,34 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                 </div>
             </div>
         </div>
+        ${expandRowsBanner}
 
         <!-- Summary Cards Grid -->
         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 mb-6">
             <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <div class="text-[11px] font-bold text-slate-500 mb-0.5">المشتركين الكلي</div>
-                <div class="text-base sm:text-lg font-black text-slate-800">${(getState().customers || []).length}</div>
+                <div class="text-base sm:text-lg font-black text-slate-800">${allCustomers.length}</div>
                 <div class="text-[10px] text-blue-600 font-bold">${activeCount} نشط</div>
             </div>
             <div class="bg-blue-50 p-3 rounded-xl border border-blue-200">
                 <div class="text-[11px] font-bold text-blue-700 mb-0.5">مداخيل الاشتراكات</div>
-                <div class="text-base sm:text-lg font-black text-blue-700">${totalIncome.toLocaleString()} دج</div>
+                <div class="text-base sm:text-lg font-black text-blue-700">${fmtReportNum(totalIncome)} دج</div>
             </div>
             <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <div class="text-[11px] font-bold text-slate-700 mb-0.5">الديون (الكريدي)</div>
-                <div class="text-base sm:text-lg font-black text-slate-800">${totalDebt.toLocaleString()} دج</div>
+                <div class="text-base sm:text-lg font-black text-slate-800">${fmtReportNum(totalDebt)} دج</div>
             </div>
             <div class="bg-blue-50 p-3 rounded-xl border border-blue-200">
                 <div class="text-[11px] font-bold text-blue-700 mb-0.5">خلاص العمال/المدربين</div>
-                <div class="text-base sm:text-lg font-black text-blue-700">${totalStaffPayouts.toLocaleString()} دج</div>
+                <div class="text-base sm:text-lg font-black text-blue-700">${fmtReportNum(totalStaffPayouts)} دج</div>
             </div>
             <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <div class="text-[11px] font-bold text-slate-700 mb-0.5">المصاريف العامة</div>
-                <div class="text-base sm:text-lg font-black text-slate-700">${totalExpenses.toLocaleString()} دج</div>
+                <div class="text-base sm:text-lg font-black text-slate-700">${fmtReportNum(totalExpenses)} دج</div>
             </div>
             <div class="bg-sky-50 p-3 rounded-xl border border-sky-200">
                 <div class="text-[11px] font-bold text-sky-700 mb-0.5">الصافي المتبقي</div>
-                <div class="text-base sm:text-lg font-black ${netProfit >= 0 ? 'text-blue-700' : 'text-slate-800'}">${netProfit.toLocaleString()} دج</div>
+                <div class="text-base sm:text-lg font-black ${netProfit >= 0 ? 'text-blue-700' : 'text-slate-800'}">${fmtReportNum(netProfit)} دج</div>
             </div>
         </div>
 
@@ -421,10 +525,10 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل خلاص العمال والمدربين (${(getState().staffPayouts || []).length})
+                    سجل خلاص العمال والمدربين (${allStaffPayouts.length})
                 </h3>
                 <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                    المجموع: ${totalStaffPayouts.toLocaleString()} دج
+                    المجموع: ${fmtReportNum(totalStaffPayouts)} دج
                 </span>
             </div>
             <div class="overflow-x-auto rounded-xl border border-slate-200">
@@ -439,18 +543,14 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                         </tr>
                     </thead>
                     <tbody>
-                        ${(getState().staffPayouts || []).length === 0 ? `
+                        ${allStaffPayouts.length === 0 ? `
                             <tr><td colspan="5" class="p-4 text-center text-slate-400 font-medium">لا توجد دفعات خلاص مسجلة للعمال أو المدربين</td></tr>
-                        ` : (getState().staffPayouts || []).map(p => {
-                            let payoutDateDisplay = p.payoutDate || p.date || '-';
-                            if (p.date && p.date.includes('T')) {
-                                const dt = new Date(p.date);
-                                if (!isNaN(dt.getTime())) {
-                                    payoutDateDisplay = `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()} - ${dt.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' })}`;
-                                } } return `
+                        ` : visiblePayouts.map(p => {
+                            const payoutDateDisplay = (p.date && p.date.includes('T')) ? fmtReportDateTime(p.date) : (p.payoutDate || p.date || '-');
+                            return `
                             <tr class="border-b border-slate-100 hover:bg-slate-50">
                                 <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${p.staffName || p.name || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${Number(p.amount || 0).toLocaleString()} دج</td>
+                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${fmtReportNum(p.amount)} دج</td>
                                 <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${p.payoutType || p.type || 'راتب شهري'}</td>
                                 <td class="p-2.5 border-l border-slate-200 text-slate-600 font-medium" dir="ltr" style="text-align: right;">${payoutDateDisplay}</td>
                                 <td class="p-2.5 text-slate-500 italic">${p.notes || '-'}</td>
@@ -466,14 +566,14 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل فواتير ومعاملات الموردين والسلع (${(getState().suppliers || []).length})
+                    سجل فواتير ومعاملات الموردين والسلع (${allSuppliers.length})
                 </h3>
                 <div class="flex gap-2">
                     <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                        مدفوع: ${(getState().suppliers || []).reduce((s, x) => s + (Number(x.paid) || 0), 0).toLocaleString()} دج
+                        مدفوع: ${fmtReportNum(totalSupPaid)} دج
                     </span>
                     <span class="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
-                        كريدي: ${(getState().suppliers || []).reduce((s, x) => s + (Number(x.debt) || 0), 0).toLocaleString()} دج
+                        كريدي: ${fmtReportNum(totalSupDebt)} دج
                     </span>
                 </div>
             </div>
@@ -491,18 +591,17 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                         </tr>
                     </thead>
                     <tbody>
-                        ${(getState().suppliers || []).length === 0 ? `
+                        ${allSuppliers.length === 0 ? `
                             <tr><td colspan="7" class="p-4 text-center text-slate-400 font-medium">لا توجد فواتير أو معاملات موردين مسجلة</td></tr>
-                        ` : (getState().suppliers || []).map(sup => {
-                            const d = sup.date ? new Date(sup.date) : null;
-                            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-';
+                        ` : visibleSuppliers.map(sup => {
+                            const dStr = fmtReportDateOnly(sup.date);
                             return `
                             <tr class="border-b border-slate-100 hover:bg-slate-50">
                                 <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${sup.name || '-'}</td>
                                 <td class="p-2.5 border-l border-slate-200 font-medium text-slate-600">${sup.info || '-'}</td>
                                 <td class="p-2.5 border-l border-slate-200 text-slate-700 max-w-xs">${sup.items || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${Number(sup.paid || 0).toLocaleString()} دج</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${Number(sup.debt || 0).toLocaleString()} دج</td>
+                                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-700" dir="ltr" style="text-align: right;">${fmtReportNum(sup.paid)} دج</td>
+                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${fmtReportNum(sup.debt)} دج</td>
                                 <td class="p-2.5 border-l border-slate-200 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
                                 <td class="p-2.5 text-slate-500 italic">${sup.notes || '-'}</td>
                             </tr>
@@ -517,10 +616,10 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                    سجل المشتركين التفصيلي (${(getState().customers || []).length})
+                    سجل المشتركين التفصيلي (${allCustomers.length})
                 </h3>
                 <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
-                    مداخيل الاشتراكات: ${totalIncome.toLocaleString()} دج
+                    مداخيل الاشتراكات: ${fmtReportNum(totalIncome)} دج
                 </span>
             </div>
             <div class="overflow-x-auto rounded-xl border border-slate-200">
@@ -537,18 +636,16 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                         </tr>
                     </thead>
                     <tbody>
-                        ${(getState().customers || []).length === 0 ? `
+                        ${allCustomers.length === 0 ? `
                             <tr><td colspan="7" class="p-4 text-center text-slate-400 font-medium">لا يوجد مشتركين مسجلين</td></tr>
-                        ` : (getState().customers || []).map(c => {
+                        ` : visibleCustomers.map(c => {
                             const pkg = getPackageById(c.packageId);
                             const pkgName = pkg ? pkg.name : 'ملاكمة';
-                            const status = calculateStatus ? calculateStatus(c) : 'active';
+                            const status = calculateStatus ? calculateStatus(c, nowMs) : 'active';
                             const statusLabel = status === 'active' ? 'نشط' : (status === 'near_expiry' ? 'قريب الانتهاء' : 'منتهي');
                             const statusClass = status === 'active' ? 'text-blue-700 font-bold' : (status === 'near_expiry' ? 'text-blue-700 font-bold' : 'text-slate-700 font-bold');
-                            const dStart = c.startDate ? new Date(c.startDate) : null;
-                            const dEnd = c.endDate ? new Date(c.endDate) : null;
-                            const startStr = dStart && !isNaN(dStart.getTime()) ? `${dStart.getFullYear()}/${dStart.getMonth() + 1}/${dStart.getDate()}` : '-';
-                            const endStr = dEnd && !isNaN(dEnd.getTime()) ? `${dEnd.getFullYear()}/${dEnd.getMonth() + 1}/${dEnd.getDate()}` : '-';
+                            const startStr = fmtReportDateOnly(c.startDate);
+                            const endStr = fmtReportDateOnly(c.endDate);
                             const payStr = c.paymentStatus === 'paid' ? 'خالص بالكامل' : `كريدي (${c.debtAmount || 0} دج)`;
                             const payClass = c.paymentStatus === 'paid' ? 'text-blue-700 font-bold' : 'text-slate-800 font-bold';
                             return `
@@ -573,12 +670,12 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                 <div>
                     <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
                         <span class="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span>
-                        سجل تصنيف المبيعات والمنتجات التفصيلي (${(getState().sales || []).length})
+                        سجل تصنيف المبيعات والمنتجات التفصيلي (${allSales.length})
                     </h3>
                     <p class="text-xs text-slate-500 mt-0.5">تصنيف ومفلترة المبيعات حسب المنتج أو المدرب لاستخراج تقارير دقيقة</p>
                 </div>
                 <span class="text-xs font-bold text-blue-800 bg-blue-50 px-3 py-1 rounded-xl border border-blue-200">
-                    مجموع كافة المبيعات: ${totalSales.toLocaleString()} دج
+                    مجموع كافة المبيعات: ${fmtReportNum(totalSales)} دج
                 </span>
             </div>
 
@@ -596,7 +693,7 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                     <label class="block text-[11px] font-bold text-slate-700 mb-1">تصنيف حسب المنتج:</label>
                     <select id="reportFilterProduct" onchange="updateFullReportSalesSection()" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
                         <option value="all">جميع المنتجات</option>
-                        ${Array.from(new Set((getState().sales || []).map(s => s.prodName || s.productName).filter(Boolean))).map(p => `<option value="${p}">${p}</option>`).join('')}
+                        ${Array.from(uniqueSaleProdsSet).map(p => `<option value="${p}">${p}</option>`).join('')}
                     </select>
                 </div>
                 <div>
@@ -616,7 +713,7 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                 </div>
                 <div>
                     <label class="block text-[11px] font-bold text-slate-700 mb-1">بحث سريع:</label>
-                    <input type="text" id="reportSearchSales" oninput="updateFullReportSalesSection()" placeholder="بحث بالاسم..." class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
+                    <input type="text" id="reportSearchSales" oninput="handleReportSearchSalesInput()" placeholder="بحث بالاسم..." class="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs sm:text-sm bg-white font-bold outline-none focus:border-blue-500 h-10 min-h-[40px] leading-relaxed">
                 </div>
             </div>
 
@@ -648,10 +745,10 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
                 <h3 class="text-sm sm:text-base font-extrabold text-slate-800 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-slate-600 inline-block"></span>
-                    سجل المصاريف العامة (${(getState().expenses || []).length})
+                    سجل المصاريف العامة (${allExpenses.length})
                 </h3>
                 <span class="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
-                    مجموع المصاريف: ${totalExpenses.toLocaleString()} دج
+                    مجموع المصاريف: ${fmtReportNum(totalExpenses)} دج
                 </span>
             </div>
             <div class="overflow-x-auto rounded-xl border border-slate-200">
@@ -664,15 +761,14 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                         </tr>
                     </thead>
                     <tbody>
-                        ${(getState().expenses || []).length === 0 ? `
+                        ${allExpenses.length === 0 ? `
                             <tr><td colspan="3" class="p-4 text-center text-slate-400 font-medium">لا توجد مصاريف مسجلة</td></tr>
-                        ` : (getState().expenses || []).map(e => {
-                            const d = e.date ? new Date(e.date) : null;
-                            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` : '-';
+                        ` : visibleExpenses.map(e => {
+                            const dStr = fmtReportDateOnly(e.date);
                             return `
                             <tr class="border-b border-slate-100 hover:bg-slate-50">
                                 <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800">${e.desc || '-'}</td>
-                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${Number(e.amount || 0).toLocaleString()} دج</td>
+                                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${fmtReportNum(e.amount)} دج</td>
                                 <td class="p-2.5 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
                             </tr>
                             `; }).join('')}
@@ -687,8 +783,9 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
             <div>تاريخ الاعتماد: ${formattedDate}</div>
         </div>
         `; reportContainer.innerHTML = html;
-        updateFullReportSalesSection(); } window.renderFullReport = renderFullReport;
-    function updateFullReportSalesSection() {
+        updateFullReportSalesSection({ full: fullAll }); } window.renderFullReport = renderFullReport;
+    function updateFullReportSalesSection(opts = {}) {
+        const fullAll = Boolean(opts && opts.full) || showAllReportRows;
         const stockSelect = document.getElementById('reportFilterStock');
         const prodSelect = document.getElementById('reportFilterProduct');
         const coachSelect = document.getElementById('reportFilterCoach');
@@ -696,36 +793,60 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
         const searchInput = document.getElementById('reportSearchSales');
         const tbody = document.getElementById('reportSalesTableBody');
         const summaryCards = document.getElementById('reportSalesSummaryCards');
-        if (!tbody || !getState().sales) return;
+        const salesSource = getState().sales;
+        if (!tbody || !salesSource) return;
         const selectedStock = stockSelect ? stockSelect.value : 'all';
         const selectedProd = prodSelect ? prodSelect.value : 'all';
         const selectedCoach = coachSelect ? coachSelect.value : 'all';
         const selectedDate = dateInput ? dateInput.value : '';
         const searchVal = searchInput ? searchInput.value.trim().toLowerCase() : '';
-        let filtered = [...getState().sales]; if (selectedStock !== 'all') {
-            if (selectedStock === 'stock2') {
-                filtered = filtered.filter(s => s.stockLocation === 'stock2');
-            } else { filtered = filtered.filter(s => !s.stockLocation || s.stockLocation === 'stock1');
-            } } if (selectedProd !== 'all') {
-            filtered = filtered.filter(s => (s.prodName || s.productName) === selectedProd);
-        } if (selectedCoach !== 'all') { if (selectedCoach === 'عام') {
-                filtered = filtered.filter(s => !s.coachName || s.coachName === 'عام');
-            } else { filtered = filtered.filter(s => s.coachName === selectedCoach);
-            } } if (selectedDate) { filtered = filtered.filter(s => typeof getLocalDateString === 'function' ? getLocalDateString(s.date) === selectedDate : true);
-        } if (searchVal) { filtered = filtered.filter(s =>
-                (s.prodName || s.productName || '').toLowerCase().includes(searchVal) ||
-                (s.coachName || '').toLowerCase().includes(searchVal)
-            ); } const totalRevenue = filtered.reduce((sum, s) => sum + (Number(s.total) || 0), 0);
-        const totalProfit = filtered.reduce((sum, s) => sum + (Number(s.profit) || 0), 0);
-        const totalQty = filtered.reduce((sum, s) => sum + (Number(s.qty) || 1), 0);
+
+        // Single-pass filter + aggregate + numeric timestamp extraction (eliminates
+        // 5 chained .filter() arrays, 3 .reduce() scans, and O(N log N) Date parses)
+        const matchedEntries = [];
+        let totalRevenue = 0;
+        let totalProfit = 0;
+        let totalQty = 0;
+        for (let i = 0; i < salesSource.length; i++) {
+            const s = salesSource[i];
+            if (!s) continue;
+            if (selectedStock !== 'all') {
+                if (selectedStock === 'stock2') {
+                    if (s.stockLocation !== 'stock2') continue;
+                } else if (s.stockLocation && s.stockLocation !== 'stock1') {
+                    continue;
+                }
+            }
+            const pName = s.prodName || s.productName || '';
+            if (selectedProd !== 'all' && pName !== selectedProd) continue;
+            if (selectedCoach !== 'all') {
+                if (selectedCoach === 'عام') {
+                    if (s.coachName && s.coachName !== 'عام') continue;
+                } else if (s.coachName !== selectedCoach) {
+                    continue;
+                }
+            }
+            if (selectedDate && typeof getLocalDateString === 'function' && getLocalDateString(s.date) !== selectedDate) continue;
+            if (searchVal) {
+                const nameMatch = pName.toLowerCase().includes(searchVal);
+                const coachMatch = !nameMatch && (s.coachName || '').toLowerCase().includes(searchVal);
+                if (!nameMatch && !coachMatch) continue;
+            }
+            totalRevenue += (Number(s.total) || 0);
+            totalProfit += (Number(s.profit) || 0);
+            totalQty += (Number(s.qty) || 1);
+            const ts = s.date ? Date.parse(s.date) : 0;
+            matchedEntries.push([Number.isFinite(ts) ? ts : 0, s]);
+        }
+
         if (summaryCards) { summaryCards.innerHTML = `
                 <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
                     <div class="text-[10px] font-bold text-slate-500 mb-0.5">مبيعات التصنيف</div>
-                    <div class="text-sm font-extrabold text-slate-800" dir="ltr">${totalRevenue.toLocaleString()} دج</div>
+                    <div class="text-sm font-extrabold text-slate-800" dir="ltr">${fmtReportNum(totalRevenue)} دج</div>
                 </div>
                 <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
                     <div class="text-[10px] font-bold text-slate-500 mb-0.5">الربح الصافي للتصنيف</div>
-                    <div class="text-sm font-extrabold text-blue-700" dir="ltr">${totalProfit.toLocaleString()} دج</div>
+                    <div class="text-sm font-extrabold text-blue-700" dir="ltr">${fmtReportNum(totalProfit)} دج</div>
                 </div>
                 <div class="bg-white p-2.5 rounded-xl border border-blue-200/80 shadow-xs">
                     <div class="text-[10px] font-bold text-slate-500 mb-0.5">عدد القطع المباعة</div>
@@ -733,13 +854,15 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                 </div>
                 <div class="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs">
                     <div class="text-[10px] font-bold text-slate-500 mb-0.5">عدد العمليات</div>
-                    <div class="text-sm font-extrabold text-slate-800">${filtered.length} عملية</div>
+                    <div class="text-sm font-extrabold text-slate-800">${matchedEntries.length} عملية</div>
                 </div>
-            `; } if (filtered.length === 0) {
+            `; } if (matchedEntries.length === 0) {
             tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-slate-400 font-medium">لا توجد مبيعات مسجلة تطابق هذا التصنيف</td></tr>`;
-            return; } tbody.innerHTML = filtered.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s => {
-            const d = s.date ? new Date(s.date) : null;
-            const dStr = d && !isNaN(d.getTime()) ? `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} - ${d.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' })}` : '-';
+            return; }
+        matchedEntries.sort((a, b) => b[0] - a[0]);
+        const sliceToRender = fullAll ? matchedEntries : matchedEntries.slice(0, REPORT_PREVIEW_ROW_LIMIT);
+        let rowsHtml = sliceToRender.map(([, s]) => {
+            const dStr = fmtReportDateTime(s.date);
             const name = s.prodName || s.productName || '-';
             const coach = s.coachName || 'عام';
             const total = Number(s.total || 0);
@@ -755,8 +878,8 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                     <span class="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">${coach}</span>
                 </td>
                 <td class="p-2.5 border-l border-slate-200 font-medium text-slate-700">${(s.unitMode === 'kilo' || s.qtyUnit === 'kg') ? `${s.qty || 1} كغ` : s.unitMode === 'dose_gram' ? `${s.qty || 1} دوزة (${Number(s.gramsSold || 0)} غ)` : (s.qty || 1)}</td>
-                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${total.toLocaleString()} دج</td>
-                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-600" dir="ltr" style="text-align: right;">${profit.toLocaleString()} دج</td>
+                <td class="p-2.5 border-l border-slate-200 font-bold text-slate-800" dir="ltr" style="text-align: right;">${fmtReportNum(total)} دج</td>
+                <td class="p-2.5 border-l border-slate-200 font-bold text-blue-600" dir="ltr" style="text-align: right;">${fmtReportNum(profit)} دج</td>
                 <td class="p-2.5 border-l border-slate-200 text-slate-600" dir="ltr" style="text-align: right;">${dStr}</td>
                 <td class="p-2.5 no-print text-center">
                     <button onclick="deleteSale('${s.id}')" class="text-slate-400 hover:text-slate-700 p-1 hover:bg-slate-100 rounded" title="حذف البيع">
@@ -764,7 +887,16 @@ export function createFullReport({ getState, openModal, showToast, logActivity, 
                     </button>
                 </td>
             </tr>
-            `; }).join(''); } window.updateFullReportSalesSection = updateFullReportSalesSection;
+            `; }).join('');
+        if (!fullAll && matchedEntries.length > sliceToRender.length) {
+            rowsHtml += `<tr class="no-print bg-blue-50/60"><td colspan="8" class="p-3 text-center"><button type="button" onclick="window.expandAllFullReportRows && window.expandAllFullReportRows()" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer">عرض جميع المبيعات (${matchedEntries.length} عملية)</button></td></tr>`;
+        }
+        tbody.innerHTML = rowsHtml; }
+    window.updateFullReportSalesSection = updateFullReportSalesSection;
+    const handleReportSearchSalesInput = debounce(() => {
+        updateFullReportSalesSection();
+    }, 150);
+    window.handleReportSearchSalesInput = handleReportSearchSalesInput;
 
-return { openFullReportModal, renderFullReport, updateFullReportSalesSection, printFullReport, printFullReportSheet, showReportImagePreview };
+return { openFullReportModal, renderFullReport, updateFullReportSalesSection, handleReportSearchSalesInput, printFullReport, printFullReportSheet, showReportImagePreview };
 }

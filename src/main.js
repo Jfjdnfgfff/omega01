@@ -2,24 +2,30 @@ import { createRealtimeSections, readSectionWithLegacy } from './realtime-sectio
 import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABLE_SECTIONS, compareRtdbKeys, reconcileMode, idsToRemoveOnReconcile, shouldRestoreSalesHistoryComplete } from './local-db.js';
 import { createListenerRegistry } from './listener-registry.js';
 import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
-import { createTimeSliceRunner, afterNextPaint, whenIdle, debounce, throttle, rafThrottle, createInteractiveDeferrer } from './main-thread-scheduler.js';
+import { createTimeSliceRunner, runChunked, yieldToMain, afterNextPaint, whenIdle, debounce, throttle, rafThrottle, createInteractiveDeferrer } from './main-thread-scheduler.js';
 import { collectFemaleSessionIncome, sessionActivityLabel } from './female-income.js';
 import { createSearchIndex } from './search-index.js';
 
-// متتبّع التفاعل الفوري لتخفيض مؤشر INP إلى أقل من 100ms:
-// يسمح لمعالجات النقر بتحديث الحالة البصرية فوراً (فتح نافذة، تفعيل تبويب، تبديل شاشة)
-// ثم تأجيل بناء الجداول والقوائم الثقيلة إلى ما بعد رسم الإطار الأول (Next Paint)،
-// مع إبقاء الاستدعاءات البرمجية المباشرة متزامنة تماماً.
+// متتبّع التفاعل الفوري لتخفيض مدة المعالجة (Durée de traitement < 50ms):
+// يشمل أحداث النقر (click) ولوحة المفاتيح (keydown: Enter / Space / Escape) وإرسال النماذج (submit)
+// لتحديث الواجهة فوراً وتأجيل العمليات الحسابية وبناء الـ DOM الثقيل إلى ما بعد الرسم الأول.
 const interactiveDeferrer = createInteractiveDeferrer({ timeout: 100 });
 window.__omegaInUserClick = false;
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  const clearInteractiveFlag = () => { window.__omegaInUserClick = false; };
   const markInteractiveStart = () => {
     window.__omegaInUserClick = true;
-    const clearFlag = () => { window.__omegaInUserClick = false; };
-    if (typeof queueMicrotask === 'function') queueMicrotask(clearFlag);
-    else Promise.resolve().then(clearFlag);
+    if (typeof queueMicrotask === 'function') queueMicrotask(clearInteractiveFlag);
+    else Promise.resolve().then(clearInteractiveFlag);
   };
   document.addEventListener('click', markInteractiveStart, true);
+  document.addEventListener('submit', markInteractiveStart, true);
+  document.addEventListener('keydown', (e) => {
+    if (!e) return;
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape' || e.key === 'Esc') {
+      markInteractiveStart();
+    }
+  }, true);
 }
 function runOrDeferInteractive(slot, fn) {
   if (typeof fn !== 'function') return;
@@ -1319,12 +1325,23 @@ window.addEventListener('unhandledrejection', (event) => {
   const WRITE_QUEUE_STORAGE_KEY = 'sm_firebaseWriteQueue';
   const WRITE_QUEUE_MAX_ENTRIES = 500;
 
-  window.persistFirebaseWriteQueue = function() {
+  let _writeQueuePersistTimer = null;
+  function _flushFirebaseWriteQueueStorage() {
+    _writeQueuePersistTimer = null;
     try {
       localStorage.setItem(WRITE_QUEUE_STORAGE_KEY, JSON.stringify(window.firebaseWriteQueue));
     } catch (e) { /* quota or private mode — queue stays in memory */ }
     // IndexedDB backup: survives localStorage quota pressure / eviction.
     try { if (window.localCache) window.localCache.setKV('writeQueue', window.firebaseWriteQueue); } catch (e) {}
+  }
+  window.persistFirebaseWriteQueue = function(immediate = false) {
+    if (immediate) {
+      if (_writeQueuePersistTimer !== null) clearTimeout(_writeQueuePersistTimer);
+      _flushFirebaseWriteQueueStorage();
+      return;
+    }
+    if (_writeQueuePersistTimer !== null) return;
+    _writeQueuePersistTimer = setTimeout(_flushFirebaseWriteQueueStorage, 0);
   };
 
   // Hydrate any writes that failed before the last page reload
@@ -1699,54 +1716,81 @@ window.addEventListener('unhandledrejection', (event) => {
     }
   }
 
-  // Take a snapshot of all sections that a subscription operation may touch
-  function _snapshotTransactionState() {
+  // Take a lightweight O(1) Copy-on-Write snapshot instead of deep-cloning
+  // thousands of unmodified customer objects (and Base64 portraits) on the main thread.
+  function _snapshotTransactionState(opts = {}) {
+    const customersArr = Array.isArray(appState.customers) ? appState.customers : [];
+    const caisseArr = Array.isArray(appState.caisseLogs) ? appState.caisseLogs : [];
+    const creditsArr = Array.isArray(appState.credits) ? appState.credits : [];
+    const packagesArr = Array.isArray(appState.packages) ? appState.packages : [];
+
+    const mutatedCustomers = new Map();
+    if (opts && opts.customer && typeof opts.customer === 'object') {
+      mutatedCustomers.set(opts.customer, _deepClone(opts.customer));
+    } else if (opts && opts.customerId !== undefined && opts.customerId !== null) {
+      const targetId = String(opts.customerId);
+      const found = customersArr.find(c => c && (String(c.id) === targetId || String(c._rtdbKey) === targetId));
+      if (found) mutatedCustomers.set(found, _deepClone(found));
+    }
+
     return {
-      customers: _deepClone(appState.customers || []),
-      caisseLogs: _deepClone(appState.caisseLogs || []),
-      credits: _deepClone(appState.credits || []),
-      packages: _deepClone(appState.packages || []),
+      customers: customersArr.slice(),
+      caisseLogs: caisseArr.slice(),
+      credits: creditsArr.slice(),
+      packages: packagesArr.slice(),
+      mutatedCustomers,
     };
   }
 
-  // Rollback all sections to the snapshot
+  // Rollback all sections to the snapshot in O(1)
   function _rollbackTransaction(snapshot) {
     if (!snapshot) return;
     try {
+      if (snapshot.mutatedCustomers && snapshot.mutatedCustomers.size > 0) {
+        for (const [liveRef, backupCopy] of snapshot.mutatedCustomers.entries()) {
+          for (const k of Object.keys(liveRef)) delete liveRef[k];
+          Object.assign(liveRef, backupCopy);
+        }
+      }
       appState.customers = snapshot.customers;
       appState.caisseLogs = snapshot.caisseLogs;
       appState.credits = snapshot.credits;
       appState.packages = snapshot.packages;
-      // Re-mark dirty so the local cache picks up the rollback
-      if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
-      // Force immediate flush of the rollback
-      _immediatePersist();
+      if (window.__localCacheMarkDirty) {
+        ['customers', 'caisseLogs', 'credits', 'packages'].forEach(sec => window.__localCacheMarkDirty(sec));
+      }
+      _immediatePersist(['customers', 'caisseLogs', 'credits']);
     } catch (e) {
       console.warn('[Transaction] Rollback error:', e);
     }
   }
 
-  // Force immediate persistence of all in-memory data to every storage layer
-  function _immediatePersist() {
+  // Non-blocking persistence: writes a tiny (<1 KB) write-ahead record if given,
+  // then flushes IndexedDB & the Firebase write queue asynchronously off the UI
+  // event handler so click/keydown never blocks on multi-MB JSON.stringify.
+  let _asyncPersistTimer = null;
+  function _immediatePersist(dirtySections = ['customers', 'caisseLogs', 'credits'], walRecord = null) {
     try {
-      // 1. Flush local IndexedDB cache immediately (bypass debounce)
-      if (window.localCache) {
-        try { window.localCache.flush(); } catch (e) {}
+      if (walRecord) {
+        try {
+          localStorage.setItem('sm_tx_wal', JSON.stringify({ ts: Date.now(), record: walRecord }));
+        } catch (e) {}
       }
-      // 2. Persist the Firebase write queue (survives page reload / power outage)
-      if (typeof window.persistFirebaseWriteQueue === 'function') {
-        try { window.persistFirebaseWriteQueue(); } catch (e) {}
-      }
-      // 3. Save to localStorage as an extra safety net
-      try {
-        const sections = ['customers', 'caisseLogs', 'credits', 'packages', 'products', 'sales'];
-        for (const sec of sections) {
-          const data = appState[sec];
-          if (data !== undefined) {
-            localStorage.setItem('sm_' + sec, JSON.stringify(Array.isArray(data) ? data : []));
-          }
+      if (window.__localCacheMarkDirty && Array.isArray(dirtySections)) {
+        for (let i = 0; i < dirtySections.length; i++) {
+          window.__localCacheMarkDirty(dirtySections[i]);
         }
-      } catch (e) { /* quota exceeded — IndexedDB is the primary */ }
+      }
+      if (_asyncPersistTimer !== null) clearTimeout(_asyncPersistTimer);
+      _asyncPersistTimer = setTimeout(() => {
+        _asyncPersistTimer = null;
+        try {
+          if (window.localCache) window.localCache.flush();
+        } catch (e) {}
+        try {
+          if (typeof window.persistFirebaseWriteQueue === 'function') window.persistFirebaseWriteQueue();
+        } catch (e) {}
+      }, 0);
     } catch (e) {
       console.warn('[Transaction] Persist error:', e);
     }
@@ -1755,12 +1799,12 @@ window.addEventListener('unhandledrejection', (event) => {
   // Execute a subscription operation as an atomic transaction
   // `operationFn` is a sync function that performs all mutations.
   // If it throws, all changes are rolled back automatically.
-  function _runTransaction(operationFn) {
-    const snapshot = _snapshotTransactionState();
+  function _runTransaction(operationFn, snapshotOpts) {
+    const snapshot = _snapshotTransactionState(snapshotOpts);
     try {
       const result = operationFn();
-      // Success — force immediate persistence so data survives power outage
-      _immediatePersist();
+      // Success — schedule non-blocking persistence off the event thread
+      _immediatePersist(['customers', 'caisseLogs', 'credits']);
       return result;
     } catch (err) {
       // Failure — rollback everything
@@ -1772,7 +1816,22 @@ window.addEventListener('unhandledrejection', (event) => {
   window._runTransaction = _runTransaction;
   window._immediatePersist = _immediatePersist;
 
-  // Deleted Items Tombstone Registry (prevents deleted items like credits from resurrecting on reload or sync)
+  // Deleted Items Tombstone Registry — coalesces storage writes via timer so
+  // deleting hundreds of items never runs O(N^2) JSON.stringify + IDB puts per click.
+  let _tombstonesPersistTimer = null;
+  function _scheduleTombstonesPersist() {
+    if (_tombstonesPersistTimer !== null) return;
+    _tombstonesPersistTimer = setTimeout(() => {
+      _tombstonesPersistTimer = null;
+      try {
+        if (!window._deletedItemIds) return;
+        const arr = Array.from(window._deletedItemIds).slice(-3000);
+        try { localStorage.setItem('sm_deleted_ids', JSON.stringify(arr)); } catch (e) {}
+        if (window.localCache) window.localCache.setKV('tombstones', arr);
+      } catch (e) {}
+    }, 0);
+  }
+
   window.registerDeletedItemId = function(sectionPath, id) {
     if (!sectionPath || !id) return;
     try {
@@ -1781,10 +1840,10 @@ window.addEventListener('unhandledrejection', (event) => {
         window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
       }
       const key = `${sectionPath}:${String(id).trim()}`;
-      window._deletedItemIds.add(key);
-      const arr = Array.from(window._deletedItemIds).slice(-3000);
-      localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
-      if (window.localCache) window.localCache.setKV('tombstones', arr);
+      if (!window._deletedItemIds.has(key)) {
+        window._deletedItemIds.add(key);
+        _scheduleTombstonesPersist();
+      }
     } catch(e) {}
   };
 
@@ -1796,10 +1855,9 @@ window.addEventListener('unhandledrejection', (event) => {
         window._deletedItemIds = new Set(saved ? JSON.parse(saved) : []);
       }
       const key = `${sectionPath}:${String(id).trim()}`;
-      window._deletedItemIds.delete(key);
-      const arr = Array.from(window._deletedItemIds);
-      localStorage.setItem('sm_deleted_ids', JSON.stringify(arr));
-      if (window.localCache) window.localCache.setKV('tombstones', arr);
+      if (window._deletedItemIds.delete(key)) {
+        _scheduleTombstonesPersist();
+      }
     } catch(e) {}
   };
 
@@ -3199,11 +3257,17 @@ window.addEventListener('unhandledrejection', (event) => {
         } return raw; } window.getDisplayPhone = getDisplayPhone;
     function cleanPhone(phone) { if (!phone) return '';
         return phone.toString().trim().replace(/\s+/g, '').replace(/\*/g, '');
-    } window.cleanPhone = cleanPhone; function saveState() {
+    } window.cleanPhone = cleanPhone;
+    let _lastSavedHideFinances = undefined;
+    const _lastSectionLengthSnapshot = {};
+    function saveState(dirtySections) {
       // saveState isolation: any failure here (storage, sync, render) is
       // contained and never propagates to the caller that changed data.
       try {
-      localStorage.setItem('sm_hideFinances', appState.hideFinances);
+      if (_lastSavedHideFinances !== appState.hideFinances) {
+        _lastSavedHideFinances = appState.hideFinances;
+        localStorage.setItem('sm_hideFinances', appState.hideFinances);
+      }
       const ensureArray = (val) => (!val ? [] : (Array.isArray(val) ? val : Object.values(val)));
       appState.customers = ensureArray(appState.customers);
       appState.packages = ensureArray(appState.packages);
@@ -3218,12 +3282,35 @@ window.addEventListener('unhandledrejection', (event) => {
       appState.caisseLogs = ensureArray(appState.caisseLogs);
       appState.activityLogs = ensureArray(appState.activityLogs);
       
-      // Synchronous immediate local write + debounced safety
       window.__omegaDataVersion = (window.__omegaDataVersion || 0) + 1;
-      saveLocalStorageImmediate();
-      scheduleLocalStorageSave();
-      // Mirror the working set into the local IndexedDB cache (debounced)
-      if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
+
+      if (Array.isArray(dirtySections) && dirtySections.length > 0 && window.__localCacheMarkDirty) {
+        for (let i = 0; i < dirtySections.length; i++) {
+          window.__localCacheMarkDirty(dirtySections[i]);
+        }
+      } else if (typeof dirtySections === 'string' && dirtySections && window.__localCacheMarkDirty) {
+        window.__localCacheMarkDirty(dirtySections);
+      } else if (window.__localCacheMarkDirty) {
+        let anyDetected = false;
+        for (let i = 0; i < CACHEABLE_SECTIONS.length; i++) {
+          const sec = CACHEABLE_SECTIONS[i];
+          const curLen = Array.isArray(appState[sec]) ? appState[sec].length : 0;
+          if (_lastSectionLengthSnapshot[sec] !== curLen) {
+            _lastSectionLengthSnapshot[sec] = curLen;
+            window.__localCacheMarkDirty(sec);
+            anyDetected = true;
+          }
+        }
+        if (!anyDetected && window.__localCacheMarkAllDirty) {
+          whenIdle(() => {
+            if (window.__localCacheMarkAllDirty) window.__localCacheMarkAllDirty();
+          }, { timeout: 600 });
+        }
+      }
+      for (let i = 0; i < CACHEABLE_SECTIONS.length; i++) {
+        const sec = CACHEABLE_SECTIONS[i];
+        _lastSectionLengthSnapshot[sec] = Array.isArray(appState[sec]) ? appState[sec].length : 0;
+      }
 
       if (window.__firebasePushTimer) clearTimeout(window.__firebasePushTimer);
       window.__firebasePushTimer = setTimeout(() => {
@@ -3379,14 +3466,25 @@ window.addEventListener('unhandledrejection', (event) => {
         if (btn) { btn.disabled = true; btn.classList.add('opacity-50');
         } if (progressDiv) progressDiv.classList.remove('hidden');
         let successCount = 0; let total = barcodes.length;
-        for (let i = 0; i < total; i++) { const barcode = barcodes[i];
+        const existingBarcodes = new Set((appState.products || []).map(p => p && p.barcode ? String(p.barcode) : '').filter(Boolean));
+        let lastProgressPaint = 0;
+        const flushProgressDOM = (idx, barcode) => {
             if (statusText) statusText.textContent = `جاري استيراد: ${barcode}`;
-            if (progressCount) progressCount.textContent = `${i + 1}/${total}`;
-            if (progressBar) progressBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
-            // Local state check
-            if (!appState.products.find(p => p.barcode === barcode)) {
-                successCount++; } await new Promise(r => setTimeout(r, 50));
-        } saveState(); showSuccessToast(`تم استيراد ${successCount} منتج بنجاح`);
+            if (progressCount) progressCount.textContent = `${idx + 1}/${total}`;
+            if (progressBar) progressBar.style.width = `${Math.round(((idx + 1) / total) * 100)}%`;
+        };
+        await runChunked(barcodes, (barcode, i) => {
+            if (!existingBarcodes.has(barcode)) {
+                existingBarcodes.add(barcode);
+                successCount++;
+            }
+            const now = performance.now();
+            if (i === total - 1 || now - lastProgressPaint >= 32) {
+                lastProgressPaint = now;
+                flushProgressDOM(i, barcode);
+            }
+        }, { budgetMs: 8 });
+        saveState('products'); showSuccessToast(`تم استيراد ${successCount} منتج بنجاح`);
         setTimeout(() => { closeBulkImportModal();
             if (textElem) textElem.value = '';
             if (btn) { btn.disabled = false; btn.classList.remove('opacity-50');
@@ -3880,13 +3978,18 @@ window.addEventListener('unhandledrejection', (event) => {
             }
             if (Array.isArray(appState.customers)) {
                 appState.customers = appState.customers.filter(c => c && c.subscriptionType !== 'session' && !c.name?.startsWith('حصة '));
-            } if (typeof saveState === 'function') saveState();
-            if (typeof window.renderQuickSessionHistory === 'function') window.renderQuickSessionHistory();
+            } if (typeof saveState === 'function') saveState(['quickSessions']);
             if (typeof closeModal === 'function') closeModal('quickSessionModal');
             if (typeof playBeep === 'function') playBeep();
             if (typeof showSuccessToast === 'function') {
                 showSuccessToast(`تم تسجيل ${price} دج (${clientCount} زبائن) في الإحصائيات والمداخيل بنجاح`);
-            } if (typeof render === 'function') render();
+            }
+            runOrDeferInteractive('quickSessionAfterSubmit', () => {
+                if (isModalOpen('quickSessionModal') && typeof window.renderQuickSessionHistory === 'function') {
+                    window.renderQuickSessionHistory();
+                }
+                if (typeof render === 'function') render();
+            });
         } catch (err) { console.error('Error in handleQuickSessionSubmit:', err);
             if (typeof showErrorToast === 'function') showErrorToast('حدث خطأ أثناء تسجيل اشتراك الحصة');
         } return false; };
@@ -4468,9 +4571,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 if (caisseDateInput) caisseDateInput.value = paymentDateCheck.dateKey;
                 const clotureDateInput = document.getElementById('clotureFormDate');
                 if (clotureDateInput) clotureDateInput.value = paymentDateCheck.dateKey;
-                if (typeof window.renderCaisseView === 'function') window.renderCaisseView();
+                if (isVisible('caisseView') && typeof window.renderCaisseView === 'function') {
+                    runOrDeferInteractive('caisseAfterAddCust', () => window.renderCaisseView());
+                }
             }
             if (typeof logActivity === 'function') logActivity('customer', 'إضافة مشترك جديد', `المشترك: ${custName} - الهاتف: ${custPhone} - الباقة: ${pkg ? pkg.name : 'باقة'} - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, custPrice);
+            if (window.omegaSearch && typeof window.omegaSearch.addCustomer === 'function') {
+                window.omegaSearch.addCustomer(newCustomer);
+            }
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('customers', newCustomer);
             }
@@ -4487,9 +4595,9 @@ window.addEventListener('unhandledrejection', (event) => {
                 if (window.saveFirebaseSectionItem) {
                     window.saveFirebaseSectionItem('credits', newCredit);
                 }
-            } saveState();
-            // ---- TRANSACTION SUCCESS: immediate persist ----
-            _immediatePersist();
+            } saveState(['customers', 'caisseLogs', 'credits']);
+            // ---- TRANSACTION SUCCESS: non-blocking persist ----
+            _immediatePersist(['customers', 'caisseLogs', 'credits'], { op: 'addCustomer', id: newCustomer.id });
             } catch (_txErr) {
                 // ---- TRANSACTION FAILED: rollback all mutations ----
                 console.error('[Transaction] Add customer failed, rolling back:', _txErr);
@@ -4502,7 +4610,9 @@ window.addEventListener('unhandledrejection', (event) => {
             closeModal('addCustomerModal');
             const ageMsg = dobValidation.age ? ' (العمر: ' + dobValidation.age + ' سنة)' : '';
             showSuccessToast('تم إضافة المشترك بنجاح' + ageMsg + (subscriptionCashPaid > 0 ? ` — ${subscriptionCashPaid.toLocaleString()} دج في صندوق ${paymentDateCheck.dateKey.split('-').reverse().join('/')}` : ''));
-            if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+            if (isVisible('creditsView') && typeof window.renderCreditsList === 'function') {
+                runOrDeferInteractive('creditsAfterAddCust', () => window.renderCreditsList());
+            }
             render(); } catch (err) { console.error('Error in handleAddCustomerSubmit:', err);
             showErrorToast('حدث خطأ أثناء إضافة المشترك');
         } return false; }; document.getElementById('addCustomerFormModal')?.addEventListener('submit', window.handleAddCustomerSubmit);
@@ -4733,8 +4843,10 @@ window.addEventListener('unhandledrejection', (event) => {
                 if (caisseDateInput) caisseDateInput.value = caisseDateKey;
                 const clotureDateInput = document.getElementById('clotureFormDate');
                 if (clotureDateInput) clotureDateInput.value = caisseDateKey;
-                if (typeof window.renderCaisseView === 'function') {
-                    try { window.renderCaisseView(); } catch (err) { console.warn('caisse refresh note:', err); }
+                if (isVisible('caisseView') && typeof window.renderCaisseView === 'function') {
+                    runOrDeferInteractive('caisseAfterEditCust', () => {
+                        try { window.renderCaisseView(); } catch (err) { console.warn('caisse refresh note:', err); }
+                    });
                 }
             }
         }
@@ -4792,14 +4904,19 @@ window.addEventListener('unhandledrejection', (event) => {
                 detailMsg += ` | تم التحديث بدون تغييرات رئيسية`;
             }
 
+            if (window.omegaSearch && typeof window.omegaSearch.addCustomer === 'function') {
+                window.omegaSearch.addCustomer(customer);
+            }
             if (typeof logActivity === 'function') {
                 logActivity('customer', 'تعديل بيانات مشترك', detailMsg, customer.price || 0);
             }
-            saveState(); closeModal('editCustomerModal');
+            saveState(['customers', 'caisseLogs', 'credits']); closeModal('editCustomerModal');
         showSuccessToast(updatedCaisseDateKey
             ? `تم تعديل بيانات المشترك بنجاح وتحديث صندوق يوم ${updatedCaisseDateKey.split('-').reverse().join('/')}`
             : 'تم تعديل بيانات المشترك بنجاح');
-        if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+        if (isVisible('creditsView') && typeof window.renderCreditsList === 'function') {
+            runOrDeferInteractive('creditsAfterEditCust', () => window.renderCreditsList());
+        }
         render(); });
 
     // ==========================================
@@ -5148,8 +5265,8 @@ window.addEventListener('unhandledrejection', (event) => {
         const renewalCreditId = paymentStatus === 'credit' && debtAmount > 0
             ? 'cr_auto_' + customer.id + '_' + renewalId : null;
 
-        // ---- ATOMIC TRANSACTION: snapshot before mutations ----
-        const _txSnap = _snapshotTransactionState();
+        // ---- ATOMIC TRANSACTION: O(1) Copy-on-Write snapshot before mutations ----
+        const _txSnap = _snapshotTransactionState({ customer });
         try {
 
         customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
@@ -5192,7 +5309,9 @@ window.addEventListener('unhandledrejection', (event) => {
             if (caisseDateInput) caisseDateInput.value = paymentDateCheck.dateKey;
             const clotureDateInput = document.getElementById('clotureFormDate');
             if (clotureDateInput) clotureDateInput.value = paymentDateCheck.dateKey;
-            if (typeof window.renderCaisseView === 'function') window.renderCaisseView();
+            if (isVisible('caisseView') && typeof window.renderCaisseView === 'function') {
+                runOrDeferInteractive('caisseAfterRenewCust', () => window.renderCaisseView());
+            }
         }
 
         // Credit record handling
@@ -5218,13 +5337,16 @@ window.addEventListener('unhandledrejection', (event) => {
             logActivity('customer', 'تجديد اشتراك مشترك', `تم تجديد اشتراك: ${customer.name} - باقة: ${pkg ? pkg.name : 'باقة'} بمبلغ ${renewPrice} دج - تاريخ الدفع: ${paymentDateCheck.dateKey.split('-').reverse().join('/')}`, renewPrice);
         }
 
+        if (window.omegaSearch && typeof window.omegaSearch.addCustomer === 'function') {
+            window.omegaSearch.addCustomer(customer);
+        }
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('customers', customer);
         }
 
-        saveState();
-        // ---- TRANSACTION SUCCESS: immediate persist ----
-        _immediatePersist();
+        saveState(['customers', 'caisseLogs', 'credits']);
+        // ---- TRANSACTION SUCCESS: non-blocking persist ----
+        _immediatePersist(['customers', 'caisseLogs', 'credits'], { op: 'renewCustomer', id: customer.id, cycleId: renewalId });
 
         } catch (_txErr) {
             // ---- TRANSACTION FAILED: rollback all mutations ----
@@ -5236,7 +5358,9 @@ window.addEventListener('unhandledrejection', (event) => {
 
         closeModal('renewCustomerModal');
         showSuccessToast(`تم تجديد اشتراك (${customer.name}) بنجاح! 🎉`);
-        if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
+        if (isVisible('creditsView') && typeof window.renderCreditsList === 'function') {
+            runOrDeferInteractive('creditsAfterRenewCust', () => window.renderCreditsList());
+        }
         render();
         return false;
     };
@@ -8398,9 +8522,22 @@ window.addEventListener('unhandledrejection', (event) => {
         // Deleting a sale on the dashboard must not download an unopened report.
         if (fullReportApi) return fullReportApi.updateFullReportSalesSection();
     }
+    function handleReportSearchSalesInput() {
+        if (fullReportApi && typeof fullReportApi.handleReportSearchSalesInput === 'function') {
+            return fullReportApi.handleReportSearchSalesInput();
+        }
+        return updateFullReportSalesSection();
+    }
+    function expandAllFullReportRows() {
+        if (fullReportApi && typeof fullReportApi.expandAllFullReportRows === 'function') {
+            return fullReportApi.expandAllFullReportRows();
+        }
+    }
     window.openFullReportModal = openFullReportModal;
     window.renderFullReport = renderFullReport;
     window.updateFullReportSalesSection = updateFullReportSalesSection;
+    window.handleReportSearchSalesInput = handleReportSearchSalesInput;
+    window.expandAllFullReportRows = expandAllFullReportRows;
     for (const action of ['printFullReport', 'printFullReportSheet', 'showReportImagePreview']) {
         window[action] = async (...args) => {
             try { return (await loadFullReport())[action](...args); }
@@ -8413,25 +8550,18 @@ window.addEventListener('unhandledrejection', (event) => {
             const removed = [...(appState.credits || [])];
             appState.credits = []; window.appState.credits = [];
 
-            // Clear customer debts as well
+            const affectedCustomers = [];
             if (Array.isArray(appState.customers)) {
-                appState.customers.forEach(c => {
+                for (let i = 0; i < appState.customers.length; i++) {
+                    const c = appState.customers[i];
                     if (c && c.paymentStatus === 'credit') {
                         c.debtAmount = 0;
                         c.paymentStatus = 'paid';
                         c.updatedAt = Date.now();
-                        if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', c);
+                        affectedCustomers.push(c);
                     }
-                });
-            }
-
-            // Register all removed credits in tombstone registry
-            removed.forEach(c => {
-                if (c) {
-                    if (c.id && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c.id);
-                    if (c._rtdbKey && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c._rtdbKey);
                 }
-            });
+            }
 
             if (window.firebaseDB && window.firebaseRef && window.firebaseSet) {
                 try {
@@ -8454,8 +8584,22 @@ window.addEventListener('unhandledrejection', (event) => {
             }
             const searchInput = document.getElementById('creditSearchInput');
             if (searchInput) searchInput.value = '';
-            saveState(); renderCreditsList(); render();
+            saveState(['credits', 'customers']);
+            renderCreditsList();
+            render();
             showSuccessToast('تم حذف كل سجلات الكريدي (' + count + ')');
+
+            // Register tombstones & queue customer updates in 8ms slices off the click thread
+            Promise.resolve().then(async () => {
+                await runChunked(removed, c => {
+                    if (!c) return;
+                    if (c.id && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c.id);
+                    if (c._rtdbKey && typeof window.registerDeletedItemId === 'function') window.registerDeletedItemId('credits', c._rtdbKey);
+                }, { budgetMs: 8 });
+                if (window.saveFirebaseSectionItem && affectedCustomers.length) {
+                    await runChunked(affectedCustomers, c => window.saveFirebaseSectionItem('customers', c), { budgetMs: 8 });
+                }
+            });
         });
     } window.deleteAllCredits = deleteAllCredits;
     function renderCreditsList() { const container = document.getElementById('creditsList');
@@ -9015,19 +9159,24 @@ window.addEventListener('unhandledrejection', (event) => {
             appState.customers.unshift(...newCustomers);
             appState.credits.unshift(...newCredits);
 
-            saveState();
-
-            if (window.saveFirebaseSectionItem) {
-                newCustomers.forEach(c => window.saveFirebaseSectionItem('customers', c));
-                newCredits.forEach(cr => window.saveFirebaseSectionItem('credits', cr));
-            }
-
+            saveState(['customers', 'credits', 'packages']);
             updateMockDataUIState();
 
             if (!silent && typeof showSuccessToast === 'function') {
                 showSuccessToast(`تمت إضافة ${customersCount} مشترك و ${creditsCount} كريدي تجريبي بنجاح عبر المعالجة المتوازية!`);
             }
             if (typeof render === 'function') render();
+
+            // Queue Firebase sync & search-index updates in non-blocking 8ms slices
+            Promise.resolve().then(async () => {
+                if (window.omegaSearch && typeof window.omegaSearch.rebuild === 'function') {
+                    window.omegaSearch.rebuild(appState);
+                }
+                if (window.saveFirebaseSectionItem) {
+                    await runChunked(newCustomers, c => window.saveFirebaseSectionItem('customers', c), { budgetMs: 8 });
+                    await runChunked(newCredits, cr => window.saveFirebaseSectionItem('credits', cr), { budgetMs: 8 });
+                }
+            });
             if (typeof renderCreditsList === 'function') renderCreditsList();
         };
 
@@ -9153,25 +9302,35 @@ window.addEventListener('unhandledrejection', (event) => {
 
     function clearMockTestData() {
         showAppConfirm('هل أنت متأكد من حذف البيانات التجريبية فقط؟ ستبقى كافة بياناتك الحقيقية كما هي.', function() {
+            const removedCustIds = Array.isArray(appState.customers)
+                ? appState.customers.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cust_'))).map(c => c.id)
+                : [];
             if (Array.isArray(appState.customers)) {
-                const removedCustIds = appState.customers.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cust_'))).map(c => c.id);
                 appState.customers = appState.customers.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cust_'));
-                if (window.deleteFirebaseSectionItem) {
-                    removedCustIds.forEach(id => window.deleteFirebaseSectionItem('customers', id));
-                }
             }
+            const removedCredIds = Array.isArray(appState.credits)
+                ? appState.credits.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cred_'))).map(c => c.id)
+                : [];
             if (Array.isArray(appState.credits)) {
-                const removedCredIds = appState.credits.filter(c => c && (c.isMock || String(c.id).startsWith('mock_cred_'))).map(c => c.id);
                 appState.credits = appState.credits.filter(c => c && !c.isMock && !String(c.id).startsWith('mock_cred_'));
-                if (window.deleteFirebaseSectionItem) {
-                    removedCredIds.forEach(id => window.deleteFirebaseSectionItem('credits', id));
-                }
             }
-            saveState();
+            saveState(['customers', 'credits']);
             updateMockDataUIState();
             showSuccessToast('تم حذف كافة البيانات التجريبية بنجاح.');
             if (typeof render === 'function') render();
-            if (typeof renderCreditsList === 'function') renderCreditsList();
+            if (isVisible('creditsView') && typeof renderCreditsList === 'function') {
+                runOrDeferInteractive('creditsAfterClearMock', () => renderCreditsList());
+            }
+            // Chunk Firebase deletions & search index rebuild asynchronously off the click thread
+            Promise.resolve().then(async () => {
+                if (window.omegaSearch && typeof window.omegaSearch.rebuild === 'function') {
+                    window.omegaSearch.rebuild(appState);
+                }
+                if (window.deleteFirebaseSectionItem) {
+                    if (removedCustIds.length) await runChunked(removedCustIds, id => window.deleteFirebaseSectionItem('customers', id), { budgetMs: 8 });
+                    if (removedCredIds.length) await runChunked(removedCredIds, id => window.deleteFirebaseSectionItem('credits', id), { budgetMs: 8 });
+                }
+            });
         }, { title: 'حذف البيانات التجريبية', confirmText: 'نعم، حذف التجريبي' });
     }
     window.generateMockTestData = generateMockTestData;
@@ -9548,8 +9707,9 @@ window.addEventListener('unhandledrejection', (event) => {
         `; printWindow.document.open();
         printWindow.document.write(docHtml);
         printWindow.document.close(); };
-    document.getElementById('coachAbsenceForm')?.addEventListener('submit', function(e) {
-        e.preventDefault(); const numDays = parseInt(getElemVal('absenceDays'));
+    document.getElementById('coachAbsenceForm')?.addEventListener('submit', async function(e) {
+        e.preventDefault(); const formEl = this;
+        const numDays = parseInt(getElemVal('absenceDays'));
         if (isNaN(numDays) || numDays <= 0) return;
         const dateRaw = getElemVal('absenceDate');
         let formattedDate = dateRaw; if (dateRaw) {
@@ -9557,26 +9717,38 @@ window.addEventListener('unhandledrejection', (event) => {
                 formattedDate = `${parts[0]}/${parseInt(parts[1])}/${parseInt(parts[2])}`;
             } } else { const d = new Date();
             formattedDate = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
-        } appState.customers.forEach(c => { if (['active', 'near_expiry'].includes(calculateStatus(c))) {
-                const currentEnd = new Date(c.endDate);
-                currentEnd.setDate(currentEnd.getDate() + numDays);
-                c.endDate = _toLocalMidnightISO(currentEnd);
-                if (window.saveFirebaseSectionItem) {
-                    window.saveFirebaseSectionItem('customers', c);
-                }
-            } }); if (!appState.coachAbsences) appState.coachAbsences = [];
+        }
+        if (!appState.coachAbsences) appState.coachAbsences = [];
         const newAbsence = { id: Date.now().toString(), date: formattedDate, days: numDays };
         appState.coachAbsences.unshift(newAbsence);
         if (window.saveFirebaseSectionItem) {
             window.saveFirebaseSectionItem('coachAbsences', newAbsence);
         }
+        closeModal('coachAbsenceModal');
+        if (formEl && typeof formEl.reset === 'function') formEl.reset();
+        const dateInput = document.getElementById('absenceDate');
+        if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+
+        // Yield after closing the modal, then extend active customers in 8ms slices
+        await yieldToMain();
+        const updatedCustomers = [];
+        const allCustomers = Array.isArray(appState.customers) ? appState.customers : [];
+        await runChunked(allCustomers, c => {
+            if (c && ['active', 'near_expiry'].includes(calculateStatus(c))) {
+                const currentEnd = new Date(c.endDate);
+                currentEnd.setDate(currentEnd.getDate() + numDays);
+                c.endDate = _toLocalMidnightISO(currentEnd);
+                updatedCustomers.push(c);
+            }
+        }, { budgetMs: 8 });
+        if (window.saveFirebaseSectionItem && updatedCustomers.length) {
+            await runChunked(updatedCustomers, c => window.saveFirebaseSectionItem('customers', c), { budgetMs: 8 });
+        }
         if (typeof logActivity === 'function') {
             logActivity('customer', 'تمديد اشتراكات لغياب المدرب', `تاريخ الغياب: ${formattedDate} - مدة التمديد: ${numDays} يوم لجميع المشتركين النشطين`, 0);
         }
-        saveState(); closeModal('coachAbsenceModal');
+        saveState(['customers', 'coachAbsences']);
         showSuccessToast('تم تمديد اشتراك المشتركين بنجاح');
-        this.reset(); const dateInput = document.getElementById('absenceDate');
-        if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
     }); function toggleFreeze(customerId) {
        const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
        if (!customer) return;
@@ -9987,23 +10159,45 @@ window.addEventListener('unhandledrejection', (event) => {
             .replace(/\s+/g, ' ')
             .trim();
     }
-    function customerMatchesQuery(c, rawQuery) {
-        const q = normalizeSearchText(rawQuery);
-        if (!q) return true;
-        const words = q.split(' ').filter(Boolean);
-        const phoneRaw = String((c && c.phone) || '');
+    function _ensureCustomerSearchCache(c) {
+        if (!c || typeof c !== 'object') return { haystack: '', digitHaystack: '' };
+        const sig = `${c.name || ''}|${c.nickname || ''}|${c.phone || ''}|${c.barcode || ''}|${c.notes || ''}`;
+        if (c._normCacheSig === sig && typeof c._normHaystack === 'string') {
+            return { haystack: c._normHaystack, digitHaystack: c._digitHaystack || '' };
+        }
+        const phoneRaw = String(c.phone || '');
         const phoneDigits = phoneRaw.replace(/\D/g, '');
         const displayPhone = (typeof getDisplayPhone === 'function') ? getDisplayPhone(c.phone) : phoneRaw;
         const haystack = normalizeSearchText([
-            c && c.name, c && c.nickname, c && c.barcode, c && c.notes,
+            c.name, c.nickname, c.barcode, c.notes,
             phoneRaw, displayPhone, phoneDigits
         ].filter(Boolean).join(' '));
-        const digitHaystack = (phoneDigits + String((c && c.barcode) || '').replace(/\D/g, ''));
-        return words.every((w) => {
-            if (haystack.includes(w)) return true;
-            const wDigits = w.replace(/\D/g, '');
-            return wDigits.length >= 2 && digitHaystack.includes(wDigits);
-        });
+        const digitHaystack = phoneDigits + String(c.barcode || '').replace(/\D/g, '');
+        c._normCacheSig = sig;
+        c._normHaystack = haystack;
+        c._digitHaystack = digitHaystack;
+        return { haystack, digitHaystack };
+    }
+    function _customerMatchesPreparedWords(c, words) {
+        if (!words || words.length === 0) return true;
+        const { haystack, digitHaystack } = _ensureCustomerSearchCache(c);
+        for (let i = 0; i < words.length; i++) {
+            const wObj = words[i];
+            if (haystack.includes(wObj.w)) continue;
+            if (wObj.digits.length >= 2 && digitHaystack.includes(wObj.digits)) continue;
+            return false;
+        }
+        return true;
+    }
+    function _prepareQueryWords(rawQuery) {
+        const q = normalizeSearchText(rawQuery);
+        if (!q) return null;
+        return q.split(' ').filter(Boolean).map(w => ({ w, digits: w.replace(/\D/g, '') }));
+    }
+    function customerMatchesQuery(c, rawQuery) {
+        const words = _prepareQueryWords(rawQuery);
+        if (!words) return true;
+        return _customerMatchesPreparedWords(c, words);
     }
     window.customerMatchesQuery = customerMatchesQuery;
     function readCustomerSearchValue() {
@@ -10069,10 +10263,16 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     function countCustomerMatches(rawQuery) {
         const list = (window.appState && window.appState.customers) || (typeof appState !== 'undefined' && appState && appState.customers) || [];
-        return list.filter(c => customerMatchesQuery(c, rawQuery)).length;
+        const words = _prepareQueryWords(rawQuery);
+        if (!words) return list.length;
+        let count = 0;
+        for (let i = 0; i < list.length; i++) {
+            if (_customerMatchesPreparedWords(list[i], words)) count++;
+        }
+        return count;
     }
-    function announceCustomerSearch(val, remoteDone) {
-        const count = countCustomerMatches(val);
+    function announceCustomerSearch(val, remoteDone, precomputedCount) {
+        const count = typeof precomputedCount === 'number' ? precomputedCount : countCustomerMatches(val);
         const grid = document.getElementById('customersGrid') || document.getElementById('customersGridView');
         if (grid && typeof grid.scrollIntoView === 'function') {
             grid.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -10097,21 +10297,24 @@ window.addEventListener('unhandledrejection', (event) => {
             if (typeof showErrorToast === 'function') showErrorToast('اكتب اسم المشترك أو رقم الهاتف ثم اضغط بحث');
             return;
         }
-        applyCustomerSearch(val);
-        const localCount = countCustomerMatches(val);
-        if (fromButton) {
-            if (localCount > 0) announceCustomerSearch(val, true);
-            else if (typeof showInfoToast === 'function') showInfoToast('جاري البحث عن المشترك...');
-        }
-        Promise.resolve()
-            .then(() => triggerRemoteCustomerSearch(val))
-            .then(() => {
-                applyCustomerSearch(val);
-                if (!fromButton) return;
-                const count = countCustomerMatches(val);
-                if (localCount === 0 || count !== localCount) announceCustomerSearch(val, true);
-            })
-            .catch((e) => console.warn('Customer search note:', e));
+        syncCustomerSearchInputs(val, document.activeElement && document.activeElement.id);
+        runOrDeferInteractive('customerSearchSubmit', () => {
+            applyCustomerSearch(val);
+            const localCount = countCustomerMatches(val);
+            if (fromButton) {
+                if (localCount > 0) announceCustomerSearch(val, true, localCount);
+                else if (typeof showInfoToast === 'function') showInfoToast('جاري البحث عن المشترك...');
+            }
+            Promise.resolve()
+                .then(() => triggerRemoteCustomerSearch(val))
+                .then((remoteFound) => {
+                    if (remoteFound) applyCustomerSearch(val);
+                    if (!fromButton) return;
+                    const count = remoteFound ? countCustomerMatches(val) : localCount;
+                    if (localCount === 0 || count !== localCount) announceCustomerSearch(val, true, count);
+                })
+                .catch((e) => console.warn('Customer search note:', e));
+        });
     }
     window.searchSubscriber = searchSubscriber;
     const _runCustomerSearchView = debounce(() => {
@@ -11187,60 +11390,85 @@ window.addEventListener('unhandledrejection', (event) => {
             renderSalesList(); } }; window.clearPosFilterDate = function() {
         const input = document.getElementById('posFilterDate');
         if (input) { input.value = '';
-            renderSalesList(); } }; function renderSalesList() {
+            renderSalesList(); } };
+    const _posSalesTimeFormatter = typeof Intl !== 'undefined' && Intl.DateTimeFormat
+        ? new Intl.DateTimeFormat('ar-DZ', { hour: '2-digit', minute: '2-digit' })
+        : null;
+    let _lastPosOptionsSig = '';
+    function renderSalesList() {
        const container = document.getElementById('salesList');
        if(!container) return; if (!appState.sales) appState.sales = [];
-       // Populate datalist for coach input in sell form
        const coachesDatalist = document.getElementById('coachesList');
        const uniqueCoaches = getUniqueCoaches();
-       if (coachesDatalist) { coachesDatalist.innerHTML = uniqueCoaches.map(c => `<option value="${c}">`).join('');
-       }
-       // Populate filter dropdowns if present
        const posFilterStockElem = document.getElementById('posFilterStock');
        const posFilterCategoryElem = document.getElementById('posFilterCategory');
        const posFilterProdElem = document.getElementById('posFilterProduct');
        const posFilterCoachElem = document.getElementById('posFilterCoach');
        const posFilterDateElem = document.getElementById('posFilterDate');
-       const curStock = posFilterStockElem ? posFilterStockElem.value : 'all';
-       const curCat = posFilterCategoryElem ? posFilterCategoryElem.value : 'all';
        const curProd = posFilterProdElem ? posFilterProdElem.value : 'all';
        const curCoach = posFilterCoachElem ? posFilterCoachElem.value : 'all';
-       if (posFilterProdElem) { const uniqueProds = Array.from(new Set(appState.sales.map(s => s.prodName || s.productName).filter(Boolean)));
-           posFilterProdElem.innerHTML = '<option value="all">جميع المنتجات</option>' + uniqueProds.map(p => `<option value="${p}">${p}</option>`).join('');
-           if (uniqueProds.includes(curProd)) posFilterProdElem.value = curProd;
-       } if (posFilterCoachElem) {
-           posFilterCoachElem.innerHTML = '<option value="all">جميع المدربين</option>' +
-               '<option value="عام">عام / بدون مدرب</option>' +
-               uniqueCoaches.map(c => `<option value="${c}">${c}</option>`).join('');
-           if (uniqueCoaches.includes(curCoach) || curCoach === 'عام') posFilterCoachElem.value = curCoach;
-       } let filtered = [...appState.sales];
+
+       const optionsSig = `${appState.sales.length}:${uniqueCoaches.join('|')}`;
+       if (optionsSig !== _lastPosOptionsSig) {
+           _lastPosOptionsSig = optionsSig;
+           if (coachesDatalist) {
+               coachesDatalist.innerHTML = uniqueCoaches.map(c => `<option value="${escapeHTML(c)}">`).join('');
+           }
+           if (posFilterProdElem) {
+               const uniqueProds = Array.from(new Set(appState.sales.map(s => s && (s.prodName || s.productName)).filter(Boolean)));
+               posFilterProdElem.innerHTML = '<option value="all">جميع المنتجات</option>' + uniqueProds.map(p => `<option value="${escapeHTML(p)}">${escapeHTML(p)}</option>`).join('');
+               if (uniqueProds.includes(curProd)) posFilterProdElem.value = curProd;
+           }
+           if (posFilterCoachElem) {
+               posFilterCoachElem.innerHTML = '<option value="all">جميع المدربين</option>' +
+                   '<option value="عام">عام / بدون مدرب</option>' +
+                   uniqueCoaches.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+               if (uniqueCoaches.includes(curCoach) || curCoach === 'عام') posFilterCoachElem.value = curCoach;
+           }
+       }
+
        const selStock = posFilterStockElem ? posFilterStockElem.value : 'all';
        const selCat = posFilterCategoryElem ? posFilterCategoryElem.value : 'all';
        const selProd = posFilterProdElem ? posFilterProdElem.value : 'all';
        const selCoach = posFilterCoachElem ? posFilterCoachElem.value : 'all';
        const selDate = posFilterDateElem ? posFilterDateElem.value : '';
-       if (selStock !== 'all') { if (selStock === 'stock2') {
-               filtered = filtered.filter(s => s.stockLocation === 'stock2');
-           } else { filtered = filtered.filter(s => !s.stockLocation || s.stockLocation === 'stock1');
-           } } if (selCat !== 'all') { filtered = filtered.filter(s => {
+
+       let filtered = appState.sales.filter(s => {
+           if (!s) return false;
+           if (selStock !== 'all') {
+               if (selStock === 'stock2' ? s.stockLocation !== 'stock2' : (s.stockLocation && s.stockLocation !== 'stock1')) return false;
+           }
+           if (selCat !== 'all') {
                const cat = s.category || (typeof getProductCategory === 'function' ? getProductCategory({ name: s.prodName || s.productName }) : 'other');
-               return cat === selCat; }); } if (selProd !== 'all') {
-           filtered = filtered.filter(s => (s.prodName || s.productName) === selProd);
-       } if (selCoach !== 'all') { if (selCoach === 'عام') {
-               filtered = filtered.filter(s => !s.coachName || s.coachName === 'عام');
-           } else { filtered = filtered.filter(s => s.coachName === selCoach);
-           } } if (selDate) { filtered = filtered.filter(s => getLocalDateString(s.date) === selDate);
+               if (cat !== selCat) return false;
+           }
+           if (selProd !== 'all' && (s.prodName || s.productName) !== selProd) return false;
+           if (selCoach !== 'all') {
+               if (selCoach === 'عام' ? (s.coachName && s.coachName !== 'عام') : s.coachName !== selCoach) return false;
+           }
+           return true;
+       });
+       if (selDate) { filtered = filtered.filter(s => getLocalDateString(s.date) === selDate);
        }
-       // Update summary badge
-       const totalAmt = filtered.reduce((sum, s) => sum + (Number(s.total) || 0), 0);
+       const matchedWithTs = [];
+       let totalAmt = 0;
+       for (let i = 0; i < filtered.length; i++) {
+           const s = filtered[i];
+           totalAmt += Number(s.total) || 0;
+           const parsedTs = typeof s.date === 'number' ? s.date : Date.parse(s.date || '');
+           matchedWithTs.push([Number.isFinite(parsedTs) ? parsedTs : 0, s]);
+       }
+
        const summaryElem = document.getElementById('salesListSummary');
-       if (summaryElem) { summaryElem.textContent = `المجموع: ${totalAmt.toLocaleString()} دج (${filtered.length} عملية)`;
-       } if (filtered.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-slate-100 font-medium">لا توجد مبيعات مسجلة بهذا التصنيف</div>';
-           return; } container.innerHTML = filtered.map(s => { const __t = new Date(s.date).getTime(); return [isNaN(__t) ? 0 : __t, s]; }).sort((a, b) => b[0] - a[0]).slice(0, 50).map(__p => __p[1]).map(s => {
+       if (summaryElem) { summaryElem.textContent = `المجموع: ${totalAmt.toLocaleString()} دج (${matchedWithTs.length} عملية)`;
+       } if (matchedWithTs.length === 0) { container.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 bg-slate-50 rounded-xl border border-slate-100 font-medium">لا توجد مبيعات مسجلة بهذا التصنيف</div>';
+           return; }
+       matchedWithTs.sort((a, b) => b[0] - a[0]);
+       container.innerHTML = matchedWithTs.slice(0, 50).map(__p => __p[1]).map(s => {
            const d = s.date ? new Date(s.date) : null;
            const isValidDate = d && !isNaN(d.getTime());
            const dateStr = isValidDate ? `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}` : '';
-           const timeStr = isValidDate ? d.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' }) : '';
+           const timeStr = isValidDate ? (_posSalesTimeFormatter ? _posSalesTimeFormatter.format(d) : d.toLocaleTimeString('ar-DZ', { hour: '2-digit', minute: '2-digit' })) : '';
            const name = escapeHTML(s.prodName || s.productName || 'منتج');
            const coachName = escapeHTML(s.coachName || 'عام');
            const safeId = escapeHTML(s.id || '');
@@ -12436,25 +12664,36 @@ window.addEventListener('unhandledrejection', (event) => {
             const transactionBody = document.getElementById('caisseTransactionsTableBody');
             const transactionCount = document.getElementById('caisseTransactionsCount');
             if (transactionCount) transactionCount.textContent = `${transactions.length} معاملة`;
-            if (transactionBody) transactionBody.innerHTML = transactions.length
-                ? transactions.map(transaction => {
-                    const isIncoming = transaction.direction === 'in';
-                    const title = escapeHTML(transaction.title || 'معاملة نقدية');
-                    const detail = escapeHTML(transaction.detail || '');
-                    const sourceLabel = escapeHTML(transaction.sourceLabel || 'قسم آخر');
-                    const renewal = transaction.source === 'subscription' && (appState.caisseLogs || []).find(log =>
-                        log && log.id === transaction.id && log.previousSubscription);
-                    const renewalCustomer = renewal && (appState.customers || []).find(c => c && String(c.id) === String(renewal.customerId));
-                    const canUndoRenewal = renewal && /^renew_[0-9]+_[a-z0-9]+$/.test(String(renewal.sourceId)) &&
-                        renewalRollbackCheck(renewalCustomer, renewal, appState.credits || [], appState.caisseLogs || []).ok;
-                    return `<tr class="hover:bg-slate-50 transition-colors">
-                        <td class="p-3 font-bold text-slate-700 whitespace-nowrap">${sourceLabel}</td>
-                        <td class="p-3 text-slate-800"><div class="font-bold">${title}</div>${detail ? `<div class="text-[10px] text-slate-400 mt-0.5">${detail}</div>` : ''}${canUndoRenewal ? `<button type="button" onclick="deleteRenewal('${renewal.sourceId}')" class="mt-1 text-red-700 hover:underline font-bold" title="إلغاء التجديد وإرجاع المبلغ من صندوق هذا اليوم">حذف التجديد</button>` : ''}</td>
-                        <td class="p-3 text-left font-black ${isIncoming ? 'text-blue-700' : 'text-slate-300'}">${isIncoming ? formatMoney(transaction.amount) : '—'}</td>
-                        <td class="p-3 text-left font-black ${!isIncoming ? 'text-slate-800' : 'text-slate-300'}">${!isIncoming ? formatMoney(transaction.amount) : '—'}</td>
-                    </tr>`;
-                }).join('')
-                : '<tr><td colspan="4" class="p-6 text-center text-slate-400">لا توجد حركات نقدية لهذا التاريخ</td></tr>';
+            if (transactionBody) {
+                const caisseLogsArr = appState.caisseLogs || [];
+                const creditsArr = appState.credits || [];
+                const renewalLogById = new Map();
+                for (let i = 0; i < caisseLogsArr.length; i++) {
+                    const log = caisseLogsArr[i];
+                    if (log && log.id && log.previousSubscription) renewalLogById.set(log.id, log);
+                }
+                const customerById = renewalLogById.size > 0
+                    ? new Map((appState.customers || []).filter(Boolean).map(c => [String(c.id), c]))
+                    : null;
+                transactionBody.innerHTML = transactions.length
+                    ? transactions.map(transaction => {
+                        const isIncoming = transaction.direction === 'in';
+                        const title = escapeHTML(transaction.title || 'معاملة نقدية');
+                        const detail = escapeHTML(transaction.detail || '');
+                        const sourceLabel = escapeHTML(transaction.sourceLabel || 'قسم آخر');
+                        const renewal = transaction.source === 'subscription' ? renewalLogById.get(transaction.id) : null;
+                        const renewalCustomer = renewal && customerById ? customerById.get(String(renewal.customerId)) : null;
+                        const canUndoRenewal = renewal && /^renew_[0-9]+_[a-z0-9]+$/.test(String(renewal.sourceId)) &&
+                            renewalRollbackCheck(renewalCustomer, renewal, creditsArr, caisseLogsArr).ok;
+                        return `<tr class="hover:bg-slate-50 transition-colors">
+                            <td class="p-3 font-bold text-slate-700 whitespace-nowrap">${sourceLabel}</td>
+                            <td class="p-3 text-slate-800"><div class="font-bold">${title}</div>${detail ? `<div class="text-[10px] text-slate-400 mt-0.5">${detail}</div>` : ''}${canUndoRenewal ? `<button type="button" onclick="deleteRenewal('${renewal.sourceId}')" class="mt-1 text-red-700 hover:underline font-bold" title="إلغاء التجديد وإرجاع المبلغ من صندوق هذا اليوم">حذف التجديد</button>` : ''}</td>
+                            <td class="p-3 text-left font-black ${isIncoming ? 'text-blue-700' : 'text-slate-300'}">${isIncoming ? formatMoney(transaction.amount) : '—'}</td>
+                            <td class="p-3 text-left font-black ${!isIncoming ? 'text-slate-800' : 'text-slate-300'}">${!isIncoming ? formatMoney(transaction.amount) : '—'}</td>
+                        </tr>`;
+                    }).join('')
+                    : '<tr><td colspan="4" class="p-6 text-center text-slate-400">لا توجد حركات نقدية لهذا التاريخ</td></tr>';
+            }
         } const actualElem = document.getElementById('caisseDayActualAmount');
         const statusBadgeElem = document.getElementById('caisseDayStatusBadge');
         if (actualElem) { if (details.isClosed) {
@@ -13662,17 +13901,14 @@ window.addEventListener('unhandledrejection', (event) => {
             }
         });
 
-        // Also add coaches and customers to suggestions datalist
+        // Only add coaches/staff (NOT thousands of gym customers) so browser
+        // native <datalist> autocomplete never freezes keydown on #staffPayoutName!
         (appState.coachAbsences || []).forEach(c => {
             const n = (c && (c.coachName || c.name) || '').trim();
             if (n) allKnownNames.add(n);
         });
         (appState.packages || []).forEach(pkg => {
             const n = (pkg && pkg.coachName || '').trim();
-            if (n) allKnownNames.add(n);
-        });
-        (appState.customers || []).forEach(cust => {
-            const n = (cust && cust.name || '').trim();
             if (n) allKnownNames.add(n);
         });
 
@@ -14216,7 +14452,8 @@ window.addEventListener('unhandledrejection', (event) => {
             if (window.saveFirebaseSectionItem) {
                 window.saveFirebaseSectionItem('activityLogs', logItem);
             }
-            saveState();
+            window.__omegaDataVersion = (window.__omegaDataVersion || 0) + 1;
+            if (window.__localCacheMarkDirty) window.__localCacheMarkDirty('activityLogs');
         } catch (err) {
             console.warn('logActivity error:', err);
         }
