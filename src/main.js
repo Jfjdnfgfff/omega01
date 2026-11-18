@@ -205,6 +205,7 @@ window.addEventListener('unhandledrejection', (event) => {
   import { groupStaffPayouts, normalizeStaffName, encodeGroupKey, decodeGroupKey } from './staff-payouts-grouping.js';
   import { resolvePaymentDate, paymentDateTimestamp } from './renewal-payment-date.js';
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
+  import { calculateStatus, getRemainingDays, isSessionCustomer, clearStatusCache, cleanCustomerForStorage, applyRenewalToCustomer, toLocalMidnightISO } from './customer-status.js';
 
   // High-Speed PWA Caching Engine Registration
   // — Auto-refresh: when a new SW version is detected, it is activated
@@ -1244,7 +1245,7 @@ window.addEventListener('unhandledrejection', (event) => {
     };
 
     const absencesArr = dedupe(s.coachAbsences, 'abs');
-    const customersArr = dedupe(s.customers, 'cust');
+    const customersArr = dedupe(s.customers, 'cust').map(cleanCustomerForStorage);
     const productsArr = dedupe(s.products, 'prod');
     const packagesArr = dedupe(s.packages, 'pkg');
     const salesArr = dedupe(s.sales, 'sale');
@@ -2076,7 +2077,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         if (sectionPath === 'customers') {
           const enriched = {
-            ...itemData,
+            ...cleanCustomerForStorage(itemData),
             id: cleanId,
             normalizedPhone: normalizePhone(itemData.phone) || null,
             updatedAt: Date.now()
@@ -4666,7 +4667,7 @@ window.addEventListener('unhandledrejection', (event) => {
         if (editPriceInput) { editPriceInput.value = customer.price !== undefined && customer.price !== null ? customer.price : (pkg ? (pkg.price || 0) : 0);
         }
         // Populate subscription type
-        const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
+        const isSession = isSessionCustomer(customer);
         const subTypeSelect = document.getElementById('editSubscriptionType');
         if (subTypeSelect) subTypeSelect.value = isSession ? 'session' : 'time';
         toggleEditCustTypeFields(isSession ? 'session' : 'time');
@@ -4774,7 +4775,12 @@ window.addEventListener('unhandledrejection', (event) => {
             customer.remainingSessions = parseInt(getElemVal('editRemainingSessions') || 0);
             if (typeof customer.attendedSessions !== 'number') {
                 customer.attendedSessions = Math.max(0, (customer.totalSessions || 0) - (customer.remainingSessions || 0));
-            } } const editStartDateVal = getElemVal('editStartDate');
+            } } else {
+            // Switching to a time subscription: drop leftover session
+            // counters so the member is not still classified as expired.
+            customer.totalSessions = null;
+            customer.remainingSessions = null;
+        } const editStartDateVal = getElemVal('editStartDate');
         const editEndDateVal = getElemVal('editEndDate');
         if (editStartDateVal) customer.startDate = _toLocalMidnightISO(new Date(editStartDateVal));
         if (editEndDateVal) customer.endDate = _toLocalMidnightISO(new Date(editEndDateVal));
@@ -4802,6 +4808,7 @@ window.addEventListener('unhandledrejection', (event) => {
         customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(getElemVal('editDebtAmount') || 0) : 0;
         customer.imageUrl = getElemVal('editCustImageUrl') || null;
         customer.updatedAt = Date.now();
+        clearStatusCache(customer);
         customer._searchKey = `${customer.name || ''} ${(customer.phone || '').replace(/\D/g, '')}`.toLowerCase();
 
         // Keep the subscription receipt in the caisse in sync with the edited
@@ -5269,27 +5276,26 @@ window.addEventListener('unhandledrejection', (event) => {
         const _txSnap = _snapshotTransactionState({ customer });
         try {
 
-        customer.packageId = pkgId || (pkg ? pkg.id : customer.packageId);
-        customer.price = renewPrice;
-        customer.subscriptionType = subType;
-        customer.status = 'active';
-        customer.paymentStatus = paymentStatus;
-        customer.debtAmount = debtAmount;
-        customer.subscriptionCycleId = renewalId;
-        customer.paymentDate = paymentDateCheck.dateKey;
-        customer.updatedAt = Date.now();
-
-        if (subType === 'session') {
-            const totalSess = parseInt(getElemVal('renewTotalSessions') || (pkg?.sessionsCount || 10));
-            const remSess = parseInt(getElemVal('renewRemainingSessions') || totalSess);
-            customer.totalSessions = totalSess;
-            customer.remainingSessions = remSess;
-        } else {
-            const startVal = getElemVal('renewStartDate');
-            const endVal = getElemVal('renewEndDate');
-            if (startVal) customer.startDate = new Date(startVal).toISOString();
-            if (endVal) customer.endDate = _toLocalMidnightISO(new Date(endVal));
-        }
+        // Drop dates from old cycles when renewing by session and clear
+        // leftover session counters when renewing a time subscription.
+        const totalSess = subType === 'session'
+            ? parseInt(getElemVal('renewTotalSessions') || (pkg?.sessionsCount || 10)) : null;
+        const remSess = subType === 'session'
+            ? parseInt(getElemVal('renewRemainingSessions') || totalSess) : null;
+        applyRenewalToCustomer(customer, {
+            packageId: pkgId || (pkg ? pkg.id : customer.packageId),
+            price: renewPrice,
+            subscriptionType: subType,
+            paymentStatus,
+            debtAmount,
+            cycleId: renewalId,
+            paymentDateKey: paymentDateCheck.dateKey,
+            totalSessions: totalSess,
+            remainingSessions: remSess,
+            startDateVal: getElemVal('renewStartDate'),
+            endDateVal: getElemVal('renewEndDate'),
+            now: new Date()
+        });
 
         const renewalCashPaid = paymentStatus === 'paid'
             ? Number(renewPrice || 0)
@@ -7966,58 +7972,12 @@ window.addEventListener('unhandledrejection', (event) => {
             if (typeof window.renderCreditsList === 'function') window.renderCreditsList();
             render();
         }); }
-    // Helper: compute the difference in whole calendar days between a target
-    // date and "now", both normalised to their LOCAL midnight.  This avoids
-    // off-by-one errors caused by timezone offsets (the stored endDate is a
-    // UTC-midnight ISO string, while Date.now() carries the current wall-clock
-    // time which can shift the result by up to ±1 day).
-    function _localDayDiff(targetMs, nowMs) {
-      const target = new Date(targetMs);
-      const now = new Date(nowMs);
-      const tNorm = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
-      const nNorm = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-      return Math.round((tNorm - nNorm) / 86400000);
-    }
-    function calculateStatus(customer, cachedNowMs) {
-      if (!customer) return 'active';
-      if (customer.status === 'frozen') return 'frozen';
-      const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
-      const nowMs = cachedNowMs || Date.now();
-      if (isSession) {
-        const remaining = parseInt(customer.remainingSessions) || 0;
-        if (remaining <= 0) return 'expired';
-        if (customer.endDate) {
-          const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
-          if (!isNaN(endMs)) {
-            const diffDays = _localDayDiff(endMs, nowMs);
-            if (diffDays < 0) return 'expired';
-            if (diffDays <= 5 || remaining <= 2) return 'near_expiry';
-          }
-        } else if (remaining <= 2) {
-          return 'near_expiry';
-        }
-        return 'active';
-      }
-      if (!customer.endDate) return 'active';
-      const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
-      if (isNaN(endMs)) return 'active';
-      const diffDays = _localDayDiff(endMs, nowMs);
-      if (diffDays < 0) return 'expired';
-      if (diffDays <= 5) return 'near_expiry';
-      return 'active';
-    }
-    function getRemainingDays(customer, cachedNowMs) {
-      if (!customer) return 0;
-      if (customer.status === 'frozen') return (customer.frozenRemainingDays || 0);
-      if (!customer.endDate) return 0;
-      const nowMs = cachedNowMs || Date.now();
-      const endMs = customer._endMs || (customer._endMs = Date.parse(customer.endDate));
-      if (isNaN(endMs)) return 0;
-      return Math.max(0, _localDayDiff(endMs, nowMs));
-    } function recordCustomerAttendance(customerId) {
+    // calculateStatus / getRemainingDays / isSessionCustomer come from
+    // ./customer-status.js, with a private cache keyed by the current endDate.
+    function recordCustomerAttendance(customerId) {
         if (!appState.customers) return;
         const customer = (appState.customers || []).find(c => c && (String(c.id) === String(customerId) || String(c._rtdbKey) === String(customerId)));
-        if (!customer) return; const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null);
+        if (!customer) return; const isSession = isSessionCustomer(customer);
         if (!isSession) { if (!customer.sessionHistory) customer.sessionHistory = [];
             customer.sessionHistory.unshift({
                 date: new Date().toISOString(),
@@ -9734,7 +9694,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const updatedCustomers = [];
         const allCustomers = Array.isArray(appState.customers) ? appState.customers : [];
         await runChunked(allCustomers, c => {
-            if (c && ['active', 'near_expiry'].includes(calculateStatus(c))) {
+            if (c && c.endDate && ['active', 'near_expiry'].includes(calculateStatus(c))) {
                 const currentEnd = new Date(c.endDate);
                 currentEnd.setDate(currentEnd.getDate() + numDays);
                 c.endDate = _toLocalMidnightISO(currentEnd);
@@ -9754,9 +9714,12 @@ window.addEventListener('unhandledrejection', (event) => {
        if (!customer) return;
        customer.updatedAt = Date.now();
        if (customer.status === 'frozen') {
-           const newEndDate = new Date();
-           newEndDate.setDate(newEndDate.getDate() + customer.frozenRemainingDays);
-           customer.endDate = _toLocalMidnightISO(newEndDate);
+           // Session subscriptions without a date limit must stay unlimited.
+           if (customer.endDate || !isSessionCustomer(customer)) {
+               const newEndDate = new Date();
+               newEndDate.setDate(newEndDate.getDate() + customer.frozenRemainingDays);
+               customer.endDate = _toLocalMidnightISO(newEndDate);
+           }
            customer.status = 'active'; } else {
            customer.frozenRemainingDays = getRemainingDays(customer);
            customer.status = 'frozen'; }
@@ -11371,11 +11334,7 @@ window.addEventListener('unhandledrejection', (event) => {
     // so toISOString() would return "2024-11-30T..." — off by one day.
     // This helper always returns the correct local calendar day at UTC midnight.
     function _toLocalMidnightISO(date) {
-        if (!date || isNaN(date.getTime())) return new Date().toISOString();
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}T00:00:00.000Z`;
+        return toLocalMidnightISO(date);
     }
     // Safe local date display: always uses the LOCAL calendar date, not UTC.
     // Replaces the buggy pattern: new Date(str).toISOString().split('T')[0]
@@ -11543,7 +11502,7 @@ window.addEventListener('unhandledrejection', (event) => {
             age--; } return age >= 0 ? age : null;
     } const arabicMonths = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
     function formatCustomerExpiry(customer) { if (!customer) return 'غير محدد';
-        const isSession = customer.subscriptionType === 'session' || (customer.remainingSessions !== undefined && customer.remainingSessions !== null && customer.subscriptionType !== 'time');
+        const isSession = isSessionCustomer(customer);
         if (isSession) { const rem = parseInt(customer.remainingSessions) || 0;
             const total = parseInt(customer.totalSessions) || (rem + (customer.attendedSessions || 0)) || 10;
             if (customer.status === 'frozen') {
@@ -11589,7 +11548,7 @@ window.addEventListener('unhandledrejection', (event) => {
         return counts[filterKey] !== undefined ? counts[filterKey] : counts.all;
     }
     function customerIsSession(c) {
-        return c.subscriptionType === 'session' || (c.remainingSessions !== undefined && c.remainingSessions !== null && c.subscriptionType !== 'time');
+        return isSessionCustomer(c);
     }
     function renderFilterTabs() { if (appState.filter === 'session') appState.filter = 'all';
         const filterKeys = ['all', 'male', 'female', 'active', 'near_expiry', 'expired', 'frozen', 'credit'];
