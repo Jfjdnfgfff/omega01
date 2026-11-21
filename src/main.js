@@ -1,3 +1,4 @@
+import { readSupplierTransactions, supplierName as displaySupplierName, supplierKey, isSupplierPurchase, supplierSections, readSupplierLegacy } from './supplier-read.js';
 import { createRealtimeSections, readSectionWithLegacy } from './realtime-sections.js';
 import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABLE_SECTIONS, compareRtdbKeys, reconcileMode, idsToRemoveOnReconcile, shouldRestoreSalesHistoryComplete } from './local-db.js';
 import { createListenerRegistry } from './listener-registry.js';
@@ -665,7 +666,9 @@ window.addEventListener('unhandledrejection', (event) => {
       if (!response.ok) throw new Error(`Firebase ${path}: HTTP ${response.status}`);
       return response.json();
     };
-    const promise = readSectionWithLegacy(read, sectionPath(sectionName), legacyPath(sectionName))
+    const promise = (supplierSections.includes(sectionName)
+      ? read(sectionPath(sectionName)).then(data => data ?? readSupplierLegacy(read, sectionName))
+      : readSectionWithLegacy(read, sectionPath(sectionName), legacyPath(sectionName)))
       .then(data => {
         applySectionSnapshot(sectionName, data);
         if (sectionName === 'sales') window.salesHistoryComplete = true; // REST fallback reads the full node
@@ -2810,8 +2813,8 @@ window.addEventListener('unhandledrejection', (event) => {
           async readLegacy(name) {
             const path = legacyPath(name);
             if (!path) return null;
-            const snapshot = await get(ref(database, path));
-            return snapshot.val();
+            const read = async location => (await get(ref(database, location))).val();
+            return supplierSections.includes(name) ? readSupplierLegacy(read, name) : read(path);
           },
           apply: applySectionSnapshot,
           onReady(name) {
@@ -3498,7 +3501,8 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof window.lazyLoadSection === 'function') {
             if (id === 'coachAbsenceModal') window.lazyLoadSection('coachAbsences');
             else if (id === 'addCustomerModal' || id === 'editCustomerModal' || id === 'renewCustomerModal') { window.lazyLoadSection('packages'); window.lazyLoadSection('customers'); }
-            else if (id === 'staffPayoutsModal') { window.lazyLoadSection('staffPayouts'); window.lazyLoadSection('suppliers'); window.lazyLoadSection('supplierTransactions'); }
+            else if (id === 'staffPayoutsModal') { window.lazyLoadSection('staffPayouts');
+                if (!document.getElementById('suppliersTabContent')?.classList.contains('hidden')) loadAndRenderSuppliers(); }
             else if (id === 'expensesModal') window.lazyLoadSection('expenses');
             else if (id === 'packagesModal') window.lazyLoadSection('packages');
             else if (id === 'quickSessionModal') window.lazyLoadSection('quickSessions');
@@ -8143,7 +8147,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (supIconBox) supIconBox.className = activeIconClass;
             if (staffContent) staffContent.classList.add('hidden');
             if (supContent) supContent.classList.remove('hidden');
-            runOrDeferInteractive('switchPayoutTab', () => renderSuppliersList()); } else { if (staffBtn) staffBtn.className = activeBtnClass;
+            runOrDeferInteractive('switchPayoutTab', () => loadAndRenderSuppliers()); } else { if (staffBtn) staffBtn.className = activeBtnClass;
             if (staffIconBox) staffIconBox.className = activeIconClass;
             if (supBtn) supBtn.className = inactiveBtnClass;
             if (supIconBox) supIconBox.className = inactiveIconClass;
@@ -13629,28 +13633,8 @@ window.addEventListener('unhandledrejection', (event) => {
     // ==========================================
     // 4. DETAILED MONTHLY SUPPLIERS & VERSEMENTS TRACKER
     // ==========================================
-    window.getAllSupplierTransactions = function() {
-        if (!appState.supplierTransactions) {
-            appState.supplierTransactions = [];
-        }
-        // Auto-migrate or sync existing appState.suppliers into transactions if transactions array is empty
-        if (appState.supplierTransactions.length === 0 && Array.isArray(appState.suppliers) && appState.suppliers.length > 0) {
-            appState.suppliers.forEach(s => {
-                const total = (Number(s.paid) || 0) + (Number(s.debt) || 0);
-                appState.supplierTransactions.push({
-                    id: 'tx_' + (s.id || Date.now() + Math.random().toString(36).substr(2, 4)),
-                    supplierName: s.name || 'مورد عام',
-                    supplierInfo: s.info || '',
-                    type: (s.items && s.items.trim()) ? 'purchase' : 'payment',
-                    items: s.items || 'مشتريات سلع ومكملات',
-                    totalAmount: total,
-                    paidAmount: Number(s.paid) || 0,
-                    remainingDebt: Number(s.debt) || 0,
-                    date: s.date || new Date().toISOString(),
-                    notes: s.notes || '',
-                    createdAt: s.date || new Date().toISOString()
-                }); }); } return appState.supplierTransactions;
-    }; // Quick Versement Modal functions
+    window.getAllSupplierTransactions = () => readSupplierTransactions(appState.suppliers, appState.supplierTransactions);
+    // Quick Versement Modal functions
     window.openQuickSupplierVersementModal = function(supplierName = '') {
         const modal = document.getElementById('quickSupplierVersementModal');
         if (!modal) return; const select = document.getElementById('quickVersSupplierSelect');
@@ -13741,7 +13725,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (suppliersContent) suppliersContent.classList.remove('hidden');
             if (btnPayouts) btnPayouts.className = inactiveClass;
             if (btnSuppliers) btnSuppliers.className = activeClass;
-            runOrDeferInteractive('switchStaffModalTab', () => renderSuppliersList());
+            runOrDeferInteractive('switchStaffModalTab', () => loadAndRenderSuppliers());
         }
     };
 
@@ -14118,6 +14102,20 @@ window.addEventListener('unhandledrejection', (event) => {
         return false;
     };
 
+    let supplierLoadPromise;
+    function loadAndRenderSuppliers() {
+        if (supplierLoadPromise) return supplierLoadPromise;
+        const status = document.getElementById('supplierReadStatus');
+        if (status) status.textContent = 'جاري قراءة حسابات الموردين…';
+        supplierLoadPromise = Promise.allSettled(supplierSections.map(section => window.lazyLoadSection(section)))
+            .then(results => {
+                renderSuppliersList();
+                if (status) status.textContent = results.some(result => result.status === 'rejected')
+                    ? 'تعذّر تحميل بعض بيانات الموردين. البيانات المعروضة قد تكون ناقصة. أعد فتح التبويب للمحاولة.' : '';
+            }).finally(() => { supplierLoadPromise = null; });
+        return supplierLoadPromise;
+    }
+
     function renderSuppliersList() {
         const dateInput = document.getElementById('supplierDate');
         if (dateInput && !dateInput.value) dateInput.value = getLocalDateString(new Date());
@@ -14133,40 +14131,43 @@ window.addEventListener('unhandledrejection', (event) => {
             const p = Number(tx.paidAmount) || 0;
             const d = Number(tx.remainingDebt) || 0;
             const tot = Number(tx.totalAmount) || (p + d);
-            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
+            if (isSupplierPurchase(tx)) {
                 totalPurchases += tot;
             }
             totalPaid += p;
 
-            const name = (tx.supplierName || 'مورد عام').trim();
-            if (!supplierMap[name]) {
-                supplierMap[name] = { name: name, info: tx.supplierInfo || '', paid: 0, debt: 0, purchases: 0, transactions: [] };
+            const name = displaySupplierName(tx.supplierName);
+            const key = supplierKey(name);
+            if (!supplierMap[key]) {
+                supplierMap[key] = { name: name, info: tx.supplierInfo || '', paid: 0, debt: 0, purchases: 0, transactions: [] };
             }
-            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
-                supplierMap[name].purchases += tot;
+            if (isSupplierPurchase(tx)) {
+                supplierMap[key].purchases += tot;
             }
-            supplierMap[name].paid += p;
-            supplierMap[name].transactions.push(tx);
+            supplierMap[key].paid += p;
+            supplierMap[key].transactions.push(tx);
         });
 
         // Also incorporate debt and initial purchases from appState.suppliers
         ;(appState.suppliers || []).forEach(s => {
             if (!s || !s.name) return;
-            const name = s.name.trim();
+            const name = displaySupplierName(s.name);
+            const key = supplierKey(name);
             const d = Number(s.debt) || 0;
             const p = Number(s.paid) || 0;
-            totalDebt += d;
-            if (!supplierMap[name]) {
+            if (!supplierMap[key]) {
                 const sTotal = p + d;
                 totalPurchases += sTotal;
-                supplierMap[name] = { name: name, info: s.info || '', paid: p, debt: d, purchases: sTotal, transactions: [] };
+                totalPaid += p;
+                supplierMap[key] = { name: name, info: s.info || '', paid: p, debt: d, purchases: sTotal, transactions: [] };
             } else {
-                supplierMap[name].debt = d;
-                if (supplierMap[name].transactions.length === 0) {
-                    supplierMap[name].purchases = p + d;
+                supplierMap[key].debt = d;
+                supplierMap[key].hasRecordedDebt = true;
+                if (supplierMap[key].transactions.length === 0) {
+                    supplierMap[key].purchases = p + d;
                     totalPurchases += (p + d);
                 }
-                if (s.info) supplierMap[name].info = s.info;
+                if (s.info) supplierMap[key].info = s.info;
             }
         });
 
@@ -14177,6 +14178,13 @@ window.addEventListener('unhandledrejection', (event) => {
         const badgeElem = document.getElementById('suppliersCountBadge');
 
         const uniqueSuppliers = Object.values(supplierMap);
+
+        for (const supplier of uniqueSuppliers) {
+            if (!supplier.hasRecordedDebt && supplier.transactions.length) {
+                supplier.debt = Math.max(0, supplier.purchases - supplier.paid);
+            }
+            totalDebt += supplier.debt;
+        }
 
         if (purchasesElem) purchasesElem.innerHTML = `${totalPurchases.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
         if (paidElem) paidElem.innerHTML = `${totalPaid.toLocaleString()} <span class="text-xs font-normal text-slate-500">دج</span>`;
@@ -14219,10 +14227,10 @@ window.addEventListener('unhandledrejection', (event) => {
                             <div class="text-[10px] text-slate-500 font-bold">الكريدي الحالي</div>
                             <div class="text-base font-black ${sup.debt > 0 ? 'text-slate-800' : 'text-blue-600'}">${sup.debt.toLocaleString()} دج</div>
                         </div>
-                        <button onclick="openQuickSupplierVersementModal('${escapeHTML(sup.name)}')" class="px-3 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors shrink-0" title="تسديد دفعة فرسيمو سريعة">
+                        <button data-supplier="${escapeHTML(sup.name)}" onclick="openQuickSupplierVersementModal(this.dataset.supplier)" class="px-3 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors shrink-0" title="تسديد دفعة فرسيمو سريعة">
                             + فرسيمو
                         </button>
-                        <button onclick="openSingleSupplierStatement('${escapeHTML(sup.name)}')" class="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer" title="كشف جميع معاملات هذا المورد">
+                        <button data-supplier="${escapeHTML(sup.name)}" onclick="openSingleSupplierStatement(this.dataset.supplier)" class="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer" title="كشف جميع معاملات هذا المورد">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                             <span>كشف المعاملات</span>
                         </button>
@@ -14253,13 +14261,13 @@ window.addEventListener('unhandledrejection', (event) => {
     // Single Supplier Statement (كشف حساب المورد الشامل)
     window.openSingleSupplierStatement = function(supplierName) {
         const modal = document.getElementById('singleSupplierStatementModal');
-        if (!modal) return; const allTx = getAllSupplierTransactions().filter(tx => (tx.supplierName || '').trim().toLowerCase() === (supplierName || '').trim().toLowerCase());
-        const sup = (appState.suppliers || []).find(s => (s && s.name || '').trim().toLowerCase() === (supplierName || '').trim().toLowerCase());
+        if (!modal) return; const allTx = getAllSupplierTransactions().filter(tx => supplierKey(tx.supplierName) === supplierKey(supplierName));
+        const sup = (appState.suppliers || []).find(s => s?.name && supplierKey(s.name) === supplierKey(supplierName));
         let totalBought = 0; let totalPaid = 0;
         allTx.forEach(tx => {
             const paid = Number(tx.paidAmount) || 0;
             const debt = Number(tx.remainingDebt) || 0;
-            if (tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق')) {
+            if (isSupplierPurchase(tx)) {
                 totalBought += Number(tx.totalAmount) || (paid + debt);
             }
             totalPaid += paid;
@@ -14285,16 +14293,16 @@ window.addEventListener('unhandledrejection', (event) => {
         if (listElem) { const sorted = [...allTx].sort((a, b) => new Date(b.date) - new Date(a.date));
             if (sorted.length === 0) { listElem.innerHTML = '<div class="text-xs text-slate-400 text-center py-6">لا توجد حركات مسجلة لهذا المورد</div>';
             } else { listElem.innerHTML = sorted.map((tx, idx) => {
-                    const d = new Date(tx.date);
-                    const dateStr = isNaN(d.getTime()) ? tx.date : d.toLocaleDateString('ar-DZ');
-                    const isPurchase = tx.type === 'purchase' || (tx.items && tx.items.trim() && tx.items !== 'تسديد / تخفيض دين سابق');
+                    const d = new Date(tx.date || tx.dateKey || tx.createdAt || "");
+                    const dateStr = isNaN(d.getTime()) ? (tx.date || tx.dateKey || "غير محدد") : d.toLocaleDateString('ar-DZ');
+                    const isPurchase = isSupplierPurchase(tx);
                     return `
                     <div class="p-3 rounded-xl border border-slate-100 bg-slate-50/70 space-y-1.5 text-xs">
                         <div class="flex items-center justify-between">
                             <span class="font-bold text-slate-700 flex items-center gap-1.5">
                                 <span class="flex items-center gap-1.5">${isPurchase ? '<svg class="w-4 h-4 text-blue-600 inline" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> مشتريات سلع' : '<svg class="w-4 h-4 text-blue-600 inline" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg> فرسيمو ودفع'}</span>
                             </span>
-                            <span class="text-[11px] text-slate-400 font-medium">${dateStr}</span>
+                            <span class="text-[11px] text-slate-400 font-medium">${escapeHTML(dateStr)}</span>
                         </div>
                         <div class="text-slate-800 font-medium leading-relaxed">${escapeHTML(tx.items || '')}</div>
                         <div class="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
