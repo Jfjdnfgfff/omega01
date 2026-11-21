@@ -2872,10 +2872,15 @@
                   <label class="block text-[11px] font-bold text-purple-900 mb-1">فترة الحساب</label>
                   <select id="femaleCommPeriod" onchange="renderFemaleCoachModal()" class="w-full border border-purple-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 bg-white outline-none focus:border-purple-500 cursor-pointer shadow-2xs">
                       <option value="month" selected>الشهر الحالي</option>
+                      <option value="selectedMonth">شهر محدد</option>
                       <option value="today">اليوم فقط</option>
                       <option value="year">السنة الحالية</option>
                       <option value="all">جميع الأوقات</option>
                   </select>
+                  <div id="femaleCommMonthPicker" class="hidden mt-2">
+                      <label for="femaleCommMonth" class="block text-[11px] font-bold text-purple-900 mb-1">اختر الشهر والسنة</label>
+                      <input type="month" id="femaleCommMonth" onchange="renderFemaleCoachModal()" class="w-full border border-purple-200 rounded-xl px-3 py-2 text-xs font-bold bg-white">
+                  </div>
               </div>
               <div>
                   <label class="block text-[11px] font-bold text-purple-900 mb-1">حالة الاشتراكات</label>
