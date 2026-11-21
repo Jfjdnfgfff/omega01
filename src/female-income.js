@@ -98,7 +98,8 @@ export function femaleSessionShare(session) {
 const PERIOD_KEYS = new Set(['today', 'month', 'year', 'all']);
 
 /** Does a local "YYYY-MM-DD" key fall inside the selected period? */
-export function isInPeriod(dateKey, period, todayKey) {
+export function isInPeriod(dateKey, period, todayKey, monthKey) {
+  if (period === 'selectedMonth') return Boolean(monthKey && dateKey && dateKey.slice(0, 7) === monthKey);
   if (!dateKey) return true; // undated rows stay visible rather than vanishing
   if (!PERIOD_KEYS.has(period) || period === 'all') return true;
   if (!todayKey) return true;
@@ -114,13 +115,14 @@ export function isInPeriod(dateKey, period, todayKey) {
  *
  * @param {Array} sessions            appState.quickSessions
  * @param {object} options
- * @param {'today'|'month'|'year'|'all'} options.period
+ * @param {'today'|'month'|'year'|'all'|'selectedMonth'} options.period
  * @param {string} options.todayKey   local YYYY-MM-DD for "today"
+ * @param {string} [options.monthKey] selected YYYY-MM
  * @param {(date:any)=>string} options.dateKeyOf  date -> local YYYY-MM-DD
  * @param {'all'|'paid'|'credit'} [options.paymentFilter]
  * @param {string} [options.search]   lower-cased search text
  */
-export function collectFemaleSessionIncome(sessions, { period = 'all', todayKey = '', dateKeyOf, paymentFilter = 'all', search = '' } = {}) {
+export function collectFemaleSessionIncome(sessions, { period = 'all', todayKey = '', monthKey = '', dateKeyOf, paymentFilter = 'all', search = '' } = {}) {
   const result = {
     rows: [],
     femaleRevenue: 0,
@@ -135,7 +137,7 @@ export function collectFemaleSessionIncome(sessions, { period = 'all', todayKey 
     const share = femaleSessionShare(session);
     if (!share || share.femaleClients === 0) continue;
     const dateKey = toKey(session.date) || '';
-    if (!isInPeriod(dateKey, period, todayKey)) continue;
+    if (!isInPeriod(dateKey, period, todayKey, monthKey)) continue;
     if (search) {
       const haystack = `حصة حصص ${share.activities.join(' ')} ${dateKey}`.toLowerCase();
       if (!haystack.includes(search)) continue;
@@ -165,4 +167,27 @@ export function sessionActivityLabel(activities = []) {
   const label = { musculation: 'Musculation', cardio: 'Cardio' };
   const parts = activities.map(activity => label[activity] || String(activity));
   return parts.length ? parts.join(' · ') : 'حصة سريعة';
+}
+
+/** Lazily group loaded records by local calendar month, preserving row order. */
+export function createMonthIndex(dateKeyOf) {
+  let source, version, length;
+  let months = new Map();
+  return (records, dataVersion, monthKey) => {
+    if (records !== source || dataVersion !== version || records?.length !== length) {
+      const next = new Map();
+      for (const record of records || []) {
+        if (!record) continue;
+        const key = dateKeyOf(record)?.slice(0, 7);
+        if (!key) continue;
+        if (!next.has(key)) next.set(key, []);
+        next.get(key).push(record);
+      }
+      months = next;
+      source = records;
+      version = dataVersion;
+      length = records?.length;
+    }
+    return months.get(monthKey) || [];
+  };
 }

@@ -3,7 +3,7 @@ import { createLocalCache, createIndexedDBStorage, createMemoryStorage, CACHEABL
 import { createListenerRegistry } from './listener-registry.js';
 import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_LIMITS } from './firebase-query-window.js';
 import { createTimeSliceRunner, runChunked, yieldToMain, afterNextPaint, whenIdle, debounce, throttle, rafThrottle, createInteractiveDeferrer } from './main-thread-scheduler.js';
-import { collectFemaleSessionIncome, sessionActivityLabel } from './female-income.js';
+import { collectFemaleSessionIncome, createMonthIndex, sessionActivityLabel } from './female-income.js';
 import { createSearchIndex } from './search-index.js';
 
 // متتبّع التفاعل الفوري لتخفيض مدة المعالجة (Durée de traitement < 50ms):
@@ -4069,6 +4069,11 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof window.renderFemaleCoachModal === 'function') window.renderFemaleCoachModal();
     }, 140);
 
+    const femaleSubscriptionDate = customer => customer.startDate || (customer.createdAt ? _localDateDisplay(customer.createdAt) : null);
+    const femaleSubscriptionMonths = createMonthIndex(customer => getLocalDateString(femaleSubscriptionDate(customer)));
+    const femaleSessionMonths = createMonthIndex(record => getLocalDateString(record.date));
+    const femalePayoutMonths = createMonthIndex(record => getLocalDateString(record.date));
+
     window.renderFemaleCoachModal = function() {
         if (!appState.customers) appState.customers = [];
         if (!appState.staffPayouts) appState.staffPayouts = [];
@@ -4081,15 +4086,22 @@ window.addEventListener('unhandledrejection', (event) => {
         const safeStr = (s) => (typeof escapeHTML === 'function' ? escapeHTML(s) : String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
 
         const now = new Date();
+        const todayKey = getLocalDateString(now);
+        const monthInput = document.getElementById('femaleCommMonth');
+        document.getElementById('femaleCommMonthPicker')?.classList.toggle('hidden', period !== 'selectedMonth');
+        if (period === 'selectedMonth' && monthInput && !monthInput.value) monthInput.value = todayKey.slice(0, 7);
+        const monthKey = monthInput?.value || todayKey.slice(0, 7);
+        const monthRecords = (index, records) => period === 'selectedMonth'
+            ? index(records, window.__omegaDataVersion, monthKey) : records;
         const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
 
         // Filter female subscribers
-        const femaleSubs = appState.customers.filter(c => {
+        const femaleSubs = monthRecords(femaleSubscriptionMonths, appState.customers).filter(c => {
             if (!c || c.gender !== 'female') return false;
 
             // Date filtering
-            const subDateStr = c.startDate || (c.createdAt ? _localDateDisplay(c.createdAt) : null);
+            const subDateStr = femaleSubscriptionDate(c);
             if (subDateStr) {
                 const cDate = new Date(subDateStr);
                 if (!isNaN(cDate.getTime())) {
@@ -4137,11 +4149,12 @@ window.addEventListener('unhandledrejection', (event) => {
         // "المداخيل المقبوضة (الإناث)" and the coach's percentage exactly like
         // a subscription. The money is attributed per female client as a share
         // of the session total (see src/female-income.js).
-        const femaleSessions = collectFemaleSessionIncome(appState.quickSessions, {
+        const femaleSessions = collectFemaleSessionIncome(monthRecords(femaleSessionMonths, appState.quickSessions), {
             period,
             paymentFilter,
             search: searchQuery,
-            todayKey: getLocalDateString(new Date()),
+            todayKey,
+            monthKey,
             dateKeyOf: date => getLocalDateString(date),
         });
         const sessionRevenue = femaleSessions.femaleRevenue;
@@ -4155,7 +4168,7 @@ window.addEventListener('unhandledrejection', (event) => {
         const femaleClientCount = femaleSubs.length + femaleSessions.femaleClients;
 
         // Disbursed Payouts to Female Coach
-        const femalePayouts = appState.staffPayouts.filter(p => {
+        const femalePayouts = monthRecords(femalePayoutMonths, appState.staffPayouts).filter(p => {
             if (!p) return false;
             const text = `${p.name || ''} ${p.staffName || ''} ${p.type || ''} ${p.notes || ''}`.toLowerCase();
             return text.includes('إناث') || text.includes('اناث') || text.includes('أنثى') || text.includes('انثى') || text.includes('33%') || text.includes('مدربة');
@@ -4373,7 +4386,9 @@ window.addEventListener('unhandledrejection', (event) => {
 
     window.printFemaleCoachReport = function() {
         const periodSelect = document.getElementById('femaleCommPeriod');
-        const periodText = periodSelect ? periodSelect.options[periodSelect.selectedIndex]?.text || 'الشهر الحالي' : 'الشهر الحالي';
+        const selectedMonth = document.getElementById('femaleCommMonth')?.value;
+        const periodText = periodSelect?.value === 'selectedMonth' && /^\d{4,}-\d{2}$/.test(selectedMonth || '')
+            ? selectedMonth : periodSelect ? periodSelect.options[periodSelect.selectedIndex]?.text || 'الشهر الحالي' : 'الشهر الحالي';
         const subCount = document.getElementById('femaleCommSubCountBadge')?.textContent || '0';
         const tableHtml = document.getElementById('femaleCommSubscribersTable')?.innerHTML || '';
 
@@ -8334,108 +8349,6 @@ window.addEventListener('unhandledrejection', (event) => {
         showSuccessToast('تم تعديل معاملة المورد بنجاح');
         renderSuppliersList(); return false; }
     window.handleEditSupplierSubmit = handleEditSupplierSubmit;
-    function renderSuppliersList() { const sDate = document.getElementById('supplierDate');
-        if (sDate && !sDate.value) { sDate.value = new Date().toISOString().split('T')[0];
-        } const listContainer = document.getElementById('suppliersList');
-        const totalPaidElem = document.getElementById('totalSupplierPaid');
-        const totalDebtElem = document.getElementById('totalSupplierDebt');
-        const countBadge = document.getElementById('suppliersCountBadge');
-        if (!appState.suppliers) appState.suppliers = [];
-        // Populate datalist for quick selection of existing suppliers
-        const datalist = document.getElementById('existingSuppliersDatalist');
-        if (datalist && Array.isArray(appState.suppliers)) {
-            const names = [...new Set(appState.suppliers.map(s => (s && s.name || '').trim()).filter(Boolean))];
-            datalist.innerHTML = names.map(n => `<option value="${escapeHTML(n)}">`).join('');
-        } const totalPaid = appState.suppliers.reduce((sum, item) => sum + Number(item.paid || 0), 0);
-        const totalDebt = appState.suppliers.reduce((sum, item) => sum + Number(item.debt || 0), 0);
-        if (totalPaidElem) totalPaidElem.textContent = formatMoney(totalPaid);
-        if (totalDebtElem) totalDebtElem.textContent = formatMoney(totalDebt);
-        if (countBadge) countBadge.textContent = `${appState.suppliers.length} مورد`;
-        if (!listContainer) return; if (appState.suppliers.length === 0) {
-            listContainer.innerHTML = '<div class="text-xs text-slate-400 text-center py-6 font-medium">لا توجد فواتير أو معاملات موردين مسجلة بعد</div>';
-            return; } const sorted = [...appState.suppliers].sort((a, b) => new Date(b.date) - new Date(a.date));
-        listContainer.innerHTML = sorted.map(item => {
-            const d = new Date(item.date); const dateFormatted = isNaN(d.getTime()) ? escapeHTML(item.date || '') : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
-            const debtAmount = Number(item.debt || 0);
-            const paidAmount = Number(item.paid || 0);
-            const hasDebt = debtAmount > 0;
-            const safeName = escapeHTML(item.name || 'مورد غير مسمى');
-            const safeInfo = escapeHTML(item.info || '');
-            const safeId = escapeHTML(item.id || '');
-            return `
-                <div class="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs hover:border-blue-200 transition-colors space-y-3">
-                    <!-- Top row: Name & Badge on Right, Actions on Left -->
-                    <div class="flex items-start justify-between gap-3">
-                        <div class="text-right flex-1 min-w-0">
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-black text-slate-800 text-sm sm:text-base">${safeName}</span>
-                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${hasDebt ? 'bg-slate-100 text-slate-800 border border-slate-200' : 'bg-blue-50 text-blue-700 border border-blue-200/80'}">
-                                    ${hasDebt ? 'عليه كريدي' : 'خالص بالكامل'}
-                                </span>
-                            </div>
-                            ${safeInfo ? `
-                                <div class="text-xs text-slate-500 mt-1 font-medium flex items-center gap-1.5">
-                                    <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                                    <span class="truncate" dir="auto">${safeInfo}</span>
-                                </div>
-                            ` : ''}
-                        </div>
-
-                        <div class="flex items-center gap-1.5 shrink-0">
-                            <button type="button" onclick="openEditSupplierModal('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 border border-slate-200 hover:border-blue-200 flex items-center justify-center transition-colors shadow-2xs" title="تعديل">
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                            </button>
-                            <button type="button" onclick="deleteSupplier('${safeId}')" class="w-8 h-8 rounded-xl bg-slate-50 hover:bg-slate-200 text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 flex items-center justify-center transition-colors shadow-2xs" title="حذف">
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Items bought -->
-                    <div class="bg-slate-50/80 border border-slate-200/70 rounded-xl p-3 text-xs space-y-1">
-                        <div class="font-bold text-slate-600 flex items-center gap-1.5">
-                            <svg class="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
-                            <span>السلع المشتراة (شاشريت منه):</span>
-                        </div>
-                        <p class="text-slate-800 font-medium whitespace-pre-wrap leading-relaxed pr-5" dir="auto">${item.items}</p>
-                    </div>
-
-                    <!-- Financial stats (Paid & Debt) -->
-                    <div class="grid grid-cols-2 gap-2.5 text-xs">
-                        <div class="bg-blue-50/70 border border-blue-200/80 rounded-xl p-2.5 text-right">
-                            <span class="text-[10px] text-blue-700 font-bold block mb-0.5">شحال خلصت (مدفوع)</span>
-                            <span class="font-black text-blue-900 text-sm sm:text-base">${paidAmount.toLocaleString()} دج</span>
-                        </div>
-                        <div class="${hasDebt ? 'bg-slate-100 border border-slate-200' : 'bg-slate-50 border border-slate-200'} rounded-xl p-2.5 text-right">
-                            <span class="text-[10px] ${hasDebt ? 'text-slate-800' : 'text-slate-500'} font-bold block mb-0.5">شحال راه كريدي (باقي)</span>
-                            <span class="font-black ${hasDebt ? 'text-slate-900' : 'text-slate-700'} text-sm sm:text-base">${debtAmount.toLocaleString()} دج</span>
-                        </div>
-                    </div>
-
-                    <!-- Footer: Notes and Date -->
-                    <div class="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-100">
-                        <div class="text-slate-500 italic truncate max-w-[200px]" dir="auto">
-                            ${item.notes ? `<span>${item.notes}</span>` : ''}
-                        </div>
-                        <div class="flex items-center gap-1 font-medium text-slate-400 shrink-0">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                            <span>${dateFormatted}</span>
-                        </div>
-                    </div>
-
-                    <!-- Quick Statement & Versement Actions -->
-                    <div class="flex items-center gap-2 pt-1 border-t border-slate-100/80">
-                        <button type="button" onclick="openSingleSupplierStatement('${safeName}')" class="flex-1 py-1.5 px-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                            <span>كشف الحساب</span>
-                        </button>
-                        <button type="button" onclick="openQuickSupplierVersementModal('${safeName}')" class="py-1.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 text-xs font-bold flex items-center justify-center gap-1 transition-colors">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                            <span>فرسيمو</span>
-                        </button>
-                    </div>
-                </div>
-            `; }).join(''); } window.renderSuppliersList = renderSuppliersList;
     let fullReportPromise = null;
     let fullReportApi = null;
     const fullReportDataSections = ['customers', 'sales', 'expenses', 'suppliers', 'staffPayouts', 'packages'];
@@ -14205,15 +14118,18 @@ window.addEventListener('unhandledrejection', (event) => {
         return false;
     };
 
-    window.renderSuppliersList = function() {
+    function renderSuppliersList() {
+        const dateInput = document.getElementById('supplierDate');
+        if (dateInput && !dateInput.value) dateInput.value = getLocalDateString(new Date());
         const transactions = getAllSupplierTransactions();
         let totalPurchases = 0;
         let totalPaid = 0;
         let totalDebt = 0;
 
-        const supplierMap = {};
+        const supplierMap = Object.create(null);
 
         transactions.forEach(tx => {
+            if (!tx) return;
             const p = Number(tx.paidAmount) || 0;
             const d = Number(tx.remainingDebt) || 0;
             const tot = Number(tx.totalAmount) || (p + d);
@@ -14234,7 +14150,7 @@ window.addEventListener('unhandledrejection', (event) => {
         });
 
         // Also incorporate debt and initial purchases from appState.suppliers
-        (appState.suppliers || []).forEach(s => {
+        ;(appState.suppliers || []).forEach(s => {
             if (!s || !s.name) return;
             const name = s.name.trim();
             const d = Number(s.debt) || 0;
@@ -14315,7 +14231,8 @@ window.addEventListener('unhandledrejection', (event) => {
             </div>
             `;
         }).join('');
-    };
+    }
+    window.renderSuppliersList = renderSuppliersList;
 
     window.deleteSupplierTransaction = function(id) {
         if (!id) return;

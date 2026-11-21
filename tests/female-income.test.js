@@ -6,6 +6,7 @@ import {
   femaleSessionShare,
   collectFemaleSessionIncome,
   isInPeriod,
+  createMonthIndex,
   sessionActivityLabel,
 } from '../src/female-income.js';
 
@@ -150,4 +151,30 @@ test('isInPeriod treats undated rows as visible and validates periods', () => {
 test('sessionActivityLabel renders the activity mix', () => {
   assert.equal(sessionActivityLabel(['musculation', 'cardio']), 'Musculation · Cardio');
   assert.equal(sessionActivityLabel([]), 'حصة سريعة');
+});
+
+test('selected month includes only dated sessions in the chosen month and year', () => {
+  const sessions = [femaleSession,
+    { ...femaleSession, date: new Date(2025, 9, 29, 12) },
+    { ...femaleSession, date: new Date(2026, 10, 1, 12) },
+    { ...femaleSession, date: null }];
+  const result = collectFemaleSessionIncome(sessions, {
+    period: 'selectedMonth', monthKey: '2026-10', todayKey: '2026-11-21',
+    dateKeyOf: date => date ? dayKey(date) : '',
+  });
+  assert.equal(result.sessionCount, 1);
+  assert.equal(result.rows[0].dateKey, '2026-10-29');
+});
+
+test('month index reuses buckets and refreshes after edits or source changes', () => {
+  let reads = 0;
+  const lookup = createMonthIndex(row => { reads++; return row.date; });
+  const rows = [{ date: '2025-10-01' }, { date: '2026-10-01' }, {}];
+  assert.deepEqual(lookup(rows, 1, '2025-10'), [rows[0]]);
+  assert.deepEqual(lookup(rows, 1, '2026-10'), [rows[1]]);
+  assert.equal(reads, 3);
+  rows[0].date = '2026-10-02';
+  assert.deepEqual(lookup(rows, 2, '2026-10'), rows.slice(0, 2));
+  assert.deepEqual(lookup(rows, 2, '2025-10'), []);
+  assert.deepEqual(lookup(rows.slice(1), 2, '2026-10'), [rows[1]]);
 });
