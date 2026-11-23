@@ -6,6 +6,7 @@ import { describeSectionWindow, buildWindowQuery, olderPageSpec, SECTION_WINDOW_
 import { createTimeSliceRunner, runChunked, yieldToMain, afterNextPaint, whenIdle, debounce, throttle, rafThrottle, createInteractiveDeferrer } from './main-thread-scheduler.js';
 import { collectFemaleSessionIncome, createMonthIndex, sessionActivityLabel } from './female-income.js';
 import { createSearchIndex } from './search-index.js';
+import { createTransferProductIndexer, searchTransferProducts, normalizeSearchText as normalizeTransferSearchText } from './transfer-product-index.js';
 
 // متتبّع التفاعل الفوري لتخفيض مدة المعالجة (Durée de traitement < 50ms):
 // يشمل أحداث النقر (click) ولوحة المفاتيح (keydown: Enter / Space / Escape) وإرسال النماذج (submit)
@@ -6877,6 +6878,10 @@ window.addEventListener('unhandledrejection', (event) => {
     // Stock Transfer Functions (تحويل بضاعة بين المخازن Stock 1 & Stock 2)
     function openStockTransferModal(defaultProdId) {
         openModal('stockTransferModal');
+        const searchInput = document.getElementById('transferProductSearchInput');
+        if (searchInput) searchInput.value = '';
+        const searchStatusElem = document.getElementById('transferSearchStatus');
+        if (searchStatusElem) searchStatusElem.textContent = '';
         if (defaultProdId) {
             const prod = (appState.products || []).find(p => String(p.id) === String(defaultProdId));
             if (prod) {
@@ -6911,27 +6916,108 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     window.handleTransferToStockChange = handleTransferToStockChange;
 
+    // ---- فهرس البحث في نافذة التحويل (transfer-product-index) ----
+    // الفهرس يُبنى مرة واحدة لكل تغيّر في المنتجات (بصمة transferProductsSignature)
+    // ويُستخدم للبحث بالكتابة وبالكودبار ولتعبئة القائمة المنسدلة.
+    const transferProductIndexer = createTransferProductIndexer();
+
+    function transferProductOptionHtml(p, selectedId) {
+        const sel = (String(p.id) === String(selectedId)) ? 'selected' : '';
+        return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} ${stockUnitWord(p)})${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
+    }
+
     function populateTransferProducts(defaultProdId) {
         const fromLoc = getElemVal('transferFromStock') || 'stock2';
-        const toLoc = getElemVal('transferToStock') || 'stock1';
-        const prods = (appState.products || []).filter(p => {
-            const loc = p.stockLocation || 'stock1';
-            return loc === fromLoc && Number(p.stock || 0) > 0;
-        });
         const select = document.getElementById('transferProductSelect');
         if (!select) return;
+        const query = getElemVal('transferProductSearchInput').trim();
+        if (query) {
+            handleTransferProductSearch(query, false, defaultProdId);
+            return;
+        }
+        const products = Array.isArray(appState.products) ? appState.products : [];
+        const index = transferProductIndexer.get(products, fromLoc);
+        const prods = index.entries.map(e => e.product);
         let html = '<option value="">-- اختر المنتج لتحويله --</option>';
-        html += prods.map(p => {
-            const sel = (String(p.id) === String(defaultProdId)) ? 'selected' : '';
-            return `<option value="${p.id}" ${sel}>${p.name} (المتوفر: ${p.stock} ${stockUnitWord(p)})${p.weight ? ` - ${p.weight}` : ''}${p.barcode ? ` [${p.barcode}]` : ''}</option>`;
-        }).join('');
+        html += prods.map(p => transferProductOptionHtml(p, defaultProdId)).join('');
         select.innerHTML = html;
         if (defaultProdId && prods.some(p => String(p.id) === String(defaultProdId))) {
-            select.value = defaultProdId;
+            select.value = String(defaultProdId);
         }
         updateTransferMaxQty();
     }
     window.populateTransferProducts = populateTransferProducts;
+
+    function handleTransferProductSearch(query, isEnter = false, defaultProdId) {
+        const q = String(query ?? '').trim();
+        const statusElem = document.getElementById('transferSearchStatus');
+        const select = document.getElementById('transferProductSelect');
+        if (!select) return;
+        const fromLoc = getElemVal('transferFromStock') || 'stock2';
+        const fromName = fromLoc === 'stock2' ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+        if (!q) {
+            if (statusElem) statusElem.textContent = '';
+            populateTransferProducts(defaultProdId);
+            return;
+        }
+        const products = Array.isArray(appState.products) ? appState.products : [];
+        const index = transferProductIndexer.get(products, fromLoc);
+        const matches = searchTransferProducts(index, q, { limit: 200 });
+
+        if (matches.length === 0) {
+            select.innerHTML = '<option value="">-- لا توجد نتائج --</option>';
+            updateTransferMaxQty();
+            // الكودبار موجود لكن خارج نطاق التحويل؟ اشرح السبب بدل صمت القائمة.
+            const qN = normalizeTransferSearchText(q);
+            const elsewhere = qN ? products.find(p => normalizeTransferSearchText(String(p.barcode || '')) === qN) : null;
+            if (elsewhere) {
+                const locName = (elsewhere.stockLocation === 'stock2') ? 'Stock 2 (المستودع)' : 'Stock 1 (صالة البيع)';
+                const why = Number(elsewhere.stock || 0) <= 0
+                    ? `نفدت كمية [${escapeHTML(elsewhere.name)}] من ${fromName}`
+                    : `المنتج [${escapeHTML(elsewhere.name)}] موجود في ${locName} فقط — بدّل اتجاه التحويل أولاً`;
+                if (statusElem) statusElem.innerHTML = `<span class="text-amber-700 font-bold">⚠️ ${why}</span>`;
+            } else if (statusElem) {
+                statusElem.innerHTML = `<span class="text-slate-400 font-medium">لا يوجد منتج مطابق لـ «${escapeHTML(q)}» في ${fromName}</span>`;
+            }
+            return;
+        }
+
+        let html = `<option value="">-- نتائج البحث (${matches.length}) --</option>`;
+        html += matches.map(p => transferProductOptionHtml(p, defaultProdId)).join('');
+        select.innerHTML = html;
+
+        // كودبار مطابق بدقة (المسح بالكاميرا أو بقارئ الكودبار) → تحديد فوري؛
+        // أو Enter مع نتيجة واحدة → تحديد أيضاً.
+        const qN = normalizeTransferSearchText(q);
+        const exactMatch = qN ? matches.find(p => normalizeTransferSearchText(String(p.barcode || '')) === qN) : null;
+        const chosen = exactMatch || (isEnter && matches.length === 1 ? matches[0] : null);
+        if (chosen) {
+            select.value = String(chosen.id);
+            updateTransferMaxQty();
+            if (statusElem) statusElem.innerHTML = `<span class="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">✅ تم تحديد: ${escapeHTML(chosen.name)} (${fromName}: ${chosen.stock} ${stockUnitWord(chosen)})</span>`;
+            if (isEnter) {
+                playBeep();
+                showSuccessToast(`تم تحديد [${chosen.name}] للتحويل (${fromName}: ${chosen.stock} ${stockUnitWord(chosen)})`);
+            }
+        } else {
+            updateTransferMaxQty();
+            if (statusElem) statusElem.innerHTML = `<span class="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">🔍 تم إيجاد ${matches.length} منتجات مطابقة في ${fromName} — اختر من القائمة</span>`;
+        }
+    }
+    window.handleTransferProductSearch = handleTransferProductSearch;
+
+    window.handleTransferProductSearchInput = debounce((query) => {
+        handleTransferProductSearch(query, false);
+    }, 120);
+
+    function clearTransferProductSearch() {
+        const input = document.getElementById('transferProductSearchInput');
+        if (input) { input.value = ''; input.focus(); }
+        const statusElem = document.getElementById('transferSearchStatus');
+        if (statusElem) statusElem.textContent = '';
+        populateTransferProducts();
+    }
+    window.clearTransferProductSearch = clearTransferProductSearch;
 
     function updateTransferMaxQty() {
         const sel = document.getElementById('transferProductSelect');
@@ -10518,6 +10604,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 } catch (e) {
                     console.warn('Firebase search note in processBarcode:', e?.message || e);
                 } } if (candidateProducts.length === 0) {
+                if (scanContext === 'transfer_search') {
+                    const transferSearchInput = document.getElementById('transferProductSearchInput');
+                    if (transferSearchInput) transferSearchInput.value = barcode;
+                    handleTransferProductSearch(barcode, true);
+                    showErrorToast('لم يتم العثور على أي منتج في المخزون بالباركود: ' + barcode);
+                    await closeBarcodeCamera();
+                    isProcessingBarcode = false;
+                    return; }
                 if (scanContext === 'inventory_search' || scanContext === 'search') {
                     const searchInput = document.getElementById('searchProductInput');
                     if (searchInput) searchInput.value = barcode;
@@ -10631,6 +10725,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 handlePosProductSearch(barcode, true);
                 isProcessingBarcode = false;
                 return;
+            } else if (scanContext === 'transfer_search') {
+                // Stock Transfer scan: ضع الكودبار في مربع بحث التحويل وحدّد المنتج
+                await closeBarcodeCamera();
+                const transferSearchInput = document.getElementById('transferProductSearchInput');
+                if (transferSearchInput) transferSearchInput.value = barcode;
+                handleTransferProductSearch(barcode, true);
+                isProcessingBarcode = false;
+                return;
             } else if (scanContext === 'inventory_search' || scanContext === 'search') {
                 // Inventory Search scan
                 await closeBarcodeCamera();
@@ -10698,6 +10800,8 @@ window.addEventListener('unhandledrejection', (event) => {
             title.textContent = 'مسح باركود للبحث وتحديد المنتج في صالة البيع';
         } else if (scanContext === 'inventory_search' || scanContext === 'search') {
             title.textContent = 'مسح باركود للبحث في المخزون (Stock 1 & Stock 2)';
+        } else if (scanContext === 'transfer_search') {
+            title.textContent = 'مسح كودبار لاختيار منتج للتحويل بين المخازن';
         } else { title.textContent = 'مسح باركود لإضافة أو تعديل منتج';
         }
         // Stop any previous barcode readers before starting a new one.
@@ -14394,7 +14498,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // Expose all top-level functions on window for inline HTML event handlers
 try {
-  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
+  [getCleanSyncPayload, containsDangerousCode, sanitizeInputText, escapeHTML, validateSafeName, validateSafePhone, validateSafeNumber, validateCustomerDOB, checkLoginLockout, showSuccessToast, showErrorToast, showInfoToast, hashString, cleanPhone, handleNavButtonClick, toggleView, closeBulkImportModal, closeModal, handleOverlayClick, toggleDebtField, checkImageMagicBytes, verifyFaceImageCharacteristics, setPackageTypeForm, handleProdStockLocationChange, updateDualStockTotal, editProduct, openStockTransferModal, handleTransferFromStockChange, handleTransferToStockChange, populateTransferProducts, handleTransferProductSearch, clearTransferProductSearch, updateTransferMaxQty, updateTransferPreview, setTransferMaxQty, handleStockTransfer, deleteProduct, updateProductStock, parseProductWeight, updateStockInfoDisplay, handlePosProductSearch, calculateStatus, adjustCustomerSessions, switchPayoutTab, openStaffPayoutsIfAllowed, autoFillSupplierInfo, openEditSupplierModal, handleEditSupplierSubmit, renderSuppliersList, openFullReportModal, renderFullReport, updateFullReportSalesSection, deleteAllCredits, renderCreditsList, settleCredit, parseItemDate, setMsgTemplate, openMessageModal, openRenewModal, handleRenewCustomerSelect, formatMoney, promptWithPassword, togglePrivacy, setFilter, setQuickSellQty, changeQuickSellQty, executeProductSale, deleteCustomer, handleBarcodeScan, openBarcodeStockChoiceModal, closeBarcodeStockChoiceModal, handleInventoryBarcodeSearch, playBeep, openBarcodeCamera, getProductExpiryInfo, setStockFilter, renderProductsList, getUniqueCoaches, deleteSale, calculateAge, formatCustomerExpiry, performFullRender, render, calculateStockValuation, calculateCaisseDetails, calculateAllCaisseShortages, initCaisseView, handleCaisseDateChange, setCaisseDateToToday, handleClotureFormDateChange, handleClotureAmountInput, toggleDenominationCounter, calcDenominations, applyDenominationsToInput, handleCaisseClotureSubmit, deleteCaisseLog, scrollToCaisseClotureForm, renderCaisseView, setupGlobalInputSecurity, getValidGDriveToken, updateGoogleDriveUI, generateMockTestData, clearMockTestData, updateMockDataUIState, logActivity, ensureSeedActivityLogs, openActivityLogModal, renderActivityLogModal, deleteActivityLog, clearAllActivityLogs].forEach(fn => {
     if (typeof fn === "function" && fn.name) {
       window[fn.name] = fn;
     }
