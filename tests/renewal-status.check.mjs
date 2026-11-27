@@ -64,6 +64,7 @@ const $ = id => window.document.getElementById(id);
 for (const name of ['toggleRenewCustTypeFields', 'setRenewStartDateMode', 'updateRenewEndDate', 'toggleRenewDebtField']) globalThis[name] = window[name];
 // Avoid any writes or reads against the real backend.
 window.lazyLoadSection = () => {};
+window.appState.customers = [];
 const savedCustomers = [];
 window.saveFirebaseSectionItem = (section, item) => {
   if (section === 'customers') savedCustomers.push(JSON.parse(JSON.stringify(item)));
@@ -77,6 +78,8 @@ const key = offset => {
 const customer = { id: 'test-renewal', name: 'Renewal Test Member', phone: '0555123456',
   packageId: 'test-pkg', subscriptionType: 'time', status: 'active',
   startDate: key(-60) + 'T00:00:00.000Z', endDate: key(-30) + 'T00:00:00.000Z',
+  // كلمة مرور موجودة مسبقاً: لا يحتاج السجل تعبئة تلقائية، فلا كتابة إضافية في هذا الاختبار
+  password: '4321',
   _endMs: Date.parse(key(-30)), paymentStatus: 'paid' };
 window.appState.customers = [customer];
 window.appState.packages = [{ id: 'test-pkg', name: 'Test', type: 'time', durationDays: 30, price: 1000 }];

@@ -468,6 +468,8 @@ function generateMockDataParallel({ customersCount = 200, creditsCount = 100, de
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
       isMock: true,
+      password: String(1000 + ((i * 37 + 1187) % 9000)),
+      passwordIssuedAt: now,
       _searchKey: `${fullName} ${phone}`.toLowerCase()
     };
   }
