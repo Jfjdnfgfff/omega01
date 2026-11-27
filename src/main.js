@@ -209,6 +209,120 @@ window.addEventListener('unhandledrejection', (event) => {
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
   import { calculateStatus, getRemainingDays, isSessionCustomer, clearStatusCache, cleanCustomerForStorage, applyRenewalToCustomer, toLocalMidnightISO } from './customer-status.js';
   import { splitRecordImage, resolveImageSrc, imageCacheKey, imageNodeFor, LruCache } from './image-store.js';
+  import {
+    normalizeSubscriberPassword,
+    isValidSubscriberPassword,
+    generateSubscriberPassword,
+    createPasswordAllocator,
+    assignMissingPasswords,
+    isPasswordTaken,
+  } from './subscriber-password.js';
+
+  // ---- Subscriber 4-digit passwords: uniqueness helpers ----
+  // كلمة مرور المشترك تُنشأ تلقائياً بأربعة أرقام، ولا تتكرر بين المشتركين.
+  // الخريطة أدناه تُثبّت الكود المُصدر لكل مشترك في الجلسة الحالية حتى لا
+  // يتغيّر قبل أن يصل إلى Firebase.
+  const subscriberPasswordHints = new Map();
+  window.__subscriberPasswordHints = subscriberPasswordHints;
+
+  function getCustomerListForPasswords() {
+    // نقرأ من window.appState فقط: المتغير المحلي appState يُعرَّف لاحقاً في الملف،
+    // ولمسه هنا يرمي ReferenceError قبل تهيئته.
+    const raw = window.appState && window.appState.customers;
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object') return Object.values(raw).filter(item => item && typeof item === 'object');
+    return [];
+  }
+
+  // حفظ كلمة مرور صدرت أثناء العرض — مرة واحدة فقط لكل مشترك، وخارج دورة العرض.
+  // (نحفظ فقط السجلات التي لم يكن لها كود محفوظ، حتى لا نضاعف كتابة Firebase
+  // مع كل حفظ عادي للمشترك من شاشة التعديل أو التجديد.)
+  const _passwordPersistQueue = new Set();
+  const _passwordPersistedIds = new Set();
+  let _passwordPersistTimer = null;
+  function persistCustomerPassword(customer) {
+    if (!customer) return;
+    const key = String(customer.id || customer._rtdbKey || '');
+    if (!key || _passwordPersistedIds.has(key)) return;
+    _passwordPersistedIds.add(key);
+    _passwordPersistQueue.add(customer);
+    if (_passwordPersistTimer) return;
+    _passwordPersistTimer = setTimeout(() => {
+      _passwordPersistTimer = null;
+      const batch = Array.from(_passwordPersistQueue);
+      _passwordPersistQueue.clear();
+      if (window.saveFirebaseSectionItem) {
+        batch.forEach(record => {
+          try { window.saveFirebaseSectionItem('customers', record); } catch (e) {}
+        });
+      }
+    }, 40);
+  }
+  window.persistCustomerPassword = persistCustomerPassword;
+
+  /** كلمة مرور فريدة لمشترك جديد (تتجاوز أكواد كل المشتركين الحاليين). */
+  function issueSubscriberPassword() {
+    return generateSubscriberPassword(getCustomerListForPasswords());
+  }
+  window.issueSubscriberPassword = issueSubscriberPassword;
+
+  /** إعادة توليد كود لمشترك واحد مع استثناء كوده الحالي وكوده المحفوظ. */
+  function regenerateCustomerPassword(customerId) {
+    const list = getCustomerListForPasswords();
+    const customer = list.find(c => c && String(c.id || c._rtdbKey) === String(customerId));
+    if (!customer) return null;
+    const previous = normalizeSubscriberPassword(customer.password);
+    const password = generateSubscriberPassword(list, {
+      excludeIds: [customer.id, customer._rtdbKey],
+      random: () => {
+        // لا نسمح بإرجاع نفس الكود السابق
+        let candidate = Math.random();
+        for (let i = 0; i < 8 && previous && String(1000 + Math.floor(candidate * 9000)) === previous; i++) {
+          candidate = Math.random();
+        }
+        return candidate;
+      },
+    });
+    if (!password) return null;
+    customer.password = password;
+    customer.passwordIssuedAt = Date.now();
+    subscriberPasswordHints.set(String(customer.id || customer._rtdbKey), password);
+    if (typeof saveState === 'function') saveState(['customers']);
+    if (window.saveFirebaseSectionItem) {
+      window.saveFirebaseSectionItem('customers', customer);
+    }
+    if (typeof window.logActivity === 'function') {
+      window.logActivity('customer', 'تغيير كلمة مرور مشترك', `المشترك: ${customer.name || 'بدون اسم'} — كلمة مرور جديدة: ${password}`, 0);
+    }
+    return password;
+  }
+  window.regenerateCustomerPassword = regenerateCustomerPassword;
+
+  /** تعبئة الأكواد الناقصة/المتكررة لكل المشتركين (تُشغَّل صامتة بعد المزامنة). */
+  let _subscriberPasswordBackfillAt = 0;
+  function ensureSubscriberPasswords(options = {}) {
+    const list = getCustomerListForPasswords();
+    if (!list.length) return { changed: [], duplicates: 0 };
+    const result = assignMissingPasswords(list, { hints: subscriberPasswordHints });
+    if (result.changed.length === 0 && result.duplicates === 0) return result;
+
+    // تجنّب الكتابة المتكررة عند كل دمج: مرة كل 10 ثوانٍ كحد أقصى
+    const nowMs = Date.now();
+    if (!options.force && nowMs - _subscriberPasswordBackfillAt < 10000) return result;
+    _subscriberPasswordBackfillAt = nowMs;
+
+    if (typeof saveState === 'function') saveState(['customers']);
+    if (typeof scheduleRender === 'function') scheduleRender();
+    if (window.saveFirebaseSectionItem) {
+      setTimeout(() => {
+        result.changed.forEach(({ record }) => {
+          try { window.saveFirebaseSectionItem('customers', record); } catch (e) {}
+        });
+      }, 0);
+    }
+    return result;
+  }
+  window.ensureSubscriberPasswords = ensureSubscriberPasswords;
 
   // ---- Split record images: memory LRU + on-demand load (see src/image-store.js) ----
   const customerImageCache = new LruCache(8 * 1024 * 1024);
@@ -962,6 +1076,10 @@ window.addEventListener('unhandledrejection', (event) => {
       if (typeof window.__reindexSearchSections === 'function') {
         try { window.__reindexSearchSections(); } catch (e) {}
       }
+    }
+    // كلمات مرور المشتركين: تعبئة الأكواد الناقصة/المتكررة بعد أي دمج بيانات
+    if (sectionName === 'customers' && typeof window.ensureSubscriberPasswords === 'function') {
+      try { window.ensureSubscriberPasswords(); } catch (e) {}
     }
     scheduleRender();
 
@@ -4633,10 +4751,14 @@ window.addEventListener('unhandledrejection', (event) => {
                 appState.customers = appState.customers ? Object.values(appState.customers) : [];
             }
             const newCustomerId = Date.now().toString();
+            // كلمة مرور من أربعة أرقام تُنشأ تلقائياً وتكون فريدة بين كل المشتركين
+            const newCustomerPassword = issueSubscriberPassword();
             const newCustomer = { id: newCustomerId,
                 subscriptionCycleId: 'sub_' + newCustomerId,
                 imageUrl, name: custName, phone: cleanPhone(custPhone),
                 gender: custGender, dob: custDob,
+                password: newCustomerPassword,
+                passwordIssuedAt: Date.now(),
                 age: dobValidation.age, weight: custWeight,
                 packageId: packageId || (pkg ? pkg.id : 'pkg_1'),
                 price: custPrice,
@@ -4650,11 +4772,13 @@ window.addEventListener('unhandledrejection', (event) => {
                 endDate: _toLocalMidnightISO(endDate) };
             // ---- ATOMIC TRANSACTION: snapshot before mutations ----
             const _txSnap = _snapshotTransactionState();
-            try {
-            appState.customers.unshift(newCustomer);
+            // محسوب قبل المعاملة لأن رسالة النجاح (خارج try) تحتاجه
             const subscriptionCashPaid = paymentStatus === 'paid'
                 ? Number(custPrice || 0)
                 : (paymentStatus === 'credit' ? Math.max(0, Number(custPrice || 0) - Number(debtAmount || 0)) : 0);
+            try {
+            appState.customers.unshift(newCustomer);
+            subscriberPasswordHints.set(String(newCustomer.id), newCustomerPassword);
             recordCaisseMovement({
                 source: 'subscription', sourceId: newCustomer.subscriptionCycleId,
                 direction: 'in', amount: subscriptionCashPaid, date: cashPaymentTimestamp,
@@ -4697,6 +4821,7 @@ window.addEventListener('unhandledrejection', (event) => {
                 // ---- TRANSACTION FAILED: rollback all mutations ----
                 console.error('[Transaction] Add customer failed, rolling back:', _txErr);
                 _rollbackTransaction(_txSnap);
+                subscriberPasswordHints.delete(String(newCustomerId));
                 throw _txErr;
             } const modalForm = document.getElementById('addCustomerFormModal');
             if (modalForm) modalForm.reset(); if (typeof window.removeAddImage === 'function') window.removeAddImage();
@@ -4704,7 +4829,7 @@ window.addEventListener('unhandledrejection', (event) => {
             if (typeof window.toggleDebtFieldView === 'function') window.toggleDebtFieldView();
             closeModal('addCustomerModal');
             const ageMsg = dobValidation.age ? ' (العمر: ' + dobValidation.age + ' سنة)' : '';
-            showSuccessToast('تم إضافة المشترك بنجاح' + ageMsg + (subscriptionCashPaid > 0 ? ` — ${subscriptionCashPaid.toLocaleString()} دج في صندوق ${paymentDateCheck.dateKey.split('-').reverse().join('/')}` : ''));
+            showSuccessToast('تم إضافة المشترك بنجاح' + ageMsg + ` — كلمة المرور: ${newCustomerPassword}` + (subscriptionCashPaid > 0 ? ` — ${subscriptionCashPaid.toLocaleString()} دج في صندوق ${paymentDateCheck.dateKey.split('-').reverse().join('/')}` : ''));
             if (isVisible('creditsView') && typeof window.renderCreditsList === 'function') {
                 runOrDeferInteractive('creditsAfterAddCust', () => window.renderCreditsList());
             }
@@ -4738,12 +4863,162 @@ window.addEventListener('unhandledrejection', (event) => {
             const remInput = document.getElementById('editRemainingSessions');
             if (totalInput) totalInput.value = pkg.sessionsCount || 10;
             if (remInput) remInput.value = pkg.sessionsCount || 10;
-        } };    function openEditModal(customerId) {
+        } };
+    // ==========================================
+    // SUBSCRIBER PASSWORD (كلمة مرور المشترك — 4 أرقام فريدة)
+    // ==========================================
+    function showEditPasswordError(message) {
+        const box = document.getElementById('editCustPasswordError');
+        if (box) {
+            box.textContent = message;
+            box.classList.remove('hidden');
+        }
+    }
+    function clearEditPasswordError() {
+        const box = document.getElementById('editCustPasswordError');
+        if (box) {
+            box.textContent = '';
+            box.classList.add('hidden');
+        }
+    }
+    window.clearEditPasswordError = clearEditPasswordError;
+
+    /** التحقق من كلمة المرور المكتوبة في نموذج التعديل (4 أرقام + غير مكررة). */
+    function validateEditPasswordInput(customerId) {
+        const input = document.getElementById('editCustPassword');
+        if (!input) return { ok: true, value: '' };
+        const raw = String(input.value || '').trim();
+        if (!raw) {
+            showEditPasswordError('يرجى إدخال كلمة مرور مكوّنة من 4 أرقام');
+            return { ok: false, value: '' };
+        }
+        const password = normalizeSubscriberPassword(raw);
+        if (!password) {
+            showEditPasswordError('كلمة المرور يجب أن تكون 4 أرقام فقط (مثال: 4821)');
+            return { ok: false, value: '' };
+        }
+        if (isPasswordTaken(getCustomerListForPasswords(), password, { excludeIds: [customerId] })) {
+            showEditPasswordError('كلمة المرور مستعملة من مشترك آخر — اختر رقماً مختلفاً أو اضغط «توليد تلقائي»');
+            return { ok: false, value: password };
+        }
+        clearEditPasswordError();
+        return { ok: true, value: password };
+    }
+    window.validateEditPasswordInput = validateEditPasswordInput;
+
+    /** زر التوليد التلقائي داخل نافذة التعديل. */
+    window.generateEditCustomerPassword = function() {
+        const input = document.getElementById('editCustPassword');
+        if (!input) return;
+        const customerId = input.dataset.forId || '';
+        const current = normalizeSubscriberPassword(input.value) || normalizeSubscriberPassword(input.dataset.original);
+        const password = generateSubscriberPassword(getCustomerListForPasswords(), {
+            excludeIds: [customerId],
+            random: () => {
+                let candidate = Math.random();
+                for (let i = 0; i < 8 && current && String(1000 + Math.floor(candidate * 9000)) === current; i++) {
+                    candidate = Math.random();
+                }
+                return candidate;
+            },
+        });
+        input.value = password;
+        clearEditPasswordError();
+        if (typeof showInfoToast === 'function') showInfoToast('تم توليد كلمة مرور جديدة: ' + password);
+    };
+    window.handleEditCustomerPasswordInput = function(el) {
+        const input = el || document.getElementById('editCustPassword');
+        if (!input) return;
+        // أرقام لاتينية فقط، بحد أقصى 4 أرقام
+        const digits = String(input.value || '')
+            .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+            .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+            .replace(/\D/g, '')
+            .slice(0, 4);
+        if (input.value !== digits) input.value = digits;
+        if (digits.length === 4) {
+            const forId = input.dataset.forId || '';
+            if (isPasswordTaken(getCustomerListForPasswords(), digits, { excludeIds: [forId] })) {
+                showEditPasswordError('كلمة المرور مستعملة من مشترك آخر — اختر رقماً مختلفاً');
+            } else {
+                clearEditPasswordError();
+            }
+        } else {
+            clearEditPasswordError();
+        }
+    };
+    window.openSubscriberPasswordModal = function(customerId) {
+        const customer = getCustomerListForPasswords().find(c => c && String(c.id || c._rtdbKey) === String(customerId)) || null;
+        if (!customer) return;
+        let password = normalizeSubscriberPassword(customer.password);
+        if (!password) {
+            password = generateSubscriberPassword(getCustomerListForPasswords(), { excludeIds: [customerId] });
+            customer.password = password;
+            customer.passwordIssuedAt = Date.now();
+            subscriberPasswordHints.set(String(customer.id || customer._rtdbKey), password);
+            if (typeof saveState === 'function') saveState(['customers']);
+            if (window.saveFirebaseSectionItem) window.saveFirebaseSectionItem('customers', customer);
+        }
+        const nameEl = document.getElementById('subPasswordCustName');
+        if (nameEl) nameEl.textContent = customer.name || 'بدون اسم';
+        const codeEl = document.getElementById('subPasswordCode');
+        if (codeEl) codeEl.textContent = password;
+        const regenBtn = document.getElementById('subPasswordRegenBtn');
+        if (regenBtn) regenBtn.dataset.forId = String(customer.id || customer._rtdbKey || '');
+        openModal('subscriberPasswordModal');
+    };
+    window.regeneratePasswordFromModal = function() {
+        const regenBtn = document.getElementById('subPasswordRegenBtn');
+        const customerId = regenBtn ? regenBtn.dataset.forId : '';
+        if (!customerId) return;
+        const password = regenerateCustomerPassword(customerId);
+        if (!password) {
+            if (typeof showErrorToast === 'function') showErrorToast('تعذر توليد كلمة مرور جديدة');
+            return;
+        }
+        const codeEl = document.getElementById('subPasswordCode');
+        if (codeEl) codeEl.textContent = password;
+        if (typeof showSuccessToast === 'function') showSuccessToast('تم توليد كلمة مرور جديدة: ' + password);
+        if (typeof renderCustomers === 'function') renderCustomers();
+    };
+    window.copySubscriberPassword = function() {
+        const codeEl = document.getElementById('subPasswordCode');
+        const password = codeEl ? String(codeEl.textContent || '').trim() : '';
+        if (!password) return;
+        const done = () => { if (typeof showSuccessToast === 'function') showSuccessToast('تم نسخ كلمة المرور: ' + password); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(password).then(done).catch(() => {
+                if (typeof showInfoToast === 'function') showInfoToast('كلمة المرور: ' + password);
+            });
+        } else if (typeof showInfoToast === 'function') {
+            showInfoToast('كلمة المرور: ' + password);
+        }
+    };
+    function openEditModal(customerId) {
         const customer = appState.customers.find(c => String(c && c.id) === String(customerId));
         if(!customer) return;
         if (document.getElementById('editCustId')) setElemValue('editCustId', customer.id);
         if (document.getElementById('editCustName')) setElemValue('editCustName', customer.name || '');
         if (document.getElementById('editCustPhone')) setElemValue('editCustPhone', getDisplayPhone(customer.phone));
+        // كلمة مرور المشترك: نعرض الكود المحفوظ، وإن لم يوجد نولّد واحداً فريداً
+        const editPasswordInput = document.getElementById('editCustPassword');
+        if (editPasswordInput) {
+            let currentPassword = normalizeSubscriberPassword(customer.password);
+            if (!currentPassword) {
+                currentPassword = generateSubscriberPassword(getCustomerListForPasswords(), {
+                    excludeIds: [customer.id, customer._rtdbKey],
+                });
+                customer.password = currentPassword;
+                customer.passwordIssuedAt = Date.now();
+                subscriberPasswordHints.set(String(customer.id || customer._rtdbKey), currentPassword);
+            }
+            editPasswordInput.value = currentPassword;
+            editPasswordInput.dataset.original = currentPassword;
+            editPasswordInput.dataset.forId = String(customer.id || customer._rtdbKey || '');
+            clearEditPasswordError();
+            const regenerateBtn = document.getElementById('editCustPasswordRegen');
+            if (regenerateBtn) regenerateBtn.dataset.forId = String(customer.id || customer._rtdbKey || '');
+        }
         if (document.getElementById('editCustDob')) setElemValue('editCustDob', customer.dob || '');
         if (document.getElementById('editCustGender')) setElemValue('editCustGender', customer.gender || 'male');
         if (document.getElementById('editCustWeight')) setElemValue('editCustWeight', customer.weight || '');
@@ -4843,6 +5118,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         // Snapshot old values before edits for exact diff logging
         const oldName = customer.name || '';
+        const oldPassword = normalizeSubscriberPassword(customer.password);
         const oldPhone = customer.phone || '';
         const oldDob = customer.dob || '';
         const oldWeight = customer.weight;
@@ -4865,6 +5141,16 @@ window.addEventListener('unhandledrejection', (event) => {
         if (containsDangerousCode(custPhoneRaw)) {
             showErrorToast('تم رفض الإدخال: رقم الهاتف يحتوي على رموز أو أسطر برمجية.');
             return; } const custPhone = sanitizeInputText(custPhoneRaw, 20);
+        // كلمة المرور (4 أرقام): تُتحقق قبل أي تعديل حتى لا يُحفظ كود مكرر
+        const passwordCheck = validateEditPasswordInput(customer.id || customer._rtdbKey || targetId);
+        if (!passwordCheck.ok) {
+            const passwordError = document.getElementById('editCustPasswordError');
+            if (typeof showErrorToast === 'function' && passwordError && passwordError.textContent) {
+                showErrorToast(passwordError.textContent);
+            }
+            document.getElementById('editCustPassword')?.focus();
+            return;
+        }
         const custDob = getElemVal('editCustDob');
         const dobValidation = validateCustomerDOB(custDob);
         if (!dobValidation.valid) {
@@ -4927,6 +5213,11 @@ window.addEventListener('unhandledrejection', (event) => {
             if (!typedImage) { delete customer.imageRef; delete customer.imageVersion; }
           }
         }
+        // كلمة المرور من أربعة أرقام: تُحفظ كما في النموذج مع ضمان عدم التكرار
+        const passwordChanged = passwordCheck.value !== normalizeSubscriberPassword(customer.password);
+        customer.password = passwordCheck.value;
+        if (passwordChanged || !customer.passwordIssuedAt) customer.passwordIssuedAt = Date.now();
+        subscriberPasswordHints.set(String(customer.id || customer._rtdbKey), customer.password);
         customer.updatedAt = Date.now();
         clearStatusCache(customer);
         customer._searchKey = `${customer.name || ''} ${(customer.phone || '').replace(/\D/g, '')}`.toLowerCase();
@@ -5011,6 +5302,7 @@ window.addEventListener('unhandledrejection', (event) => {
             const changes = [];
 
             if (oldName !== customer.name) changes.push(`الاسم: من "${oldName}" إلى "${customer.name}"`);
+            if (passwordChanged) changes.push(`كلمة المرور: من "${oldPassword || 'غير محددة'}" إلى "${customer.password}"`);
             if (oldPhone !== customer.phone) changes.push(`الهاتف: من "${oldPhone || 'غير محدد'}" إلى "${customer.phone || 'غير محدد'}"`);
             if (oldDob !== custDob && custDob) changes.push(`تاريخ الميلاد: من "${oldDob || 'غير محدد'}" إلى "${custDob}"`);
             if (oldPkgName !== newPkgName) changes.push(`الباقة: من "${oldPkgName}" إلى "${newPkgName}"`);
@@ -9225,6 +9517,16 @@ window.addEventListener('unhandledrejection', (event) => {
                 c._searchKey = `${c.name || ''} ${(c.phone || '').replace(/\D/g, '')}`.toLowerCase();
             }
 
+            // كلمات مرور تجريبية فريدة (4 أرقام) تتجنّب أكواد المشتركين الحقيقيين
+            const mockPasswordAllocator = createPasswordAllocator(appState.customers);
+            for (let i = 0; i < newCustomers.length; i++) {
+                const c = newCustomers[i];
+                if (!isValidSubscriberPassword(c && c.password)) {
+                    c.password = mockPasswordAllocator.next();
+                    c.passwordIssuedAt = Date.now();
+                }
+            }
+
             appState.customers.unshift(...newCustomers);
             appState.credits.unshift(...newCredits);
 
@@ -10233,18 +10535,19 @@ window.addEventListener('unhandledrejection', (event) => {
     }
     function _ensureCustomerSearchCache(c) {
         if (!c || typeof c !== 'object') return { haystack: '', digitHaystack: '' };
-        const sig = `${c.name || ''}|${c.nickname || ''}|${c.phone || ''}|${c.barcode || ''}|${c.notes || ''}`;
+        const sig = `${c.name || ''}|${c.nickname || ''}|${c.phone || ''}|${c.barcode || ''}|${c.notes || ''}|${c.password || ''}`;
         if (c._normCacheSig === sig && typeof c._normHaystack === 'string') {
             return { haystack: c._normHaystack, digitHaystack: c._digitHaystack || '' };
         }
         const phoneRaw = String(c.phone || '');
         const phoneDigits = phoneRaw.replace(/\D/g, '');
         const displayPhone = (typeof getDisplayPhone === 'function') ? getDisplayPhone(c.phone) : phoneRaw;
+        const passwordDigits = normalizeSubscriberPassword(c.password);
         const haystack = normalizeSearchText([
             c.name, c.nickname, c.barcode, c.notes,
-            phoneRaw, displayPhone, phoneDigits
+            phoneRaw, displayPhone, phoneDigits, passwordDigits
         ].filter(Boolean).join(' '));
-        const digitHaystack = phoneDigits + String(c.barcode || '').replace(/\D/g, '');
+        const digitHaystack = phoneDigits + String(c.barcode || '').replace(/\D/g, '') + passwordDigits;
         c._normCacheSig = sig;
         c._normHaystack = haystack;
         c._digitHaystack = digitHaystack;
@@ -11677,6 +11980,29 @@ window.addEventListener('unhandledrejection', (event) => {
     function customerIsSession(c) {
         return isSessionCustomer(c);
     }
+    /**
+     * كلمة مرور المشترك كما تُعرض في البطاقة — من السجل أو من الكود المُصدر له
+     * في هذه الجلسة، وبنداء أخير كود فريد جديد (ثم يُعاد حساب البطاقة).
+     */
+    function customerPasswordOf(c) {
+        if (!c) return '----';
+        const stored = normalizeSubscriberPassword(c.password);
+        if (stored) return stored;
+        const hint = normalizeSubscriberPassword(subscriberPasswordHints.get(String(c.id || c._rtdbKey || '')));
+        if (hint) {
+            c.password = hint;
+            return hint;
+        }
+        const password = generateSubscriberPassword(getCustomerListForPasswords(), {
+            excludeIds: [c.id, c._rtdbKey],
+        });
+        if (!password) return '----';
+        c.password = password;
+        c.passwordIssuedAt = c.passwordIssuedAt || Date.now();
+        subscriberPasswordHints.set(String(c.id || c._rtdbKey || ''), password);
+        persistCustomerPassword(c);
+        return password;
+    }
     function renderFilterTabs() { if (appState.filter === 'session') appState.filter = 'all';
         const filterKeys = ['all', 'male', 'female', 'active', 'near_expiry', 'expired', 'frozen', 'credit'];
         // Single O(N) pass across customers instead of 8 separate filter() scans
@@ -11714,11 +12040,15 @@ window.addEventListener('unhandledrejection', (event) => {
           const matched = window.searchCustomersFast(state.searchQuery, 200);
           const matchedIds = new Set(matched.map(c => String(c.id || c._rtdbKey || '')));
           filtered = (state.customers || []).filter(c => matchedIds.has(String(c.id || c._rtdbKey || '')));
-          if (filtered.length === 0) {
-            filtered = (state.customers || []).filter(c => {
-              if (state.searchQuery && !customerMatchesQuery(c, state.searchQuery)) return false;
-              return true;
-            });
+          // البحث يكمل بكلمة مرور المشترك (4 أرقام) حتى لو لم يطابقها الفهرس السريع
+          const missingByPassword = (state.customers || []).filter(c => {
+            if (!c || matchedIds.has(String(c.id || c._rtdbKey || ''))) return false;
+            if (!customerMatchesQuery(c, state.searchQuery)) return false;
+            return true;
+          });
+          if (missingByPassword.length) {
+            const mergedMatches = filtered.concat(missingByPassword);
+            filtered = mergedMatches;
           }
         } else {
           filtered = (state.customers || []).filter(c => {
@@ -11807,6 +12137,13 @@ window.addEventListener('unhandledrejection', (event) => {
                     <div class="flex items-center justify-between text-xs sm:text-sm">
                         <span class="text-slate-400 font-medium">تاريخ الدفع:</span>
                         <span class="font-bold text-slate-800">${paymentDateStr}</span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs sm:text-sm">
+                        <span class="text-slate-400 font-medium">كلمة المرور:</span>
+                        <button type="button" onclick="openSubscriberPasswordModal('${c.id}')" class="font-black text-blue-700 tracking-[0.3em] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-100 hover:bg-blue-100 hover:border-blue-200 transition-colors cursor-pointer" dir="ltr" title="عرض كلمة مرور المشترك وتوليد كلمة جديدة">
+                            <span>${escapeHTML(customerPasswordOf(c))}</span>
+                            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 10.5L4 17v3h3l1.5-1.5H10v-2h2l.5-.5"></path></svg>
+                        </button>
                     </div>
                 </div>
 

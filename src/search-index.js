@@ -53,6 +53,7 @@ export function createSearchIndex() {
   const customerNormById = new Map();       // id -> { nameN, nickN, notesN, phoneD, bcN }
   const customersByPhone = new Map();       // أرقام الهاتف -> مجموعة معرّفات
   const customersByBarcode = new Map();     // الباركود -> مجموعة معرّفات
+  const customersByPassword = new Map();    // كلمة مرور المشترك (4 أرقام) -> مجموعة معرّفات
   const customerNameTokens = new Map();     // كلمة اسم -> مجموعة معرّفات
 
   // ------------------- فهارس المنتجات -------------------
@@ -88,10 +89,12 @@ export function createSearchIndex() {
     const notesN = normalizeSearchText(c.notes || '');
     const fullNameN = typeof c.fullName === 'string' ? normalizeSearchText(c.fullName) : '';
     const bcN = normalizeSearchText(String(c.barcode || ''));
-    customerNormById.set(id, { nameN, nickN, notesN, phoneD: phone, bcN });
+    const passwordD = digitsOnly(c.password);
+    customerNormById.set(id, { nameN, nickN, notesN, phoneD: phone, bcN, passwordD });
 
     if (phone) addToTokenMap(customersByPhone, phone, id);
     if (c.barcode) addToTokenMap(customersByBarcode, String(c.barcode).trim().toLowerCase(), id);
+    if (passwordD) addToTokenMap(customersByPassword, passwordD, id);
 
     for (const norm of [nameN, nickN, notesN, fullNameN]) {
       if (!norm) continue;
@@ -136,6 +139,7 @@ export function createSearchIndex() {
     customerNormById.clear();
     customersByPhone.clear();
     customersByBarcode.clear();
+    customersByPassword.clear();
     customerNameTokens.clear();
     productsById.clear();
     productNormById.clear();
@@ -194,6 +198,9 @@ export function createSearchIndex() {
       const byBc = customersByBarcode.get(tok);
       if (byBc) for (const id of byBc) perToken.add(id);
       if (tok.length >= 2) addPrefixOrSubstringMatches(customersByBarcode, tok, perToken);
+      // مطابقة كلمة مرور المشترك (4 أرقام)
+      const byPassword = customersByPassword.get(tok);
+      if (byPassword) for (const id of byPassword) perToken.add(id);
       // مطابقة بالكلمات الاسمية (تامة + بادئة/جزئية للكتابة الحية السريعة)
       const byTok = customerNameTokens.get(tok);
       if (byTok) for (const id of byTok) perToken.add(id);
@@ -238,12 +245,14 @@ export function createSearchIndex() {
     const notesN = cached ? cached.notesN : normalizeSearchText(c.notes || '');
     const phoneD = cached ? cached.phoneD : digitsOnly(c.phone);
     const bcN = cached ? cached.bcN : normalizeSearchText(String(c.barcode || ''));
+    const passwordD = cached ? (cached.passwordD || '') : digitsOnly(c.password);
     let score = 0;
     let matchedTokens = 0;
     for (const tok of tokens) {
       let best = 0;
       best = Math.max(best, bestFieldMatch(nameN, tok), bestFieldMatch(nickN, tok), bestFieldMatch(notesN, tok));
       best = Math.max(best, bestFieldMatch(bcN, tok));
+      if (/^\d+$/.test(tok) && passwordD) best = Math.max(best, passwordD === tok ? WEIGHT.exact : 0);
       if (/^\d+$/.test(tok) && tok.length >= 2) best = Math.max(best, bestFieldMatch(phoneD, tok));
       if (best > 0) { matchedTokens += 1; score += best; }
     }
@@ -363,6 +372,8 @@ export function createSearchIndex() {
     const phone = digitsOnly(c.phone);
     if (phone) { const s = customersByPhone.get(phone); if (s) { s.delete(key); if (!s.size) customersByPhone.delete(phone); } }
     if (c.barcode) { const s = customersByBarcode.get(String(c.barcode).trim().toLowerCase()); if (s) { s.delete(key); if (!s.size) customersByBarcode.delete(String(c.barcode).trim().toLowerCase()); } }
+    const passwordD = digitsOnly(c.password);
+    if (passwordD) { const s = customersByPassword.get(passwordD); if (s) { s.delete(key); if (!s.size) customersByPassword.delete(passwordD); } }
     for (const field of [c.name, c.nickname, c.notes]) {
       for (const tok of tokenize(field)) {
         const s = customerNameTokens.get(tok);
@@ -395,6 +406,7 @@ export function createSearchIndex() {
       customers: customersById.size,
       products: productsById.size,
       customerNameTokens: customerNameTokens.size,
+      customerPasswords: customersByPassword.size,
       productNameTokens: productNameTokens.size,
     };
   }
