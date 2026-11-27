@@ -36,6 +36,21 @@ const trackBytes = (path, value) => {
   state.deliveredPaths.push(path);
   return value;
 };
+// Resolve a path against the fixture tree, including child paths such as
+// 'v2/customerImages/c1' (test-only; mirrors RTDB reads of a single child).
+const lookupFixture = path => {
+  if (path in fixtures) return fixtures[path];
+  const parts = path.split('/');
+  for (let n = parts.length - 1; n > 0; n--) {
+    const parent = parts.slice(0, n).join('/');
+    if (parent in fixtures) {
+      let node = fixtures[parent];
+      for (const part of parts.slice(n)) node = node == null ? null : node[part];
+      return node === undefined ? null : node;
+    }
+  }
+  return null;
+};
 export const initializeApp = config => {
   if (window.__firebaseTestFail) throw new Error('Simulated SDK failure');
   return { config };
@@ -55,14 +70,14 @@ export function onValue(target, callback, onError) {
   state.listeners[target.path] = value => callback(snapshot(value));
   const timer = setTimeout(() => {
     if (target.path === window.__firebaseTestFailSection) onError(new Error('Simulated section permission error'));
-    else callback(snapshot(trackBytes(target.path, fixtures[target.path] ?? null)));
+    else callback(snapshot(trackBytes(target.path, lookupFixture(target.path))));
   }, window.__firebaseTestDelay || 100);
   return () => { clearTimeout(timer); delete state.listeners[target.path]; };
 }
 export async function get(target) {
   state.gets.push(target.path); state.getQueries.push(target);
   if (target.constraints?.some(c => c.before)) return snapshot(null);
-  return snapshot(trackBytes(target.path, fixtures[target.path] ?? null));
+  return snapshot(trackBytes(target.path, lookupFixture(target.path)));
 }
 export async function set(target, data) { state.writes.push([target.path, data]); }
 export const update = set, remove = set, push = set;

@@ -1,0 +1,79 @@
+{
+  "note": "Same machine, same session. Old code = main 8c3216d; new = Phase 1 branch. 0.3 scale. Fixture keeps the full dataset in memory, so heap is not a clean app-only number.",
+  "oldCodeInlineImages": [
+    {
+      "initialDataMB": 45.73,
+      "timeToDataVisibleMsColdCache": 5106,
+      "timeToDataVisibleMsFromLocalCache": 6298,
+      "longestTaskMs": 329,
+      "tasksOver50ms": 9,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 782.3,
+      "searchMaxKeystrokeMs": 18.7
+    },
+    {
+      "initialDataMB": 45.73,
+      "timeToDataVisibleMsColdCache": 4942,
+      "timeToDataVisibleMsFromLocalCache": 6295,
+      "longestTaskMs": 306,
+      "tasksOver50ms": 8,
+      "jsHeapUsedMBAfterLoad": 55.4,
+      "liveSingleRecordUpdateMs": 792.6,
+      "searchMaxKeystrokeMs": 31.5
+    }
+  ],
+  "newCodeInlineImages": [
+    {
+      "initialDataMB": 45.73,
+      "timeToDataVisibleMsColdCache": 5559,
+      "timeToDataVisibleMsFromLocalCache": 6358,
+      "longestTaskMs": 383,
+      "tasksOver50ms": 9,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 795.6,
+      "searchMaxKeystrokeMs": 20.3
+    },
+    {
+      "initialDataMB": 45.73,
+      "timeToDataVisibleMsColdCache": 5472,
+      "timeToDataVisibleMsFromLocalCache": 7039,
+      "longestTaskMs": 329,
+      "tasksOver50ms": 9,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 722.4,
+      "searchMaxKeystrokeMs": 19.2
+    }
+  ],
+  "newCodeSplitImages": [
+    {
+      "initialDataMB": 16.33,
+      "timeToDataVisibleMsColdCache": 5143,
+      "timeToDataVisibleMsFromLocalCache": 6543,
+      "longestTaskMs": 272,
+      "tasksOver50ms": 8,
+      "jsHeapUsedMBAfterLoad": 53.1,
+      "liveSingleRecordUpdateMs": 455.5,
+      "searchMaxKeystrokeMs": 15.7
+    },
+    {
+      "initialDataMB": 16.33,
+      "timeToDataVisibleMsColdCache": 5033,
+      "timeToDataVisibleMsFromLocalCache": 6175,
+      "longestTaskMs": 266,
+      "tasksOver50ms": 8,
+      "jsHeapUsedMBAfterLoad": 53.1,
+      "liveSingleRecordUpdateMs": 476.2,
+      "searchMaxKeystrokeMs": 16.8
+    },
+    {
+      "initialDataMB": 16.33,
+      "timeToDataVisibleMsColdCache": 5120,
+      "timeToDataVisibleMsFromLocalCache": 6947,
+      "longestTaskMs": 235,
+      "tasksOver50ms": 8,
+      "jsHeapUsedMBAfterLoad": 53.1,
+      "liveSingleRecordUpdateMs": 476.5,
+      "searchMaxKeystrokeMs": 14.4
+    }
+  ]
+}
