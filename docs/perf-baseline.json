@@ -1,0 +1,150 @@
+{
+  "generatedAt": "2026-11-27T09:27:05.442Z",
+  "environment": {
+    "cpuThrottle": 4,
+    "network": {
+      "downloadKbps": 1600,
+      "uploadKbps": 750,
+      "latencyMs": 150
+    },
+    "note": "headless Chromium, synthetic data, fixture SDK, service worker bypassed"
+  },
+  "dataset": {
+    "file": "/home/user/omega01/.cache/perf/dataset-scale0.3.json",
+    "scale": 0.3,
+    "fullSpecScale": 1,
+    "totalBytes": 48798275,
+    "counts": {
+      "v2/customers": 1500,
+      "v2/products": 600,
+      "v2/sales": 15000,
+      "v2/caisse": 6000,
+      "v2/expenses": 3000,
+      "v2/packages": 3,
+      "v2/credits": 0,
+      "v2/staffPayouts": 0,
+      "v2/quickSessions": 0,
+      "v2/activityLogs": 0,
+      "v2/stats": 4,
+      "appState/hideFinances": 0
+    }
+  },
+  "budgets": {
+    "initialDataBytesRatioMax": 0.2,
+    "timeToDataVisibleMsFromLocalCacheMax": 800,
+    "singleTaskMaxMs": 50,
+    "liveSingleRecordUpdateMsMax": 30,
+    "customerDomNodesMax": 1500,
+    "heapRatioMax": 0.5,
+    "initialJsGzipBytesMax": 81920
+  },
+  "startup": {
+    "requestedPaths": [
+      "v2/stats",
+      "appState/hideFinances",
+      "v2/customers",
+      "v2/sales",
+      "v2/expenses",
+      "v2/credits",
+      "v2/packages",
+      "v2/staffPayouts",
+      "v2/products",
+      "v2/quickSessions"
+    ],
+    "initialDataBytes": 47948911,
+    "initialDataMB": 45.73,
+    "estimatedTransferSecondsOn4G": 239.9,
+    "timeToDataVisibleMsColdCache": 5114,
+    "paint": [
+      {
+        "name": "first-paint",
+        "startMs": 296
+      },
+      {
+        "name": "first-contentful-paint",
+        "startMs": 296
+      }
+    ],
+    "cls": 0.0166,
+    "jsHeapUsedBytesAfterLoad": 55453284,
+    "jsHeapUsedMBAfterLoad": 52.9,
+    "domNodesAfterLoad": 3741,
+    "longTasks": {
+      "count": 9,
+      "over50ms": 9,
+      "maxMs": 420,
+      "totalBlockingMs": 955
+    },
+    "fixtureSyntheticParseMsExcluded": 1329,
+    "pageErrors": [],
+    "timeToDataVisibleMsFromLocalCache": 6264,
+    "timeToDataVisibleMsFromLocalCacheNote": "fresh navigation in the same profile (IndexedDB from phase A); includes the fixture 100ms delay",
+    "warmPageErrors": []
+  },
+  "live": {
+    "singleRecordUpdate": {
+      "ms": 164.2,
+      "customerId": "c0",
+      "budgetMet": false
+    },
+    "search": {
+      "query": "منتج",
+      "perKeystrokeMs": [
+        7.3,
+        15.5,
+        502.1,
+        27.2
+      ],
+      "maxMs": 502.1
+    }
+  },
+  "budgetCheck": {
+    "timeToDataVisibleFromLocalCache": "not met",
+    "longestTaskUnder50ms": "not met",
+    "liveUpdateUnder30ms": "not met",
+    "customerDomNodesUnder1500": "not met (measured on dashboard, see limitations)",
+    "initialJsGzipUnder80KB": "not met"
+  },
+  "initialJsGzipBytes": 139595,
+  "initialJsGzipKB": 136.3,
+  "initialJsFiles": [
+    "assets/index-K3guF_mt.js"
+  ],
+  "limitations": [
+    "Transfer seconds are an estimate (fixture SDK bypasses the network). Bytes are exact for the synthetic payloads.",
+    "Per-section applySectionSnapshot timings are not measured: the function is closed over inside src/main.js and cannot be hooked without changing app code.",
+    "Customer DOM nodes are measured on the dashboard (where #customersGrid lives), not on the separate customers screen.",
+    "The heap figure is the JS heap after a forced GC, measured in one run.",
+    "This is a simulation in headless Chromium, not a measurement of real users on real devices."
+  ],
+  "repeatRuns": [
+    {
+      "timeToDataVisibleMsColdCache": 5114,
+      "timeToDataVisibleMsFromLocalCache": 6264,
+      "longestTaskMs": 420,
+      "tasksOver50ms": 9,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 164.2,
+      "searchMaxKeystrokeMs": 502.1
+    },
+    {
+      "timeToDataVisibleMsColdCache": 5326,
+      "timeToDataVisibleMsFromLocalCache": 6071,
+      "longestTaskMs": 334,
+      "tasksOver50ms": 9,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 169.9,
+      "searchMaxKeystrokeMs": 377.5
+    },
+    {
+      "timeToDataVisibleMsColdCache": 5200,
+      "timeToDataVisibleMsFromLocalCache": 6054,
+      "longestTaskMs": 338,
+      "tasksOver50ms": 8,
+      "jsHeapUsedMBAfterLoad": 52.9,
+      "liveSingleRecordUpdateMs": 368.6,
+      "searchMaxKeystrokeMs": 352.7
+    }
+  ],
+  "note": "First run is the full record; repeatRuns holds all 3 runs (same code, same dataset). Use the ranges, not a single number."
+}
