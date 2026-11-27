@@ -208,6 +208,61 @@ window.addEventListener('unhandledrejection', (event) => {
   import { resolvePaymentDate, paymentDateTimestamp } from './renewal-payment-date.js';
   import { snapshotSubscription, restoreSubscription, renewalRollbackCheck } from './renewal-rollback.js';
   import { calculateStatus, getRemainingDays, isSessionCustomer, clearStatusCache, cleanCustomerForStorage, applyRenewalToCustomer, toLocalMidnightISO } from './customer-status.js';
+  import { splitRecordImage, resolveImageSrc, imageCacheKey, imageNodeFor, LruCache } from './image-store.js';
+
+  // ---- Split record images: memory LRU + on-demand load (see src/image-store.js) ----
+  const customerImageCache = new LruCache(8 * 1024 * 1024);
+  window.__customerImageCache = customerImageCache;
+  const imageInFlight = new Map();
+  async function loadSplitImage(section, record) {
+    const node = imageNodeFor(section);
+    if (!node || !record || !record.imageRef || !record.imageVersion) return null;
+    const cached = resolveImageSrc(section, record, customerImageCache);
+    if (cached) return cached;
+    const key = imageCacheKey(section, record.imageRef, record.imageVersion);
+    if (imageInFlight.has(key)) return imageInFlight.get(key);
+    const pending = (async () => {
+      if (!window.firebaseDB || !window.firebaseRef || !window.firebaseGet) return null;
+      const snap = await window.firebaseGet(window.firebaseRef(window.firebaseDB, `v2/${node}/${record.imageRef}`));
+      const val = snap && typeof snap.exists === 'function' && snap.exists() ? snap.val() : null;
+      // A version mismatch means the record moved on; never show a stale picture.
+      if (!val || val.version !== record.imageVersion || typeof val.data !== 'string') return null;
+      customerImageCache.set(key, val.data);
+      return val.data;
+    })().catch(() => null).finally(() => imageInFlight.delete(key));
+    imageInFlight.set(key, pending);
+    return pending;
+  }
+  window.loadSplitImage = loadSplitImage;
+
+  // Avatars without a loaded image are queued during render and loaded when visible.
+  let splitAvatarQueue = [];
+  let splitAvatarObserver = null;
+  let imageRenderTimer = null;
+  function scheduleRenderAfterImage() {
+    if (imageRenderTimer) return;
+    imageRenderTimer = setTimeout(() => {
+      imageRenderTimer = null;
+      if (typeof window.scheduleRender === 'function') window.scheduleRender();
+    }, 80);
+  }
+  function observeSplitAvatars() {
+    if (splitAvatarObserver) { splitAvatarObserver.disconnect(); splitAvatarObserver = null; }
+    if (!splitAvatarQueue.length) return;
+    if (typeof IntersectionObserver !== 'function') {
+      splitAvatarQueue.forEach(rec => loadSplitImage('customers', rec).then(src => { if (src) scheduleRenderAfterImage(); }));
+      return;
+    }
+    splitAvatarObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        splitAvatarObserver.unobserve(entry.target);
+        const rec = splitAvatarQueue[Number(entry.target.dataset.splitIndex)];
+        if (rec) loadSplitImage('customers', rec).then(src => { if (src) scheduleRenderAfterImage(); });
+      }
+    }, { rootMargin: '300px 0px' });
+    document.querySelectorAll('[data-split-index]').forEach(el => splitAvatarObserver.observe(el));
+  }
 
   // High-Speed PWA Caching Engine Registration
   // — Auto-refresh: when a new SW version is detected, it is activated
@@ -2078,6 +2133,9 @@ window.addEventListener('unhandledrejection', (event) => {
       try {
         const v2Updates = {};
         const v2Sec = sectionPath === 'caisseLogs' ? 'caisse' : sectionPath;
+        // Customer images live in v2/customerImages/{id}; the record keeps imageRef/imageVersion.
+        // window.OMEGA_LEGACY_INLINE_IMAGES = true restores the old inline write.
+        let customerSplit = null;
 
         if (sectionPath === 'customers') {
           const enriched = {
@@ -2086,8 +2144,15 @@ window.addEventListener('unhandledrejection', (event) => {
             normalizedPhone: normalizePhone(itemData.phone) || null,
             updatedAt: Date.now()
           };
-          v2Updates[`v2/customers/${cleanId}`] = enriched;
-          v2Updates[`customers/${cleanId}`] = enriched;
+          if (!window.OMEGA_LEGACY_INLINE_IMAGES) {
+            customerSplit = splitRecordImage('customers', { ...enriched, id: cleanId }, enriched.updatedAt);
+            if (customerSplit.imageWrite !== undefined) {
+              v2Updates[`v2/${imageNodeFor('customers')}/${cleanId}`] = customerSplit.imageWrite;
+            }
+          }
+          const storedCustomer = customerSplit ? customerSplit.record : enriched;
+          v2Updates[`v2/customers/${cleanId}`] = storedCustomer;
+          v2Updates[`customers/${cleanId}`] = storedCustomer;
           if (enriched.normalizedPhone) {
             v2Updates[`v2/customerByPhone/${enriched.normalizedPhone}`] = cleanId;
           }
@@ -2234,9 +2299,17 @@ window.addEventListener('unhandledrejection', (event) => {
               const singleRes = await fetch(`${baseUrl}/v2/${v2Sec}/${cleanId}.json`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(itemData)
+                body: JSON.stringify(customerSplit ? customerSplit.record : itemData)
               });
               if (!singleRes.ok) throw new Error(`REST multi-location update failed HTTP ${res.status}`);
+              if (customerSplit && customerSplit.imageWrite !== undefined) {
+                const imgRes = await fetch(`${baseUrl}/v2/${imageNodeFor('customers')}/${cleanId}.json`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(customerSplit.imageWrite)
+                });
+                if (!imgRes.ok) throw new Error(`REST customer image PUT failed HTTP ${imgRes.status}`);
+              }
             }
           }
         }
@@ -2293,6 +2366,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
         if (sectionPath === 'customers') {
           const item = (window.appState?.customers || []).find(c => String(c.id) === String(itemId) || String(c._rtdbKey) === String(itemId)) || previousItem;
+          if (imageNodeFor('customers')) v2Deletes[`v2/${imageNodeFor('customers')}/${cleanId}`] = null;
           if (item) {
             const normPhone = normalizePhone(item.phone);
             if (normPhone) v2Deletes[`v2/customerByPhone/${normPhone}`] = null;
@@ -3719,7 +3793,7 @@ window.addEventListener('unhandledrejection', (event) => {
     window.handleEditImageSelect = function(input) {
         if (input.files && input.files[0]) {
             compressAndConvertImage(input.files[0], function(base64Data, safeFileName) {
-                if (base64Data) { setElemValue('editCustImageUrl', base64Data);
+                if (base64Data) { setElemValue('editCustImageUrl', base64Data); { const f = document.getElementById('editCustImageUrl'); if (f) delete f.dataset.cleared; }
                     const imgPreview = document.getElementById('editCustImagePreview');
                     const letterSpan = document.getElementById('editCustAvatarLetter');
                     const removeBtn = document.getElementById('removeEditImageBtn');
@@ -3729,7 +3803,7 @@ window.addEventListener('unhandledrejection', (event) => {
                     if (removeBtn) removeBtn.classList.remove('hidden');
                 } }, { prefix: 'member_edit', checkPortrait: true, maxDim: 400 });
         } }; window.removeEditImage = function() {
-        setElemValue('editCustImageUrl', '');
+        setElemValue('editCustImageUrl', ''); { const f = document.getElementById('editCustImageUrl'); if (f) f.dataset.cleared = '1'; }
         const imgPreview = document.getElementById('editCustImagePreview');
         const letterSpan = document.getElementById('editCustAvatarLetter');
         const removeBtn = document.getElementById('removeEditImageBtn');
@@ -4718,6 +4792,13 @@ window.addEventListener('unhandledrejection', (event) => {
         if (fileInput) fileInput.value = '';
         const firstLetter = customer.name ? customer.name.trim().charAt(0) : '؟';
         if (letterSpan) letterSpan.textContent = firstLetter;
+        if (hiddenImgUrl) {
+            // Split image: the field stays empty, so an untouched save keeps the stored image.
+            hiddenImgUrl.value = '';
+            hiddenImgUrl.dataset.imageRef = (customer.imageRef && !customer.imageUrl) ? '1' : '';
+            hiddenImgUrl.dataset.forId = String(customer.id);
+            delete hiddenImgUrl.dataset.cleared;
+        }
         if (customer.imageUrl) { if (hiddenImgUrl) hiddenImgUrl.value = customer.imageUrl;
             if (imgPreview) { imgPreview.src = customer.imageUrl;
                 imgPreview.classList.remove('hidden');
@@ -4728,7 +4809,15 @@ window.addEventListener('unhandledrejection', (event) => {
                 imgPreview.classList.add('hidden');
             } if (letterSpan) letterSpan.classList.remove('hidden');
             if (removeBtn) removeBtn.classList.add('hidden');
-        } toggleEditDebtField(); openModal('editCustomerModal');
+        } if (hiddenImgUrl && hiddenImgUrl.dataset.imageRef === '1') {
+            loadSplitImage('customers', customer).then(src => {
+                if (!src || hiddenImgUrl.dataset.forId !== String(customer.id) || hiddenImgUrl.value || hiddenImgUrl.dataset.cleared) return;
+                if (imgPreview) { imgPreview.src = src; imgPreview.classList.remove('hidden'); }
+                if (letterSpan) letterSpan.classList.add('hidden');
+                if (removeBtn) removeBtn.classList.remove('hidden');
+            });
+        }
+        toggleEditDebtField(); openModal('editCustomerModal');
     } function toggleEditDebtField() { 
         const container = document.getElementById('editDebtAmountContainer');
         const status = document.getElementById('editPaymentStatus');
@@ -4826,7 +4915,18 @@ window.addEventListener('unhandledrejection', (event) => {
         customer.price = editPriceInput && editPriceInput.value !== '' ? parseInt(editPriceInput.value) : (pkg ? parseInt(pkg.price || 0) : 0);
         customer.paymentStatus = getElemVal('editPaymentStatus');
         customer.debtAmount = customer.paymentStatus === 'credit' ? parseInt(getElemVal('editDebtAmount') || 0) : 0;
-        customer.imageUrl = getElemVal('editCustImageUrl') || null;
+        {
+          const imgField = document.getElementById('editCustImageUrl');
+          const typedImage = getElemVal('editCustImageUrl') || null;
+          const keepSplit = !typedImage && !!imgField && imgField.dataset.imageRef === '1'
+            && !imgField.dataset.cleared && imgField.dataset.forId === String(customer.id);
+          if (keepSplit) {
+            delete customer.imageUrl; // keep imageRef/imageVersion: the stored image is kept
+          } else {
+            customer.imageUrl = typedImage;
+            if (!typedImage) { delete customer.imageRef; delete customer.imageVersion; }
+          }
+        }
         customer.updatedAt = Date.now();
         clearStatusCache(customer);
         customer._searchKey = `${customer.name || ''} ${(customer.phone || '').replace(/\D/g, '')}`.toLowerCase();
@@ -4964,8 +5064,14 @@ window.addEventListener('unhandledrejection', (event) => {
         const imgEl = document.getElementById('renewCustAvatarImg');
         const firstLetter = customer.name ? customer.name.trim().charAt(0) : '؟';
         if (letterSpan) letterSpan.textContent = firstLetter;
-        if (customer.imageUrl && imgEl) {
-            imgEl.src = customer.imageUrl;
+        const renewAvatarSrc = resolveImageSrc('customers', customer, customerImageCache);
+        if (customer.imageRef && !renewAvatarSrc && imgEl) {
+            loadSplitImage('customers', customer).then(src => {
+                if (src && imgEl.isConnected) { imgEl.src = src; imgEl.classList.remove('hidden'); if (letterSpan) letterSpan.classList.add('hidden'); }
+            });
+        }
+        if (renewAvatarSrc && imgEl) {
+            imgEl.src = renewAvatarSrc;
             imgEl.classList.remove('hidden');
             if (letterSpan) letterSpan.classList.add('hidden');
         } else {
@@ -11591,7 +11697,7 @@ window.addEventListener('unhandledrejection', (event) => {
             setElemHTML('filterTabsView', html);
         }
     }
-    function renderCustomers(options = {}) { let filtered;
+    function renderCustomers(options = {}) { let filtered; splitAvatarQueue = [];
         const state = window.appState || {};
         const nowMs = Date.now();
         // ضمان بناء فهرس البحث إذا كانت بيانات العملاء موجودة ولكن الفهرس لا يزال فارغاً
@@ -11651,8 +11757,10 @@ window.addEventListener('unhandledrejection', (event) => {
             const paymentDateStr = paymentDateVal ? String(paymentDateVal).split('-').reverse().join('/') : 'غير محدد';
             const firstLetter = c.name ? c.name.trim().charAt(0) : '؟';
             const genderLabel = c.gender === 'female' ? 'أنثى' : 'ذكر';
-            const avatarHtml = c.imageUrl ? `<img src="${c.imageUrl}" alt="${c.name}" loading="lazy" decode="async" class="w-12 h-12 rounded-full object-cover shrink-0 shadow-sm border border-slate-200">`
-                : `<div class="w-12 h-12 rounded-full ${c.gender === 'female' ? 'bg-slate-100 text-slate-700' : 'bg-blue-100 text-[#2563eb]'} font-extrabold text-xl flex items-center justify-center shrink-0 shadow-sm">${firstLetter}</div>`;
+            const avatarSrc = resolveImageSrc('customers', c, customerImageCache);
+            if (!avatarSrc && c.imageRef) splitAvatarQueue.push(c);
+            const avatarHtml = avatarSrc ? `<img src="${avatarSrc}" alt="${c.name}" loading="lazy" decode="async" class="w-12 h-12 rounded-full object-cover shrink-0 shadow-sm border border-slate-200">`
+                : `<div ${!avatarSrc && c.imageRef ? `data-split-index="${splitAvatarQueue.length - 1}"` : ''} class="w-12 h-12 rounded-full ${c.gender === 'female' ? 'bg-slate-100 text-slate-700' : 'bg-blue-100 text-[#2563eb]'} font-extrabold text-xl flex items-center justify-center shrink-0 shadow-sm">${firstLetter}</div>`;
             let paymentBadge = ''; if (c.paymentStatus === 'paid') {
                 paymentBadge = `<span class="inline-block bg-blue-100/90 text-blue-700 font-bold text-xs px-3 py-1.5 rounded-xl">تم الدفع</span>`;
             } else if (c.paymentStatus === 'credit') {
@@ -11752,6 +11860,7 @@ window.addEventListener('unhandledrejection', (event) => {
         }
         if (isVisible('dashboardView') || !isVisible('customersView')) {
             setElemHTML('customersGrid', html);
+            observeSplitAvatars();
         }
         if (isVisible('customersView')) {
             setElemHTML('customersGridView', html);

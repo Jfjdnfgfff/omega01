@@ -20,7 +20,7 @@ import { resolve, join } from 'node:path';
 import { build, preview } from 'vite';
 
 const SCALE = Number(process.env.PERF_SCALE || 1);
-const DATASET = resolve(SCALE === 1 ? '.cache/perf/dataset.json' : `.cache/perf/dataset-scale${SCALE}.json`);
+const DATASET = resolve(process.env.PERF_DATASET || (SCALE === 1 ? '.cache/perf/dataset.json' : `.cache/perf/dataset-scale${SCALE}.json`));
 const OUT_DIR = '.cache/browser-test-dist-perf';
 const SLOW_4G = { downloadKbps: 1600, uploadKbps: 750, latencyMs: 150 };
 const DEBUG = !!process.env.PERF_DEBUG;

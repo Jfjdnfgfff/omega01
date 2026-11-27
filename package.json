@@ -16,6 +16,8 @@
     "test:activity-log-ui": "node tests/activity-log-index.check.mjs",
     "test:transfer-ui": "node tests/stock-transfer-search.check.mjs",
     "perf:dataset": "node scripts/perf-dataset.js",
+    "images:migrate": "node scripts/migrate-images.js",
+    "test:image-split": "node tests/image-split.check.mjs",
     "perf:baseline": "node tests/perf-baseline.check.mjs"
   },
   "devDependencies": {
