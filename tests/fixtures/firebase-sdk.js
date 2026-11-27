@@ -16,6 +16,26 @@ const fixtures = {
 if (window.__firebaseTestLargeSales) {
   fixtures['v2/sales'] = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [String(i + 1), { id: String(i + 1), total: 1, date: '2026-10-22' }]));
 }
+// Perf harness only: when window.__perfDatasetUrl is set, serve a synthetic dataset
+// (scripts/perf-dataset.js) instead of the small fixtures above. Never touches real Firebase.
+if (window.__perfDatasetUrl) {
+  // Synchronous XHR: test-only, runs before the app boots (top-level await is not in the build target).
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', window.__perfDatasetUrl, false);
+  xhr.send();
+  const parseStart = performance.now();
+  const perfData = JSON.parse(xhr.responseText);
+  for (const key of Object.keys(perfData)) fixtures[key] = perfData[key];
+  window.__perfFixtureParseMs = performance.now() - parseStart;
+  window.__perfFixtureReadyAt = performance.now();
+}
+// Paths the app requested (sizes are computed by the harness, not in the page).
+state.deliveredPaths = [];
+state.fixtures = fixtures; // harness-only reference for synthetic updates
+const trackBytes = (path, value) => {
+  state.deliveredPaths.push(path);
+  return value;
+};
 export const initializeApp = config => {
   if (window.__firebaseTestFail) throw new Error('Simulated SDK failure');
   return { config };
@@ -35,14 +55,14 @@ export function onValue(target, callback, onError) {
   state.listeners[target.path] = value => callback(snapshot(value));
   const timer = setTimeout(() => {
     if (target.path === window.__firebaseTestFailSection) onError(new Error('Simulated section permission error'));
-    else callback(snapshot(fixtures[target.path] ?? null));
+    else callback(snapshot(trackBytes(target.path, fixtures[target.path] ?? null)));
   }, window.__firebaseTestDelay || 100);
   return () => { clearTimeout(timer); delete state.listeners[target.path]; };
 }
 export async function get(target) {
   state.gets.push(target.path); state.getQueries.push(target);
   if (target.constraints?.some(c => c.before)) return snapshot(null);
-  return snapshot(fixtures[target.path] ?? null);
+  return snapshot(trackBytes(target.path, fixtures[target.path] ?? null));
 }
 export async function set(target, data) { state.writes.push([target.path, data]); }
 export const update = set, remove = set, push = set;
