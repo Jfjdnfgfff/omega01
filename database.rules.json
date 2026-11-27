@@ -78,6 +78,12 @@
       },
       "quickSessions": {
         ".indexOn": ["date", "dateKey", "createdAt"]
+      },
+      "staffPasswords": {
+        ".indexOn": ["key", "name", "password", "passwordIssuedAt"]
+      },
+      "supplierPasswords": {
+        ".indexOn": ["key", "name", "password", "passwordIssuedAt"]
       }
     }
   }

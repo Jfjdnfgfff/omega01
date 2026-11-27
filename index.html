@@ -1993,6 +1993,26 @@
           </div>
           <p class="mt-3 text-[11px] text-slate-400 font-medium">تُنشأ تلقائياً بأربعة أرقام ولا تتكرر مع أي مشترك آخر.</p>
       </div> </div>
+  <!-- Access Code Modal (كلمة مرور العامل / المورد) -->
+  <div id="accessCodeModal" class="modal-overlay" onclick="handleOverlayClick(event, 'accessCodeModal')">
+      <div class="modal-content relative w-full max-w-sm bg-white p-6 rounded-[2rem] shadow-2xl text-center border border-slate-100">
+          <button type="button" onclick="closeModal('accessCodeModal')" class="absolute top-4 left-4 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-1.5 transition-colors">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+          <div class="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3 border border-blue-100">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 10.5L4 17v3h3l1.5-1.5H10v-2h2l.5-.5"></path></svg>
+          </div>
+          <h3 id="accessCodeModalTitle" class="text-lg font-black text-slate-800 mb-1">كلمة مرور العامل</h3>
+          <p id="accessCodeName" class="text-xs font-bold text-slate-500 mb-4">—</p>
+          <div class="bg-slate-50 border border-slate-200 rounded-2xl py-4 mb-4">
+              <span id="accessCodeValue" class="text-4xl font-black tracking-[0.45em] text-blue-700" dir="ltr">0000</span>
+          </div>
+          <div class="flex gap-2">
+              <button type="button" onclick="copyAccessCode()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors">نسخ الكلمة</button>
+              <button type="button" id="accessCodeRegenBtn" onclick="regenerateAccessCode()" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-100 transition-colors">توليد جديدة</button>
+          </div>
+          <p class="mt-3 text-[11px] text-slate-400 font-medium">تُنشأ تلقائياً بأربعة أرقام ولا تتكرر مع أي مشترك أو مورد أو عامل.</p>
+      </div> </div>
   <!-- Staff Payouts & Suppliers Modal (قسم خلاص العمال والموردين) -->
   <div id="staffPayoutsModal" class="modal-overlay" onclick="handleOverlayClick(event, 'staffPayoutsModal')">
       <div class="modal-content relative w-full max-w-2xl bg-white p-5 sm:p-7 rounded-[2rem] shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto hide-scrollbar">

@@ -217,6 +217,17 @@ window.addEventListener('unhandledrejection', (event) => {
     assignMissingPasswords,
     isPasswordTaken,
   } from './subscriber-password.js';
+  import {
+    normalizeAccessCode,
+    generateAccessCode,
+    collectAccessCodes,
+    isSupplierCodeTaken,
+    isWorkerCodeTaken,
+    assignSupplierPasswords,
+    assignWorkerPasswords,
+    normalizeSupplierName,
+    normalizeWorkerName,
+  } from './access-codes.js';
 
   // ---- Subscriber 4-digit passwords: uniqueness helpers ----
   // كلمة مرور المشترك تُنشأ تلقائياً بأربعة أرقام، ولا تتكرر بين المشتركين.
@@ -323,6 +334,127 @@ window.addEventListener('unhandledrejection', (event) => {
     return result;
   }
   window.ensureSubscriberPasswords = ensureSubscriberPasswords;
+
+  // ==========================================
+  // STAFF & SUPPLIER PASSWORDS (4 أرقام فريدة)
+  // ==========================================
+  // العامل يُعرَّف باسمه الموحّد، والمورد باسمه الموحّد. الكلمات محفوظة في
+  // v2/staffPasswords/{key} و v2/supplierPasswords/{key} (سجل صغير لكل صاحب كود)
+  // حتى تبقى ثابتة بين كل الأجهزة، وفريدة مقابل أكواد المشتركين أيضاً.
+  const staffPasswordHints = new Map();     // key (اسم موحّد) -> كود
+  const supplierPasswordHints = new Map();  // key (اسم موحّد) -> كود
+  window.__staffPasswordHints = staffPasswordHints;
+  window.__supplierPasswordHints = supplierPasswordHints;
+
+  function accessCodeState(overrides = {}) {
+    const state = window.appState || {};
+    return {
+      customers: Array.isArray(state.customers) ? state.customers : [],
+      suppliers: Object.values(window.__supplierCodeRecords || {}),
+      staff: Object.values(window.__staffCodeRecords || {}),
+      ...overrides,
+    };
+  }
+
+  /**
+   * يضمن وجود كود لكل عامل/مورد بناءً على groupes العرض الحالية، ويحفظ ما
+   * صدر منها في Firebase. @param {'staff'|'suppliers'} kind
+   */
+  function ensureAccessCodes(kind) {
+    const state = window.appState || {};
+    const isStaff = kind === 'staff';
+    const records = isStaff ? (window.__staffCodeRecords || {}) : (window.__supplierCodeRecords || {});
+    const hints = isStaff ? staffPasswordHints : supplierPasswordHints;
+    const groups = isStaff
+      ? groupStaffPayouts(Array.isArray(state.staffPayouts) ? state.staffPayouts : [])
+      : getSupplierGroupsForCodes();
+    const list = groups.map(group => {
+      const key = isStaff ? normalizeWorkerName(group.name) : normalizeSupplierName(group.name);
+      const record = records[key] || { id: key, key, name: group.name, password: hints.get(key) || '' };
+      record.name = group.name;
+      record.key = key;
+      record.id = key;
+      records[key] = record;
+      return record;
+    });
+    const other = isStaff
+      ? { customers: accessCodeState().customers, suppliers: Object.values(window.__supplierCodeRecords || {}) }
+      : { customers: accessCodeState().customers, staff: Object.values(window.__staffCodeRecords || {}) };
+    const result = isStaff ? assignWorkerPasswords(list, { state: other }) : assignSupplierPasswords(list, { state: other });
+    list.forEach(record => {
+      if (record.key && record.password) hints.set(record.key, record.password);
+    });
+    const pending = result.changed.filter(item => item.record && item.record.password);
+    if (pending.length) {
+      setTimeout(() => {
+        pending.forEach(({ record }) => {
+          try { window.saveFirebaseSectionItem(isStaff ? 'staffPasswords' : 'supplierPasswords', { ...record }); } catch (e) {}
+        });
+      }, 0);
+      if (typeof scheduleRender === 'function') scheduleRender();
+    }
+    return { list, changed: pending };
+  }
+  window.ensureAccessCodes = ensureAccessCodes;
+
+  /** أسماء الموردين كما تعرضها شاشة الموردين (سجل المعاملات + بطاقات الموردين). */
+  function getSupplierGroupsForCodes() {
+    const map = new Map();
+    const add = (rawName, info) => {
+      const name = String(rawName || '').trim().replace(/\s+/g, ' ');
+      if (!name) return;
+      const key = normalizeSupplierName(name);
+      if (!map.has(key)) map.set(key, { name, info: info || '' });
+      else if (info && !map.get(key).info) map.get(key).info = info;
+    };
+    const transactions = typeof window.getAllSupplierTransactions === 'function'
+      ? window.getAllSupplierTransactions()
+      : (Array.isArray(window.appState?.supplierTransactions) ? window.appState.supplierTransactions : []);
+    (Array.isArray(transactions) ? transactions : []).forEach(tx => {
+      if (tx) add(displaySupplierName(tx.supplierName), tx.supplierInfo);
+    });
+    (Array.isArray(window.appState?.suppliers) ? window.appState.suppliers : []).forEach(sup => {
+      if (sup) add(displaySupplierName(sup.name), sup.info);
+    });
+    return Array.from(map.values());
+  }
+  window.getSupplierGroupsForCodes = getSupplierGroupsForCodes;
+
+  /** كود مورّد حسب اسمه (يولّد ويحفظ إن لزم). */
+  function supplierAccessCode(name) {
+    const key = normalizeSupplierName(name);
+    if (!key) return '';
+    const records = window.__supplierCodeRecords || (window.__supplierCodeRecords = {});
+    let record = records[key];
+    if (!record || !normalizeAccessCode(record.password)) {
+      const code = generateAccessCode(accessCodeState());
+      record = records[key] = { id: key, key, name, password: code, passwordIssuedAt: Date.now() };
+      supplierPasswordHints.set(key, code);
+      setTimeout(() => {
+        try { window.saveFirebaseSectionItem('supplierPasswords', { ...record }); } catch (e) {}
+      }, 0);
+    }
+    return normalizeAccessCode(record.password);
+  }
+  window.supplierAccessCode = supplierAccessCode;
+
+  /** كود عامل حسب اسمه (يولّد ويحفظ إن لزم). */
+  function workerAccessCode(name) {
+    const key = normalizeWorkerName(name);
+    if (!key) return '';
+    const records = window.__staffCodeRecords || (window.__staffCodeRecords = {});
+    let record = records[key];
+    if (!record || !normalizeAccessCode(record.password)) {
+      const code = generateAccessCode(accessCodeState());
+      record = records[key] = { id: key, key, name, password: code, passwordIssuedAt: Date.now() };
+      staffPasswordHints.set(key, code);
+      setTimeout(() => {
+        try { window.saveFirebaseSectionItem('staffPasswords', { ...record }); } catch (e) {}
+      }, 0);
+    }
+    return normalizeAccessCode(record.password);
+  }
+  window.workerAccessCode = workerAccessCode;
 
   // ---- Split record images: memory LRU + on-demand load (see src/image-store.js) ----
   const customerImageCache = new LruCache(8 * 1024 * 1024);
@@ -774,13 +906,46 @@ window.addEventListener('unhandledrejection', (event) => {
     'sales', 'expenses', 'credits', 'packages',
     'staffPayouts', 'products', 'quickSessions',
   ];
+  // أكواد دخول العمال والموردين (4 أرقام). اسم القسم = اسم مسار Firebase، لذا
+  // نعطي الموردين حقل appState خاصاً (supplierPasswords) ومسار v2/supplierPasswords.
+  const STAFF_CODES_SECTION = 'staffPasswords';
+  const SUPPLIER_CODES_SECTION = 'supplierPasswords';
+  const PASSWORD_SECTION_PATHS = { [STAFF_CODES_SECTION]: 'staffPasswords', [SUPPLIER_CODES_SECTION]: 'supplierPasswords' };
+  // خريطة موحّدة: اسم العامل/المورد (موحّد) → سجل الكود { key, name, password }
+  window.__staffCodeRecords = window.__staffCodeRecords || {};
+  window.__supplierCodeRecords = window.__supplierCodeRecords || {};
+  function rebuildAccessCodeRecords(kind, list) {
+    const isStaff = kind === 'staff';
+    const map = isStaff ? window.__staffCodeRecords : window.__supplierCodeRecords;
+    const hints = isStaff ? staffPasswordHints : supplierPasswordHints;
+    Object.keys(map).forEach(key => delete map[key]);
+    (Array.isArray(list) ? list : []).forEach(record => {
+      if (!record || typeof record !== 'object') return;
+      const key = isStaff ? normalizeWorkerName(record.name) : normalizeSupplierName(record.name);
+      if (!key) return;
+      const code = normalizeAccessCode(record.password);
+      map[key] = { ...record, id: key, key, password: code || '' };
+      if (code) hints.set(key, code);
+    });
+    // أكواد جديدة لمن لا يملك كوداً بعد، أو لأسماء ظهرت للتوّ في السجل
+    try { ensureAccessCodes(isStaff ? 'staff' : 'suppliers'); } catch (e) {}
+  }
+  window.rebuildAccessCodeRecords = rebuildAccessCodeRecords;
   const sectionPath = name => name === 'privacy' ? 'appState/hideFinances'
-    : `v2/${name === 'caisseLogs' ? 'caisse' : name}`;
-  const legacyPath = name => ['stats', 'privacy'].includes(name) ? null : name;
+    : `v2/${name === 'caisseLogs' ? 'caisse' : (PASSWORD_SECTION_PATHS[name] || name)}`;
+  const legacyPath = name => (['stats', 'privacy', STAFF_CODES_SECTION, SUPPLIER_CODES_SECTION].includes(name) ? null : name);
   let realtimeSections = null;
 
   function applySectionSnapshot(name, data) {
     window.__cloudSnapshotSeen = true;
+    if (name === STAFF_CODES_SECTION || name === SUPPLIER_CODES_SECTION) {
+      const list = Object.entries(data || {})
+        .filter(([, item]) => item && typeof item === 'object')
+        .map(([key, item]) => ({ ...item, id: item.id ?? key, _rtdbKey: key }));
+      rebuildAccessCodeRecords(name === STAFF_CODES_SECTION ? 'staff' : 'suppliers', list);
+      window.firebaseLoadedSections[name] = true;
+      return;
+    }
     if (name === 'privacy') {
       if (typeof data === 'boolean') {
         window.applyFirebaseSectionUpdate('appState', { hideFinances: data }, 'Realtime privacy');
@@ -4981,7 +5146,94 @@ window.addEventListener('unhandledrejection', (event) => {
         if (typeof showSuccessToast === 'function') showSuccessToast('تم توليد كلمة مرور جديدة: ' + password);
         if (typeof renderCustomers === 'function') renderCustomers();
     };
-    window.copySubscriberPassword = function() {
+    // ==========================================
+  // WORKER / SUPPLIER PASSWORD MODAL
+  // ==========================================
+  let _accessModalTarget = null; // { kind: 'staff'|'suppliers', key, name }
+
+  function accessRecordFor(kind, name) {
+    const isStaff = kind === 'staff';
+    const key = isStaff ? normalizeWorkerName(name) : normalizeSupplierName(name);
+    if (!key) return null;
+    const records = isStaff ? (window.__staffCodeRecords || (window.__staffCodeRecords = {}))
+      : (window.__supplierCodeRecords || (window.__supplierCodeRecords = {}));
+    let record = records[key];
+    if (!record || !normalizeAccessCode(record.password)) {
+      const code = generateAccessCode(accessCodeState());
+      record = records[key] = { id: key, key, name, password: code, passwordIssuedAt: Date.now() };
+      if (isStaff) staffPasswordHints.set(key, code); else supplierPasswordHints.set(key, code);
+      setTimeout(() => {
+        try { window.saveFirebaseSectionItem(isStaff ? STAFF_CODES_SECTION : SUPPLIER_CODES_SECTION, { ...record }); } catch (e) {}
+      }, 0);
+    }
+    return record;
+  }
+
+  /** يفتح نافذة كلمة المرور لعامل ('staff') أو مورد ('suppliers'). */
+  window.openAccessCodeModal = function(kind, name) {
+    const isStaff = kind === 'staff';
+    const displayName = String(name || '').trim().replace(/\s+/g, ' ');
+    if (!displayName) return;
+    const record = accessRecordFor(isStaff ? 'staff' : 'suppliers', displayName);
+    if (!record) return;
+    _accessModalTarget = { kind: isStaff ? 'staff' : 'suppliers', key: record.key, name: displayName };
+    const titleEl = document.getElementById('accessCodeModalTitle');
+    if (titleEl) titleEl.textContent = isStaff ? 'كلمة مرور العامل' : 'كلمة مرور المورد';
+    const nameEl = document.getElementById('accessCodeName');
+    if (nameEl) nameEl.textContent = displayName;
+    const codeEl = document.getElementById('accessCodeValue');
+    if (codeEl) codeEl.textContent = record.password;
+    const regenBtn = document.getElementById('accessCodeRegenBtn');
+    if (regenBtn) regenBtn.dataset.kind = _accessModalTarget.kind;
+    openModal('accessCodeModal');
+  };
+
+  /** إعادة توليد كود العامل/المورد المعروض مع الحفاظ على الفرادة العالمية. */
+  window.regenerateAccessCode = function() {
+    if (!_accessModalTarget) return;
+    const { kind, key, name } = _accessModalTarget;
+    const isStaff = kind === 'staff';
+    const records = isStaff ? (window.__staffCodeRecords || {}) : (window.__supplierCodeRecords || {});
+    const record = records[key];
+    if (!record) return;
+    const previous = normalizeAccessCode(record.password);
+    const code = generateAccessCode(accessCodeState(), { previous });
+    if (!code || code === previous) {
+      if (typeof showErrorToast === 'function') showErrorToast('تعذر توليد كلمة مرور جديدة');
+      return;
+    }
+    record.password = code;
+    record.passwordIssuedAt = Date.now();
+    record.name = name;
+    record.id = key;
+    record.key = key;
+    if (isStaff) staffPasswordHints.set(key, code); else supplierPasswordHints.set(key, code);
+    const codeEl = document.getElementById('accessCodeValue');
+    if (codeEl) codeEl.textContent = code;
+    try { window.saveFirebaseSectionItem(isStaff ? STAFF_CODES_SECTION : SUPPLIER_CODES_SECTION, { ...record }); } catch (e) {}
+    if (typeof window.logActivity === 'function') {
+      window.logActivity('system', isStaff ? 'تغيير كلمة مرور عامل' : 'تغيير كلمة مرور مورد', `${isStaff ? 'العامل' : 'المورد'}: ${name} — كلمة مرور جديدة: ${code}`, 0);
+    }
+    if (typeof showSuccessToast === 'function') showSuccessToast('تم توليد كلمة مرور جديدة: ' + code);
+    if (isStaff && typeof renderStaffPayouts === 'function') renderStaffPayouts();
+    if (!isStaff && typeof renderSuppliersList === 'function') renderSuppliersList();
+  };
+
+  window.copyAccessCode = function() {
+    const codeEl = document.getElementById('accessCodeValue');
+    const code = codeEl ? String(codeEl.textContent || '').trim() : '';
+    if (!code) return;
+    const done = () => { if (typeof showSuccessToast === 'function') showSuccessToast('تم نسخ كلمة المرور: ' + code); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(done).catch(() => {
+        if (typeof showInfoToast === 'function') showInfoToast('كلمة المرور: ' + code);
+      });
+    } else if (typeof showInfoToast === 'function') {
+      showInfoToast('كلمة المرور: ' + code);
+    }
+  };
+
+  window.copySubscriberPassword = function() {
         const codeEl = document.getElementById('subPasswordCode');
         const password = codeEl ? String(codeEl.textContent || '').trim() : '';
         if (!password) return;
@@ -14337,6 +14589,7 @@ window.addEventListener('unhandledrejection', (event) => {
             datalist.innerHTML = Array.from(allKnownNames).sort().map(n => `<option value="${escapeHTML(n)}"></option>`).join('');
         }
 
+
         const container = document.getElementById('staffPayoutsList');
         if (!container) return;
 
@@ -14422,7 +14675,15 @@ window.addEventListener('unhandledrejection', (event) => {
                         <span class="font-black text-blue-900 text-sm sm:text-base bg-blue-50/70 border border-blue-100/80 px-2.5 py-1 rounded-xl shrink-0">${group.total.toLocaleString()} دج</span>
                     </div>
                     <div class="flex items-center justify-between gap-2 sm:ps-12">
-                        <span class="text-[11px] text-slate-400 font-medium whitespace-nowrap">آخر خلاص: ${formatPayoutDate(group.lastPayout)}</span>
+                        <div class="flex items-center gap-2 flex-wrap min-w-0">
+                            <span class="text-[11px] text-slate-400 font-medium whitespace-nowrap">آخر خلاص: ${formatPayoutDate(group.lastPayout)}</span>
+                            <button type="button" data-worker="${escapeHTML(group.name)}" onclick="openAccessCodeModal('staff', this.dataset.worker)"
+                                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-blue-50 border border-blue-100 hover:bg-blue-100 text-blue-700 text-[11px] font-black tracking-[0.2em] transition-colors cursor-pointer"
+                                dir="ltr" title="عرض كلمة مرور العامل / توليد كلمة جديدة">
+                                <span>${escapeHTML(workerAccessCode(group.name) || '----')}</span>
+                                <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 10.5L4 17v3h3l1.5-1.5H10v-2h2l.5-.5"></path></svg>
+                            </button>
+                        </div>
                         <div class="flex items-center gap-1 shrink-0">
                             <button type="button" onclick="toggleStaffPayoutGroup('${encodedKey}')" aria-expanded="${isOpen}" class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold text-blue-700 hover:bg-blue-50 transition-colors whitespace-nowrap">
                                 <span>${isOpen ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}</span>
@@ -14747,6 +15008,7 @@ window.addEventListener('unhandledrejection', (event) => {
             datalist.innerHTML = uniqueSuppliers.map(s => `<option value="${escapeHTML(s.name)}"></option>`).join('');
         }
 
+
         const container = document.getElementById('suppliersList');
         if (!container) return;
 
@@ -14767,8 +15029,14 @@ window.addEventListener('unhandledrejection', (event) => {
                             <div class="font-black text-slate-800 text-base flex items-center gap-2">
                                 <span>${escapeHTML(sup.name)}</span>
                             </div>
-                            <div class="text-xs text-slate-500 font-medium">
-                                ${escapeHTML(sup.info || 'مورد مسجل')}
+                            <div class="text-xs text-slate-500 font-medium flex items-center gap-1.5 flex-wrap">
+                                <span>${escapeHTML(sup.info || 'مورد مسجل')}</span>
+                                <button type="button" data-supplier="${escapeHTML(sup.name)}" onclick="openAccessCodeModal('suppliers', this.dataset.supplier)"
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-blue-200 hover:bg-blue-50 text-blue-700 text-[11px] font-black tracking-[0.2em] transition-colors cursor-pointer"
+                                    dir="ltr" title="عرض كلمة مرور المورد / توليد كلمة جديدة">
+                                    <span>${escapeHTML(supplierAccessCode(sup.name) || '----')}</span>
+                                    <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 10.5L4 17v3h3l1.5-1.5H10v-2h2l.5-.5"></path></svg>
+                                </button>
                             </div>
                         </div>
                     </div>
